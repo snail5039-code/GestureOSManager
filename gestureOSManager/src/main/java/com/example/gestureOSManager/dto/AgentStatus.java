@@ -34,7 +34,8 @@ public class AgentStatus {
 
     private boolean canMove;
     private boolean canClick;
-	
+    private boolean connected;
+    
     @Builder.Default
     private boolean scrollActive = false;
     

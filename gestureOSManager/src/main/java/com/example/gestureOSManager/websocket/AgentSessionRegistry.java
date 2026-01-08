@@ -1,56 +1,53 @@
 package com.example.gestureOSManager.websocket;
 
-import java.io.IOException;
-import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
 @Component
 public class AgentSessionRegistry {
-  private final AtomicReference<WebSocketSession> agentSession = new AtomicReference<>();
+
+  private final AtomicReference<WebSocketSession> sessionRef = new AtomicReference<>();
 
   public void set(WebSocketSession session) {
-    agentSession.set(session);
-    System.out.println("[SPRING] registry.set sessionId=" + session.getId());
+    sessionRef.set(session);
+    log.info("[REG] set session id={} open={} ref={}",
+        session.getId(), session.isOpen(), System.identityHashCode(this));
   }
 
   public void clearIfSame(WebSocketSession session) {
-    boolean cleared = agentSession.compareAndSet(session, null);
-    System.out.println("[SPRING] registry.clearIfSame sessionId=" + session.getId() + " cleared=" + cleared);
+    boolean cleared = sessionRef.compareAndSet(session, null);
+    log.info("[REG] clearIfSame id={} cleared={} ref={}",
+        session.getId(), cleared, System.identityHashCode(this));
   }
 
-  public Optional<WebSocketSession> get() {
-    return Optional.ofNullable(agentSession.get());
-  }
-
-  // ✅ 추가: 연결 여부 체크 (ControlService에서 사용)
   public boolean isConnected() {
-    WebSocketSession s = agentSession.get();
+    WebSocketSession s = sessionRef.get();
     return s != null && s.isOpen();
   }
 
-  public boolean sendText(String json) {
-    WebSocketSession s = agentSession.get();
-
+  public boolean sendText(String payload) {
+    WebSocketSession s = sessionRef.get();
     if (s == null) {
-      System.out.println("[SPRING] sendText failed: session is null");
+      log.warn("[REG] sendText failed: session is null ref={}", System.identityHashCode(this));
       return false;
     }
     if (!s.isOpen()) {
-      System.out.println("[SPRING] sendText failed: session closed id=" + s.getId());
+      log.warn("[REG] sendText failed: session not open id={} ref={}", s.getId(), System.identityHashCode(this));
       return false;
     }
 
     try {
-      s.sendMessage(new TextMessage(json));
-      System.out.println("[SPRING] sendText ok -> " + json);
+      s.sendMessage(new TextMessage(payload));
+      log.debug("[REG] => {}", payload);
       return true;
-    } catch (IOException e) {
-      System.out.println("[SPRING] sendText IOException:");
-      e.printStackTrace();
+    } catch (Exception e) {
+      log.warn("[REG] sendText exception id={} ref={}", s.getId(), System.identityHashCode(this), e);
       return false;
     }
   }

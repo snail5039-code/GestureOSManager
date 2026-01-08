@@ -27,6 +27,7 @@ import os
 import cv2
 import mediapipe as mp
 import pyautogui
+import sys
 
 from websocket import WebSocketApp
 
@@ -35,6 +36,11 @@ from websocket import WebSocketApp
 # WebSocket
 # ============================================================
 WS_URL = "ws://127.0.0.1:8080/ws/agent"
+
+
+HEADLESS = ("--headless" in sys.argv)
+PREVIEW = not HEADLESS
+_window_open = False
 
 # 커서 제어를 "오른손"으로 고정 (반대로 동작하면 "Left"로 변경)
 CURSOR_HAND_LABEL = "Right"
@@ -452,7 +458,7 @@ def on_close(ws, status_code, msg):
     print("[PY] WS closed:", status_code, msg)
 
 def on_message(ws, msg):
-    global enabled, mode
+    global enabled, mode, locked, PREVIEW
     try:
         data = json.loads(msg)
     except Exception:
@@ -462,22 +468,36 @@ def on_message(ws, msg):
     t = data.get("type")
     if t == "ENABLE":
         enabled = True
+        locked = False 
         print("[PY] cmd ENABLE -> enabled=True")
     elif t == "DISABLE":
         enabled = False
-        print("[PY] cmd DISABLE -> enabled=False")
+        # ✅ 안전장치: 드래그 붙는 거 방지
+        global _dragging, _pinch_start_ts, _pending_single_click
+        if _dragging:
+            try:
+                pyautogui.mouseUp()
+            except:
+                pass
+            _dragging = False
+        _pinch_start_ts = None
+        _pending_single_click = False
+        print("[PY] cmd DISABLE -> enabled=False (release drag)")
     elif t == "SET_MODE":
         mode = str(data.get("mode", "MOUSE")).upper()
         print("[PY] cmd SET_MODE ->", mode)
-
+    elif t == "SET_PREVIEW":
+        PREVIEW = bool(data.get("enabled", True))
+        print("[PY] cmd SET_PREVIEW ->", PREVIEW)
+       
 
 # ============================================================
 # Main
 # ============================================================
 def main():
-    global enabled, mode, locked, CONTROL_BOX, _ema_x, _ema_y, _reacquire_until
+    global enabled, mode, locked, PREVIEW, CONTROL_BOX, _ema_x, _ema_y, _reacquire_until
     global _last_seen_ts, _last_cursor_lm, _last_cursor_cxcy, _last_cursor_gesture
-    global _dragging
+    global _dragging, HEADLESS
 
     print("[PY] running file:", os.path.abspath(__file__))
     print("[PY] WS_URL:", WS_URL)
@@ -650,43 +670,54 @@ def main():
         # ---------- status + overlay ----------
         send_status(_ws, fps, cursor_gesture, can_inject, scroll_active)
 
-        cv2.putText(frame, f"enabled={enabled} mode={mode} locked={locked}", (10, 25),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        cv2.putText(frame, f"cursor={cursor_label} gesture={cursor_gesture} fps={fps:.1f}", (10, 55),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2)
-        cv2.putText(frame, f"scroll={scroll_label} active={scroll_active}", (10, 80),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2)
-        cv2.putText(frame, f"can_inject={can_inject} wait={(max(0.0, _reacquire_until - t)):.2f}s", (10, 105),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-        cv2.putText(frame, f"BOX={CONTROL_BOX} GAIN={CONTROL_GAIN}", (10, 130),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
+        # ---------- view / keys ----------
+        if not HEADLESS:
+            global _window_open
 
-        cv2.imshow("GestureOS Agent", frame)
+            if PREVIEW:
+                if not _window_open:
+                    # 필요하면 namedWindow로 먼저 생성
+                    cv2.namedWindow("GestureOS Agent", cv2.WINDOW_NORMAL)
+                    _window_open = True
 
-        # ---------- keys ----------
-        key = cv2.waitKey(1) & 0xFF
-        if key == 27:
-            break
-        elif key in (ord('e'), ord('E')):
-            enabled = not enabled
-            print("[KEY] enabled:", enabled)
-        elif key in (ord('l'), ord('L')):
-            locked = not locked
-            print("[KEY] locked:", locked)
-        elif key in (ord('m'), ord('M')):
-            mode = "MOUSE"
-            print("[KEY] mode=MOUSE")
-        elif key in (ord('c'), ord('C')):
-            # calibrate around current cursor center (even if last known)
-            cx, cy = _last_cursor_cxcy if _last_cursor_cxcy is not None else (0.5, 0.5)
-            minx = clamp01(cx - CONTROL_HALF_W)
-            maxx = clamp01(cx + CONTROL_HALF_W)
-            miny = clamp01(cy - CONTROL_HALF_H)
-            maxy = clamp01(cy + CONTROL_HALF_H)
-            CONTROL_BOX = (minx, miny, maxx, maxy)
-            _ema_x = None
-            _ema_y = None
-            print("[CALIB] CONTROL_BOX =", CONTROL_BOX)
+                cv2.putText(frame, "Camera: LIVE", (10, 25),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                cv2.imshow("GestureOS Agent", frame)
+
+                key = cv2.waitKey(1) & 0xFF
+                if key == 27:
+                    break
+                elif key in (ord('e'), ord('E')):
+                    enabled = not enabled
+                    print("[KEY] enabled:", enabled)
+                elif key in (ord('l'), ord('L')):
+                    locked = not locked
+                    print("[KEY] locked:", locked)
+                elif key in (ord('m'), ord('M')):
+                    mode = "MOUSE"
+                    print("[KEY] mode=MOUSE")
+                elif key in (ord('c'), ord('C')):
+                    cx, cy = _last_cursor_cxcy if _last_cursor_cxcy is not None else (0.5, 0.5)
+                    minx = clamp01(cx - CONTROL_HALF_W)
+                    maxx = clamp01(cx + CONTROL_HALF_W)
+                    miny = clamp01(cy - CONTROL_HALF_H)
+                    maxy = clamp01(cy + CONTROL_HALF_H)
+                    CONTROL_BOX = (minx, miny, maxx, maxy)
+                    _ema_x = None
+                    _ema_y = None
+                    print("[CALIB] CONTROL_BOX =", CONTROL_BOX)
+
+            else:
+                # PREVIEW OFF면 메인 스레드에서 창 닫기
+                if _window_open:
+                    cv2.destroyWindow("GestureOS Agent")
+                    _window_open = False
+                time.sleep(0.005)
+
+        else:
+            time.sleep(0.001)
+
+
 
     cap.release()
     cv2.destroyAllWindows()

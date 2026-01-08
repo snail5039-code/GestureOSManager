@@ -2,11 +2,14 @@ package com.example.gestureOSManager.dto;
 
 import java.util.Map;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+@JsonInclude(JsonInclude.Include.NON_NULL)
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -15,6 +18,7 @@ public class AgentCommand {
   private CommandType type;
   private ModeType mode;
   private Map<String, Object> settings;
+  private Boolean enabled;
 
   public static AgentCommand enable() {
     return AgentCommand.builder()
@@ -42,4 +46,11 @@ public class AgentCommand {
         .settings(settings)
         .build();
   }
+  
+  public static AgentCommand preview(boolean enabled) {
+	  return AgentCommand.builder()
+	      .type(CommandType.SET_PREVIEW)
+	      .enabled(enabled)
+	      .build();
+	}
 }

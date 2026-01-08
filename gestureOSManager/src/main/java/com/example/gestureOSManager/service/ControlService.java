@@ -7,6 +7,8 @@ import com.example.gestureOSManager.dto.ModeType;
 import com.example.gestureOSManager.websocket.AgentSessionRegistry;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import lombok.extern.slf4j.Slf4j;
+@Slf4j
 @Service
 public class ControlService {
   private final AgentSessionRegistry sessions;
@@ -18,16 +20,19 @@ public class ControlService {
 
   public boolean start() {
     System.out.println("[SPRING] start() isConnected=" + sessions.isConnected());
+    log.info("[CTRL] registryRef={}", System.identityHashCode(sessions));
     return send(AgentCommand.enable());
   }
 
   public boolean stop() {
     System.out.println("[SPRING] stop() isConnected=" + sessions.isConnected());
+    log.info("[CTRL] registryRef={}", System.identityHashCode(sessions));
     return send(AgentCommand.disable());
   }
 
   public boolean setMode(ModeType mode) {
     System.out.println("[SPRING] setMode(" + mode + ") isConnected=" + sessions.isConnected());
+    log.info("[CTRL] registryRef={}", System.identityHashCode(sessions));
     return send(AgentCommand.ofMode(mode));
   }
 
@@ -43,4 +48,8 @@ public class ControlService {
       return false;
     }
   }
+  
+  public boolean setPreview(boolean enabled) {
+	  return send(AgentCommand.preview(enabled));
+	}
 }
