@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 function cn(...xs) {
   return xs.filter(Boolean).join(" ");
@@ -32,7 +32,9 @@ function ModeOverlay({ open, modes, currentMode, onPick, onClose }) {
           <div className="flex items-center justify-between">
             <div>
               <div className="text-lg font-semibold text-slate-100">Mode 선택</div>
-              <div className="text-sm text-slate-300">현재 모드: <span className="font-semibold">{currentMode}</span></div>
+              <div className="text-sm text-slate-300">
+                현재 모드: <span className="font-semibold">{currentMode}</span>
+              </div>
             </div>
             <button
               onClick={onClose}
@@ -59,8 +61,9 @@ function ModeOverlay({ open, modes, currentMode, onPick, onClose }) {
                   <div className="text-base font-semibold">{m}</div>
                   <div className="mt-1 text-xs text-slate-300">
                     {m === "MOUSE" && "커서/클릭/드래그/스크롤"}
-                    {m === "PRESENTATION" && "발표 제어(다음/이전 등)용"}
-                    {m === "DRAW" && "그리기/펜 입력용"}
+                    {m === "KEYBOARD" && "키보드 입력/단축키"}
+                    {m === "PRESENTATION" && "발표 제어(다음/이전 등)"}
+                    {m === "DRAW" && "그리기/펜 입력"}
                     {m === "DEFAULT" && "기본(비활성/대기)"}
                   </div>
                 </button>
@@ -68,9 +71,7 @@ function ModeOverlay({ open, modes, currentMode, onPick, onClose }) {
             })}
           </div>
 
-          <div className="mt-4 text-xs text-slate-400">
-            팁: 나중에 여기 오버레이를 “제스처로 열기”도 가능하게 확장할 수 있음.
-          </div>
+          <div className="mt-4 text-xs text-slate-400">팁: 나중에 제스처로 열기 같은 확장 가능.</div>
         </div>
       </div>
     </div>
@@ -80,11 +81,12 @@ function ModeOverlay({ open, modes, currentMode, onPick, onClose }) {
 export default function AgentHud({
   status,
   connected = true,
-  modeOptions = ["MOUSE", "PRESENTATION", "DRAW", "DEFAULT"],
+  modeOptions = ["MOUSE", "KEYBOARD", "PRESENTATION", "DRAW", "DEFAULT"],
   onSetMode,
   onEnableToggle,
   onLockToggle,
   onPreviewToggle,
+  onRequestHide,
 }) {
   const [overlayOpen, setOverlayOpen] = useState(false);
 
@@ -107,75 +109,88 @@ export default function AgentHud({
   const canClick = !!s.canClick;
   const scrollActive = !!s.scrollActive;
 
-  // ESC로 오버레이 닫기
-  // (상위에서 keydown 처리해도 되고, 여기서 최소 구현)
-  const onKeyDown = (e) => {
-    if (e.key === "Escape") setOverlayOpen(false);
-  };
+  useEffect(() => {
+    if (!overlayOpen) return;
+    const onKeyDown = (e) => {
+      if (e.key === "Escape") setOverlayOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [overlayOpen]);
 
   return (
     <>
-      <div
-        tabIndex={0}
-        onKeyDown={onKeyDown}
-        className="fixed right-4 top-4 z-[9998] w-[340px] rounded-2xl border border-white/10 bg-slate-900/75 p-4 text-slate-100 shadow-xl backdrop-blur-md"
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="text-sm font-semibold">GestureOS HUD</div>
-            <div className="mt-1 text-xs text-slate-300">Agent 상태 실시간 표시</div>
+      {/* 바깥은 클릭 통과, 카드만 클릭 가능 */}
+      <div className="fixed right-4 top-14 z-[9998] pointer-events-none">
+        <div className="pointer-events-auto w-[340px] rounded-2xl border border-white/10 bg-[#0b1020]/90 p-4 text-slate-100 shadow-xl backdrop-blur-md">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold">HUD</div>
+              <div className="mt-1 text-xs text-slate-300">상태 요약(항상 표시)</div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Pill label="HTTP" value={connected ? "OK" : "OFF"} tone={toneConn} />
+              <button
+                className="w-8 h-8 rounded-md hover:bg-white/10 text-slate-200"
+                onClick={() => onRequestHide?.()}
+                title="Hide HUD"
+              >
+                ×
+              </button>
+            </div>
           </div>
-          <div className="flex gap-2">
-            <Pill label="WS" value={connected ? "ON" : "OFF"} tone={toneConn} />
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Pill label="Enabled" value={enabled ? "ON" : "OFF"} tone={toneEn} />
+            <Pill label="Locked" value={locked ? "ON" : "OFF"} tone={toneLock} />
+            <Pill label="Mode" value={mode} tone="blue" />
+            <Pill label="Gesture" value={gesture} tone="purple" />
+            <Pill label="FPS" value={fps} tone="slate" />
+            <Pill label="Move" value={canMove ? "YES" : "NO"} tone={canMove ? "green" : "slate"} />
+            <Pill label="Click" value={canClick ? "YES" : "NO"} tone={canClick ? "green" : "slate"} />
+            <Pill label="Scroll" value={scrollActive ? "ON" : "OFF"} tone={scrollActive ? "green" : "slate"} />
           </div>
-        </div>
 
-        <div className="mt-3 flex flex-wrap gap-2">
-          <Pill label="Enabled" value={enabled ? "ON" : "OFF"} tone={toneEn} />
-          <Pill label="Locked" value={locked ? "ON" : "OFF"} tone={toneLock} />
-          <Pill label="Mode" value={mode} tone="blue" />
-          <Pill label="Gesture" value={gesture} tone="purple" />
-          <Pill label="FPS" value={fps} tone="slate" />
-          <Pill label="Move" value={canMove ? "YES" : "NO"} tone={canMove ? "green" : "slate"} />
-          <Pill label="Click" value={canClick ? "YES" : "NO"} tone={canClick ? "green" : "slate"} />
-          <Pill label="Scroll" value={scrollActive ? "ON" : "OFF"} tone={scrollActive ? "green" : "slate"} />
-        </div>
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <button
+              onClick={() => onEnableToggle?.(!enabled)}
+              className={cn(
+                "rounded-xl border px-3 py-2 text-sm transition",
+                enabled
+                  ? "border-rose-400/30 bg-rose-500/15 hover:bg-rose-500/25"
+                  : "border-emerald-400/30 bg-emerald-500/15 hover:bg-emerald-500/25"
+              )}
+            >
+              {enabled ? "Disable" : "Enable"}
+            </button>
 
-        <div className="mt-4 grid grid-cols-2 gap-2">
-          <button
-            onClick={() => onEnableToggle?.(!enabled)}
-            className={cn(
-              "rounded-xl border px-3 py-2 text-sm transition",
-              enabled ? "border-rose-400/30 bg-rose-500/15 hover:bg-rose-500/25" : "border-emerald-400/30 bg-emerald-500/15 hover:bg-emerald-500/25"
-            )}
-          >
-            {enabled ? "Disable" : "Enable"}
-          </button>
+            {/* ✅ Lock 토글 */}
+            <button
+              onClick={() => onLockToggle?.(!locked)}
+              className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm hover:bg-white/10"
+            >
+              Lock 토글
+            </button>
 
-          <button
-            onClick={() => onLockToggle?.(!locked)}
-            className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm hover:bg-white/10"
-          >
-            Lock 토글
-          </button>
+            <button
+              onClick={() => setOverlayOpen(true)}
+              className="rounded-xl border border-sky-400/25 bg-sky-500/10 px-3 py-2 text-sm hover:bg-sky-500/20"
+            >
+              Mode 변경
+            </button>
 
-          <button
-            onClick={() => setOverlayOpen(true)}
-            className="rounded-xl border border-sky-400/25 bg-sky-500/10 px-3 py-2 text-sm hover:bg-sky-500/20"
-          >
-            Mode 변경
-          </button>
+            <button
+              onClick={() => onPreviewToggle?.()}
+              className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm hover:bg-white/10"
+            >
+              Preview 토글
+            </button>
+          </div>
 
-          <button
-            onClick={() => onPreviewToggle?.()}
-            className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm hover:bg-white/10"
-          >
-            Preview 토글
-          </button>
-        </div>
-
-        <div className="mt-3 text-xs text-slate-400 leading-relaxed">
-          문제 생기면 여기 값부터 본다: <span className="text-slate-200">Locked/Mode/WS</span>
+          <div className="mt-3 text-xs text-slate-400 leading-relaxed">
+            문제 생기면 여기 값부터 본다: <span className="text-slate-200">Locked/Mode/HTTP</span>
+          </div>
         </div>
       </div>
 
@@ -192,4 +207,3 @@ export default function AgentHud({
     </>
   );
 }
- 
