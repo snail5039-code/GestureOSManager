@@ -13,7 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 const POLL_MS = 500;
 
 // 백엔드 mode 값과 맞추세요
-const MODE_OPTIONS = ["MOUSE", "PRESENTATION", "DRAW", "DEFAULT"];
+const MODE_OPTIONS = ["MOUSE", "KEYBOARD","PRESENTATION", "DRAW", "DEFAULT"]; // 키보드 추가
 
 // axios 인스턴스 (vite proxy: /api -> http://localhost:8080)
 const api = axios.create({

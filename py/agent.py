@@ -1,19 +1,40 @@
 """
-GestureOS Agent (Mouse) - FULL (Two-hand scroll)
+GestureOS Agent (Mouse + Keyboard) - FULL (FN Layer Keyboard + per-action delay)
 
-Mapping
-- LOCK toggle (global): CURSOR hand FIST hold 2s (center box + still)
-- Move cursor: CURSOR hand OPEN_PALM (index+middle+ring+pinky extended)
+========================
+MOUSE mode
+========================
+- LOCK toggle (mouse only): CURSOR hand FIST hold 2s (center box + still)
+- Move cursor: CURSOR hand OPEN_PALM
 - Left click / Drag: CURSOR hand PINCH_INDEX
-    - short tap  -> left click
+    - short tap  -> left click (double-click supported)
     - hold       -> drag (mouseDown) until release
 - Right click: CURSOR hand V_SIGN hold
 - Scroll: OTHER hand FIST + vertical move -> wheel scroll
 
-Keys
+========================
+KEYBOARD mode (FN 레이어 + 동작별 딜레이)
+========================
+[기본 레이어: 한손 방향키]
+- Left  : CURSOR FIST        (repeat)
+- Right : CURSOR V_SIGN      (repeat)
+- Up    : CURSOR PINCH_INDEX (repeat)
+- Down  : CURSOR OPEN_PALM   (repeat)
+
+[FN 레이어: OTHER PINCH_INDEX를 잡고 있는 동안 특수키]
+- Backspace : CURSOR FIST        (repeat)
+- Space     : CURSOR OPEN_PALM   (one-shot)
+- Enter     : CURSOR PINCH_INDEX (one-shot)
+- Esc       : CURSOR V_SIGN      (one-shot)
+
+* KEYBOARD는 의도치 않은 입력 방지를 위해:
+  - 토큰(동작)별 최소 유지시간(hold) + 토큰별 쿨다운 적용
+
+Local keys (OpenCV window focused)
 - E: enabled toggle (test without Spring)
 - L: locked toggle
 - M: force mode=MOUSE
+- K: force mode=KEYBOARD (unlock)
 - C: calibrate CONTROL_BOX around current cursor-hand position
 - ESC: exit
 """
@@ -23,12 +44,11 @@ import time
 import threading
 import math
 import os
+import sys
 
 import cv2
 import mediapipe as mp
 import pyautogui
-import sys
-
 from websocket import WebSocketApp
 
 
@@ -37,15 +57,16 @@ from websocket import WebSocketApp
 # ============================================================
 WS_URL = "ws://127.0.0.1:8080/ws/agent"
 
-
 HEADLESS = ("--headless" in sys.argv)
 PREVIEW = not HEADLESS
 _window_open = False
 
-# 커서 제어를 "오른손"으로 고정 (반대로 동작하면 "Left"로 변경)
+# 커서 제어 손(반대로 동작하면 "Left"로)
 CURSOR_HAND_LABEL = "Right"
 
 _ws = None
+_ws_connected = False
+
 
 # ============================================================
 # Control box (normalized 0~1)
@@ -73,7 +94,7 @@ _ema_y = None
 
 
 # ============================================================
-# PINCH / Click / Drag
+# PINCH / Click / Drag (mouse)
 # ============================================================
 PINCH_THRESH_INDEX = 0.06
 
@@ -85,12 +106,13 @@ _last_click_ts = 0.0
 _pinch_start_ts = None
 _dragging = False
 
-DOUBLECLICK_GAP_SEC = 0.35   # 두 번째 탭 허용 시간(0.30~0.45 추천)
+DOUBLECLICK_GAP_SEC = 0.35
 _pending_single_click = False
 _single_click_deadline = 0.0
 
+
 # ============================================================
-# Right click (V sign)
+# Right click (mouse V sign)
 # ============================================================
 RIGHTCLICK_HOLD_SEC = 0.35
 RIGHTCLICK_COOLDOWN_SEC = 0.60
@@ -99,7 +121,7 @@ _vsign_start = None
 
 
 # ============================================================
-# Scroll (OTHER hand fist + y movement)
+# Scroll (mouse, other hand fist + y move)
 # ============================================================
 SCROLL_GAIN = 1400
 SCROLL_DEADZONE = 0.012
@@ -109,7 +131,7 @@ _scroll_anchor_y = None
 
 
 # ============================================================
-# LOCK (cursor-hand fist hold)
+# LOCK (mouse only)
 # ============================================================
 LOCK_HOLD_SEC = 2.0
 LOCK_TOGGLE_COOLDOWN_SEC = 1.0
@@ -122,7 +144,7 @@ _last_lock_toggle_ts = 0.0
 
 
 # ============================================================
-# Tracking loss handling (cursor hand 중심)
+# Tracking loss handling
 # ============================================================
 LOSS_GRACE_SEC = 0.30
 HARD_LOSS_SEC = 0.55
@@ -142,8 +164,6 @@ enabled = False
 mode = "MOUSE"
 locked = True
 
-_ws_connected = False
-
 
 # ============================================================
 # MediaPipe
@@ -151,11 +171,62 @@ _ws_connected = False
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(
     static_image_mode=False,
-    max_num_hands=2,  # ✅ two hands
+    max_num_hands=2,
     model_complexity=1,
     min_detection_confidence=0.5,
     min_tracking_confidence=0.5
 )
+
+
+# ============================================================
+# KEYBOARD mode (FN 레이어 + 동작별 딜레이)
+# ============================================================
+KB_STABLE_FRAMES = 3
+
+# repeat token(방향키/백스페이스) 반복 속도
+KB_REPEAT_SEC = 0.12
+
+# OTHER PINCH가 잠깐 끊겨도 FN 유지
+MOD_GRACE_SEC = 0.20
+_mod_until = 0.0
+
+# 토큰별 "최소 유지 시간"(초) - 즉발 방지 핵심
+KB_HOLD_SEC = {
+    "LEFT": 0.10,
+    "RIGHT": 0.10,
+    "UP": 0.10,
+    "DOWN": 0.10,
+    "BACKSPACE": 0.12,
+    "SPACE": 0.16,
+    "ENTER": 0.16,
+    "ESC": 0.18,
+}
+
+# 토큰별 쿨다운(초) - one-shot 오작동 방지
+KB_COOLDOWN_SEC = {
+    "SPACE": 0.35,
+    "ENTER": 0.35,
+    "ESC": 0.45,
+}
+
+_kb_last_token = None
+_kb_streak = 0
+
+# repeat 전용(전역)
+_kb_last_repeat_ts = 0.0
+
+# one-shot 전용(토큰별)
+_kb_last_fire_map = {
+    "SPACE": 0.0,
+    "ENTER": 0.0,
+    "ESC": 0.0,
+}
+
+# 토큰 유지 시작 시각(hold 체크)
+_kb_token_start_ts = 0.0
+
+# one-shot 연타 방지(홀드 중 1회만)
+_kb_armed = True
 
 
 # ============================================================
@@ -217,7 +288,7 @@ def finger_extended(lm, tip, pip):
 
 
 # ============================================================
-# Gesture detection (cursor hand 기준)
+# Gesture detection (안정 포즈만)
 # ============================================================
 def is_fist(lm):
     tips = [8, 12, 16, 20]
@@ -252,7 +323,7 @@ def is_v_sign(lm):
 
 
 # ============================================================
-# LOCK handler (cursor hand)
+# LOCK handler (mouse only)
 # ============================================================
 def handle_lock(cursor_gesture, cx, cy, got_cursor_hand):
     global locked, _fist_start, _fist_anchor, _last_lock_toggle_ts, _reacquire_until
@@ -269,7 +340,7 @@ def handle_lock(cursor_gesture, cx, cy, got_cursor_hand):
         return
 
     minx, miny, maxx, maxy = LOCK_CENTER_BOX
-    if not (minx <= cx <= maxx and miny <= cy <= maxy):
+    if not (minx <= cx <= maxx and miny <= cy <= maxx):
         _fist_start = None
         _fist_anchor = None
         return
@@ -299,30 +370,26 @@ def handle_lock(cursor_gesture, cx, cy, got_cursor_hand):
 
 
 # ============================================================
-# Click / Drag (cursor hand pinch index)
+# Mouse: Click / Drag (cursor hand pinch index)
 # ============================================================
 def handle_index_pinch_click_drag(cursor_gesture, can_inject):
-    """
-    PINCH_INDEX:
-      - 짧은 탭 1회: (지연 후) 단일 클릭
-      - 짧은 탭 2회(시간 내): 더블클릭
-      - 홀드: 드래그(mouseDown) 유지
-    """
     global _pinch_start_ts, _dragging, _last_click_ts
     global _pending_single_click, _single_click_deadline
 
     t = now()
 
-    # 입력 불가면 드래그 해제 + 대기 클릭 취소
     if not can_inject:
         if _dragging:
-            pyautogui.mouseUp()
+            try:
+                pyautogui.mouseUp()
+            except:
+                pass
             _dragging = False
         _pinch_start_ts = None
         _pending_single_click = False
         return
 
-    # ✅ 대기 중인 단일 클릭이 있고, 더블클릭 기회가 지나면 단일 클릭 확정
+    # 대기 단일클릭 확정
     if _pending_single_click and t >= _single_click_deadline:
         if t >= _last_click_ts + CLICK_COOLDOWN_SEC:
             pyautogui.click()
@@ -333,13 +400,13 @@ def handle_index_pinch_click_drag(cursor_gesture, can_inject):
         if _pinch_start_ts is None:
             _pinch_start_ts = t
 
-        # 홀드 → 드래그 시작
+        # 홀드 → 드래그
         if (not _dragging) and (t - _pinch_start_ts >= DRAG_HOLD_SEC):
             pyautogui.mouseDown()
             _dragging = True
 
     else:
-        # PINCH 해제 시점에서 탭/드래그 종료 처리
+        # 해제 시 탭/드래그 종료
         if _pinch_start_ts is not None:
             dur = t - _pinch_start_ts
 
@@ -347,25 +414,21 @@ def handle_index_pinch_click_drag(cursor_gesture, can_inject):
                 pyautogui.mouseUp()
                 _dragging = False
             else:
-                # 짧은 탭이면 클릭/더블클릭 판정
                 if dur <= CLICK_TAP_MAX_SEC:
-                    # 더블클릭 후보: 이미 단일 클릭 대기 중이면 -> 더블클릭 확정
                     if _pending_single_click:
                         _pending_single_click = False
                         if t >= _last_click_ts + CLICK_COOLDOWN_SEC:
                             pyautogui.doubleClick()
                             _last_click_ts = t
                     else:
-                        # 첫 탭: 바로 클릭하지 말고 잠깐 대기(두 번째 탭 기다림)
                         _pending_single_click = True
                         _single_click_deadline = t + DOUBLECLICK_GAP_SEC
 
         _pinch_start_ts = None
 
 
-
 # ============================================================
-# Right click (cursor hand V sign hold)
+# Mouse: Right click (cursor hand V sign hold)
 # ============================================================
 def handle_right_click(cursor_gesture, can_inject):
     global _vsign_start, _last_rightclick_ts
@@ -394,7 +457,7 @@ def handle_right_click(cursor_gesture, can_inject):
 
 
 # ============================================================
-# Scroll (other hand fist + y movement)
+# Mouse: Scroll (other hand fist + y movement)
 # ============================================================
 def handle_scroll_other_hand(scroll_active, scroll_cy, can_inject):
     global _scroll_anchor_y, _last_scroll_ts
@@ -423,9 +486,136 @@ def handle_scroll_other_hand(scroll_active, scroll_cy, can_inject):
 
 
 # ============================================================
+# Keyboard mode: FN Layer + per-action delay
+# ============================================================
+def _kb_reset():
+    global _kb_last_token, _kb_streak, _kb_last_repeat_ts, _kb_token_start_ts, _kb_armed
+    global _mod_until
+    _kb_last_token = None
+    _kb_streak = 0
+    _kb_last_repeat_ts = 0.0
+    _kb_token_start_ts = 0.0
+    _kb_armed = True
+    _mod_until = 0.0
+    # one-shot map은 유지해도 되지만, 모드 전환 시 안정적으로 초기화
+    _kb_last_fire_map["SPACE"] = 0.0
+    _kb_last_fire_map["ENTER"] = 0.0
+    _kb_last_fire_map["ESC"] = 0.0
+
+def _fire_token(token):
+    if token == "LEFT":
+        pyautogui.press("left")
+    elif token == "RIGHT":
+        pyautogui.press("right")
+    elif token == "UP":
+        pyautogui.press("up")
+    elif token == "DOWN":
+        pyautogui.press("down")
+    elif token == "BACKSPACE":
+        pyautogui.press("backspace")
+    elif token == "SPACE":
+        pyautogui.press("space")
+    elif token == "ENTER":
+        pyautogui.press("enter")
+    elif token == "ESC":
+        pyautogui.press("esc")
+
+def handle_keyboard_mode(can_inject,
+                         got_cursor, cursor_gesture, cursor_cxcy,
+                         got_other, other_gesture, other_cxcy):
+    global _kb_last_token, _kb_streak, _kb_last_repeat_ts, _kb_token_start_ts, _kb_armed
+    global _mod_until
+
+    t = now()
+
+    if not can_inject:
+        _kb_reset()
+        return
+
+    # FN(Modifier): OTHER PINCH_INDEX 유지 (끊김 완화)
+    if got_other and other_gesture == "PINCH_INDEX":
+        _mod_until = t + MOD_GRACE_SEC
+    mod_active = (t < _mod_until)
+
+    token = None
+
+    # FN 레이어(특수키)
+    if mod_active and got_cursor:
+        if cursor_gesture == "FIST":
+            token = "BACKSPACE"      # repeat
+        elif cursor_gesture == "OPEN_PALM":
+            token = "SPACE"          # one-shot
+        elif cursor_gesture == "PINCH_INDEX":
+            token = "ENTER"          # one-shot
+        elif cursor_gesture == "V_SIGN":
+            token = "ESC"            # one-shot
+
+    # 기본 레이어(방향키)
+    if token is None and got_cursor:
+        if cursor_gesture == "FIST":
+            token = "LEFT"
+        elif cursor_gesture == "V_SIGN":
+            token = "RIGHT"
+        elif cursor_gesture == "PINCH_INDEX":
+            token = "UP"
+        elif cursor_gesture == "OPEN_PALM":
+            token = "DOWN"
+
+    # 토큰 없으면 리셋(재무장)
+    if token is None:
+        _kb_last_token = None
+        _kb_streak = 0
+        _kb_token_start_ts = 0.0
+        _kb_armed = True
+        return
+
+    # stable frames + 토큰 시작 시각
+    if token == _kb_last_token:
+        _kb_streak += 1
+    else:
+        _kb_last_token = token
+        _kb_streak = 1
+        _kb_armed = True
+        _kb_token_start_ts = t
+
+    if _kb_streak < KB_STABLE_FRAMES:
+        return
+
+    # ✅ 동작별 최소 유지 시간(hold) 체크
+    need_hold = KB_HOLD_SEC.get(token, 0.12)
+    if (t - _kb_token_start_ts) < need_hold:
+        return
+
+    repeat_tokens = {"LEFT", "RIGHT", "UP", "DOWN", "BACKSPACE"}
+    one_shot_tokens = {"SPACE", "ENTER", "ESC"}
+
+    # 반복 토큰: 홀드 반복
+    if token in repeat_tokens:
+        if t >= _kb_last_repeat_ts + KB_REPEAT_SEC:
+            _fire_token(token)
+            _kb_last_repeat_ts = t
+        return
+
+    # 단발 토큰: 토큰별 쿨다운 + 동일 홀드 1회만
+    if token in one_shot_tokens:
+        if not _kb_armed:
+            return
+
+        cd = KB_COOLDOWN_SEC.get(token, 0.30)
+        last_fire = _kb_last_fire_map.get(token, 0.0)
+        if t < last_fire + cd:
+            return
+
+        _fire_token(token)
+        _kb_last_fire_map[token] = t
+        _kb_armed = False
+        return
+
+
+# ============================================================
 # WS callbacks
 # ============================================================
-def send_status(ws, fps, cursor_gesture, can_inject, scroll_active):
+def send_status(ws, fps, cursor_gesture, can_mouse_inject, can_keyboard_inject, scroll_active, other_gesture):
     if ws is None or (not _ws_connected):
         return
     payload = {
@@ -435,9 +625,11 @@ def send_status(ws, fps, cursor_gesture, can_inject, scroll_active):
         "locked": bool(locked),
         "gesture": str(cursor_gesture),
         "fps": float(fps),
-        "canMove": bool(can_inject and (cursor_gesture in ("OPEN_PALM", "PINCH_INDEX"))),
-        "canClick": bool(can_inject and (cursor_gesture in ("PINCH_INDEX", "V_SIGN"))),
+        "canMove": bool(can_mouse_inject and (cursor_gesture in ("OPEN_PALM", "PINCH_INDEX"))),
+        "canClick": bool(can_mouse_inject and (cursor_gesture in ("PINCH_INDEX", "V_SIGN"))),
         "scrollActive": bool(scroll_active),
+        "canKey": bool(can_keyboard_inject),
+        "otherGesture": str(other_gesture),
     }
     try:
         ws.send(json.dumps(payload))
@@ -459,21 +651,25 @@ def on_close(ws, status_code, msg):
 
 def on_message(ws, msg):
     global enabled, mode, locked, PREVIEW
+    global _dragging, _pinch_start_ts, _pending_single_click
+
     try:
         data = json.loads(msg)
     except Exception:
         print("[PY] bad json from server:", msg)
         return
 
-    t = data.get("type")
-    if t == "ENABLE":
+    typ = data.get("type")
+
+    if typ == "ENABLE":
         enabled = True
-        locked = False 
+        locked = False
         print("[PY] cmd ENABLE -> enabled=True")
-    elif t == "DISABLE":
+
+    elif typ == "DISABLE":
         enabled = False
-        # ✅ 안전장치: 드래그 붙는 거 방지
-        global _dragging, _pinch_start_ts, _pending_single_click
+
+        # 드래그 붙는 것 방지
         if _dragging:
             try:
                 pyautogui.mouseUp()
@@ -482,14 +678,40 @@ def on_message(ws, msg):
             _dragging = False
         _pinch_start_ts = None
         _pending_single_click = False
-        print("[PY] cmd DISABLE -> enabled=False (release drag)")
-    elif t == "SET_MODE":
-        mode = str(data.get("mode", "MOUSE")).upper()
+
+        _kb_reset()
+        print("[PY] cmd DISABLE -> enabled=False")
+
+    elif typ == "SET_MODE":
+        new_mode = str(data.get("mode", "MOUSE")).upper()
+
+        # MOUSE 아닌 모드로 갈 때 마우스 상태 정리
+        if new_mode != "MOUSE":
+            if _dragging:
+                try:
+                    pyautogui.mouseUp()
+                except:
+                    pass
+                _dragging = False
+            _pinch_start_ts = None
+            _pending_single_click = False
+
+        # KEYBOARD 들어가면 잠금 해제 + 키보드 상태 초기화
+        if new_mode == "KEYBOARD":
+            locked = False
+            _kb_reset()
+
+        # KEYBOARD에서 나가도 초기화
+        if new_mode != "KEYBOARD":
+            _kb_reset()
+
+        mode = new_mode
         print("[PY] cmd SET_MODE ->", mode)
-    elif t == "SET_PREVIEW":
+
+    elif typ == "SET_PREVIEW":
         PREVIEW = bool(data.get("enabled", True))
         print("[PY] cmd SET_PREVIEW ->", PREVIEW)
-       
+
 
 # ============================================================
 # Main
@@ -498,12 +720,13 @@ def main():
     global enabled, mode, locked, PREVIEW, CONTROL_BOX, _ema_x, _ema_y, _reacquire_until
     global _last_seen_ts, _last_cursor_lm, _last_cursor_cxcy, _last_cursor_gesture
     global _dragging, HEADLESS
+    global _ws
+    global _fist_start, _fist_anchor
 
     print("[PY] running file:", os.path.abspath(__file__))
     print("[PY] WS_URL:", WS_URL)
     print("[PY] CURSOR_HAND_LABEL:", CURSOR_HAND_LABEL)
 
-    # camera
     try:
         cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
     except Exception:
@@ -516,7 +739,6 @@ def main():
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-    # websocket
     def ws_loop():
         global _ws
         while True:
@@ -528,7 +750,7 @@ def main():
                     on_error=on_error,
                     on_message=on_message
                 )
-                _ws = ws  # ✅ 메인 루프가 참조할 수 있게 저장
+                _ws = ws
                 ws.run_forever(ping_interval=20, ping_timeout=10)
             except Exception as e:
                 print("[PY] ws_loop exception:", e)
@@ -553,21 +775,17 @@ def main():
         fps = 0.9 * fps + 0.1 * (1.0 / dt)
 
         res = hands.process(rgb)
-
         got_any = (res.multi_hand_landmarks is not None and len(res.multi_hand_landmarks) > 0)
 
         cursor_lm = None
-        scroll_lm = None
-        cursor_label = None
-        scroll_label = None
+        other_lm = None
 
-        # ---------- build (label, lm) list ----------
         hands_list = []
         if got_any:
             labels = []
             if res.multi_handedness:
                 for h in res.multi_handedness:
-                    labels.append(h.classification[0].label)  # "Left"/"Right"
+                    labels.append(h.classification[0].label)
             else:
                 labels = [None] * len(res.multi_hand_landmarks)
 
@@ -576,31 +794,27 @@ def main():
                 label = labels[i] if i < len(labels) else None
                 hands_list.append((label, lm))
 
-        # ---------- choose cursor hand ----------
         if hands_list:
-            # prefer configured label
+            # cursor hand
             for label, lm in hands_list:
                 if label == CURSOR_HAND_LABEL:
                     cursor_lm = lm
-                    cursor_label = label
                     break
-            # fallback: first
             if cursor_lm is None:
-                cursor_label, cursor_lm = hands_list[0]
+                cursor_lm = hands_list[0][1]
 
-            # scroll hand: the other one if exists
+            # other hand
             if len(hands_list) >= 2:
                 for label, lm in hands_list:
                     if lm is not cursor_lm:
-                        scroll_label, scroll_lm = label, lm
+                        other_lm = lm
                         break
 
-        # ---------- cursor center + gesture with loss smoothing ----------
+        # ---------- cursor hand gesture (loss smoothing) ----------
         got_cursor = cursor_lm is not None
         if got_cursor:
             cursor_cx, cursor_cy = palm_center(cursor_lm)
 
-            # gesture priority
             if is_fist(cursor_lm):
                 cursor_gesture = "FIST"
             elif is_pinch_index(cursor_lm):
@@ -617,7 +831,6 @@ def main():
             _last_cursor_cxcy = (cursor_cx, cursor_cy)
             _last_cursor_gesture = cursor_gesture
         else:
-            # short loss: keep last gesture/pos but don't treat as "got_cursor" for lock timers
             if _last_cursor_lm is not None and (t - _last_seen_ts) <= LOSS_GRACE_SEC:
                 cursor_cx, cursor_cy = _last_cursor_cxcy
                 cursor_gesture = _last_cursor_gesture
@@ -625,63 +838,96 @@ def main():
                 cursor_gesture = "NONE"
                 cursor_cx, cursor_cy = (0.5, 0.5)
                 if _dragging:
-                    pyautogui.mouseUp()
+                    try:
+                        pyautogui.mouseUp()
+                    except:
+                        pass
                     _dragging = False
                 if _last_cursor_lm is None or (t - _last_seen_ts) >= HARD_LOSS_SEC:
                     _reacquire_until = t + REACQUIRE_BLOCK_SEC
 
-        # ---------- other hand scroll state ----------
-        scroll_active = False
-        scroll_cy = None
-        if scroll_lm is not None:
-            _, scroll_cy = palm_center(scroll_lm)
-            scroll_active = is_fist(scroll_lm)
+        # ---------- other hand gesture ----------
+        got_other = other_lm is not None
+        other_cx, other_cy = (0.5, 0.5)
+        other_gesture = "NONE"
+        if got_other:
+            other_cx, other_cy = palm_center(other_lm)
+            if is_fist(other_lm):
+                other_gesture = "FIST"
+            elif is_pinch_index(other_lm):
+                other_gesture = "PINCH_INDEX"
+            elif is_v_sign(other_lm):
+                other_gesture = "V_SIGN"
+            elif is_open_palm(other_lm):
+                other_gesture = "OPEN_PALM"
+            else:
+                other_gesture = "OTHER"
 
-        # ---------- LOCK ----------
-        handle_lock(cursor_gesture, cursor_cx, cursor_cy, got_cursor)
+        mode_u = str(mode).upper()
 
-        # ---------- inject condition ----------
-        can_inject = (
-            enabled
-            and (str(mode).upper() == "MOUSE")
-            and (t >= _reacquire_until)
-            and (not locked)
+        # LOCK은 MOUSE에서만 (키보드에서 FIST(LEFT)와 충돌 방지)
+        if mode_u == "MOUSE":
+            handle_lock(cursor_gesture, cursor_cx, cursor_cy, got_cursor)
+        else:
+            _fist_start = None
+            _fist_anchor = None
+
+        can_mouse_inject = (
+            enabled and (mode_u == "MOUSE") and (t >= _reacquire_until) and (not locked)
+        )
+        can_keyboard_inject = (
+            enabled and (mode_u == "KEYBOARD") and (t >= _reacquire_until) and (not locked)
         )
 
-        # ---------- Move cursor (OPEN_PALM or while dragging PINCH) ----------
-        if can_inject:
+        # ---------- mouse move ----------
+        if can_mouse_inject:
             if cursor_gesture == "OPEN_PALM" or (_dragging and cursor_gesture == "PINCH_INDEX"):
                 ux, uy = map_control_to_screen(cursor_cx, cursor_cy)
                 ex, ey = apply_ema(ux, uy)
                 move_cursor(ex, ey)
 
-        # ---------- Click/Drag ----------
-        handle_index_pinch_click_drag(cursor_gesture, can_inject)
+        # ---------- mouse actions ----------
+        handle_index_pinch_click_drag(cursor_gesture, can_mouse_inject)
+        handle_right_click(cursor_gesture, can_mouse_inject)
 
-        # ---------- Right click ----------
-        handle_right_click(cursor_gesture, can_inject)
-
-        # ---------- Scroll (other hand fist) ----------
-        if scroll_cy is None:
-            handle_scroll_other_hand(False, 0.5, can_inject)
+        # ---------- scroll (mouse only) ----------
+        if can_mouse_inject and got_other:
+            handle_scroll_other_hand(other_gesture == "FIST", other_cy, True)
+            scroll_active = (other_gesture == "FIST")
         else:
-            handle_scroll_other_hand(scroll_active, scroll_cy, can_inject)
+            handle_scroll_other_hand(False, 0.5, False)
+            scroll_active = False
 
-        # ---------- status + overlay ----------
-        send_status(_ws, fps, cursor_gesture, can_inject, scroll_active)
+        # ---------- keyboard actions ----------
+        handle_keyboard_mode(
+            can_keyboard_inject,
+            got_cursor, cursor_gesture, (cursor_cx, cursor_cy),
+            got_other, other_gesture, (other_cx, other_cy)
+        )
 
-        # ---------- view / keys ----------
+        # ---------- status ----------
+        send_status(_ws, fps, cursor_gesture, can_mouse_inject, can_keyboard_inject, scroll_active, other_gesture)
+
+        # ---------- view / local keys ----------
         if not HEADLESS:
             global _window_open
 
             if PREVIEW:
                 if not _window_open:
-                    # 필요하면 namedWindow로 먼저 생성
                     cv2.namedWindow("GestureOS Agent", cv2.WINDOW_NORMAL)
                     _window_open = True
 
-                cv2.putText(frame, "Camera: LIVE", (10, 25),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                # FN 표시(디버깅용)
+                fn_on = (t < _mod_until)
+                cv2.putText(
+                    frame,
+                    f"mode={mode_u} enabled={enabled} locked={locked} cur={cursor_gesture} oth={other_gesture} FN={fn_on}",
+                    (10, 25),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55,
+                    (0, 255, 0),
+                    2,
+                )
                 cv2.imshow("GestureOS Agent", frame)
 
                 key = cv2.waitKey(1) & 0xFF
@@ -696,6 +942,11 @@ def main():
                 elif key in (ord('m'), ord('M')):
                     mode = "MOUSE"
                     print("[KEY] mode=MOUSE")
+                elif key in (ord('k'), ord('K')):
+                    mode = "KEYBOARD"
+                    locked = False
+                    _kb_reset()
+                    print("[KEY] mode=KEYBOARD (unlock)")
                 elif key in (ord('c'), ord('C')):
                     cx, cy = _last_cursor_cxcy if _last_cursor_cxcy is not None else (0.5, 0.5)
                     minx = clamp01(cx - CONTROL_HALF_W)
@@ -708,7 +959,6 @@ def main():
                     print("[CALIB] CONTROL_BOX =", CONTROL_BOX)
 
             else:
-                # PREVIEW OFF면 메인 스레드에서 창 닫기
                 if _window_open:
                     cv2.destroyWindow("GestureOS Agent")
                     _window_open = False
@@ -716,8 +966,6 @@ def main():
 
         else:
             time.sleep(0.001)
-
-
 
     cap.release()
     cv2.destroyAllWindows()
