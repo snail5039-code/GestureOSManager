@@ -1,18 +1,21 @@
 package com.example.gestureOSManager.service;
 
+import java.util.List;
 import org.springframework.stereotype.Service;
-
 import com.example.gestureOSManager.dto.AgentCommand;
 import com.example.gestureOSManager.dto.ModeType;
 import com.example.gestureOSManager.websocket.AgentSessionRegistry;
 import com.fasterxml.jackson.databind.ObjectMapper;
-
 import lombok.extern.slf4j.Slf4j;
+
 @Slf4j
 @Service
 public class ControlService {
   private final AgentSessionRegistry sessions;
   private final ObjectMapper om = new ObjectMapper();
+  private static final List<ModeType> CYCLE =
+		    List.of(ModeType.MOUSE, ModeType.KEYBOARD);
+
 
   public ControlService(AgentSessionRegistry sessions) {
     this.sessions = sessions;
