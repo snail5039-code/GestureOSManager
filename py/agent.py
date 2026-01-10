@@ -997,7 +997,7 @@ def on_message(ws, msg):
         PREVIEW = bool(data.get("enabled", True))
         print("[PY] cmd SET_PREVIEW ->", PREVIEW)
 
-
+     
 # ============================================================
 # Main
 # ============================================================
