@@ -5,16 +5,15 @@ GestureOS Agent (Mouse + Keyboard + Presentation)
 - LOCK center-box check bugfix (cy compare maxy)
 - LOCK only when enabled=True and other-hand not present
 
-PRESENTATION(PPT) mode 목표 동작:
+PRESENTATION(PPT) mode 목표 동작(최소 기능):
 - 다음/이전: → / ←
 - 시작/종료: F5 / Esc
-- 블랙스크린: B (선택 옵션)
-- 포인터: OPEN_PALM 으로 이동(클릭/드래그 없음)
 
-추가(요청 반영):
-- PPT 다음(→)을 "클랩(에어클랩)"으로 변경:
-  * 양손 OPEN_PALM 상태에서 손바닥 중심 거리가 NEAR 이하로 가까워졌다가
-    FAR 이상으로 멀어지는 순간 1회 clap으로 인식 -> Right Arrow
+제스처 매핑(요청 반영):
+- 다음(→): PINCH_INDEX
+- 이전(←): V_SIGN
+- 시작(F5): 양손 OPEN_PALM hold
+- 종료(Esc): 양손 PINCH_INDEX hold
 """
 
 import json
@@ -217,43 +216,31 @@ _kb_armed = True
 
 
 # ============================================================
-# PRESENTATION mode (PPT)
+# PRESENTATION mode (PPT) - minimal (4 keys)
 # ============================================================
-# 이전: Left (V_SIGN hold)
-PPT_PREV_HOLD_SEC = 0.20
-PPT_COOLDOWN_SEC = 0.35
+# NEXT/ PREV
+# - NEXT: Right Arrow (PINCH_INDEX hold)
+# - PREV: Left Arrow  (V_SIGN hold)
+PPT_NEXT_HOLD_SEC = 0.10
+PPT_PREV_HOLD_SEC = 0.15
+PPT_COOLDOWN_SEC = 0.30
 
-# 블랙스크린(B) - 선택
-PPT_ENABLE_BLACK = True
-PPT_BLACK_HOLD_SEC = 0.45
-PPT_BLACK_COOLDOWN_SEC = 0.80
-
-# 시작/종료 (F5 / Esc)
-# - 시작(F5): 양손 OPEN_PALM 홀드 (클랩과의 오작동 방지: 거리조건 + inhibit 적용)
-# - 종료(Esc): 양손 PINCH_INDEX 홀드
+# START/END
+# - START(F5): both OPEN_PALM hold
+# - END(Esc): both PINCH_INDEX hold (priority)
 PPT_START_HOLD_SEC = 0.60
 PPT_START_COOLDOWN_SEC = 1.20
 PPT_END_HOLD_SEC = 0.60
 PPT_END_COOLDOWN_SEC = 0.80
 
-# ---- [NEW] NEXT by CLAP (both OPEN_PALM near->far) ----
-# 튜닝 포인트:
-# - 잘 안 잡히면: NEAR_DIST 올리기(0.12~0.14)
-# - 너무 민감하면: NEAR_DIST 내리기(0.09~0.10) 또는 FAR_DIST 올리기(0.22~0.25)
-PPT_CLAP_NEAR_DIST = 0.11
-PPT_CLAP_FAR_DIST = 0.20
-PPT_CLAP_MAX_CONTACT_SEC = 0.40
-PPT_CLAP_COOLDOWN_SEC = 0.35
+# 상태
+_ppt_next_hold = None
+_ppt_last_next_ts = 0.0
+_ppt_next_fired = False
 
-# clap 후 START(F5) 오작동 방지용 inhibit (초)
-PPT_AFTER_CLAP_INHIBIT_START_SEC = 0.85
-
-# 상태들
-_ppt_v_start = None
+_ppt_prev_hold = None
 _ppt_last_prev_ts = 0.0
-
-_ppt_fist_start = None
-_ppt_last_black_ts = 0.0
+_ppt_prev_fired = False
 
 _ppt_start_hold = None
 _ppt_last_start_ts = 0.0
@@ -263,25 +250,20 @@ _ppt_end_hold = None
 _ppt_last_end_ts = 0.0
 _ppt_end_fired = False
 
-# clap state
-_ppt_clap_contact = False
-_ppt_clap_contact_ts = 0.0
-_ppt_last_clap_ts = 0.0
-_ppt_inhibit_start_until = 0.0
-
 
 def _ppt_reset():
-    global _ppt_v_start, _ppt_last_prev_ts
-    global _ppt_fist_start, _ppt_last_black_ts
+    global _ppt_next_hold, _ppt_last_next_ts, _ppt_next_fired
+    global _ppt_prev_hold, _ppt_last_prev_ts, _ppt_prev_fired
     global _ppt_start_hold, _ppt_last_start_ts, _ppt_start_fired
     global _ppt_end_hold, _ppt_last_end_ts, _ppt_end_fired
-    global _ppt_clap_contact, _ppt_clap_contact_ts, _ppt_last_clap_ts, _ppt_inhibit_start_until
 
-    _ppt_v_start = None
+    _ppt_next_hold = None
+    _ppt_last_next_ts = 0.0
+    _ppt_next_fired = False
+
+    _ppt_prev_hold = None
     _ppt_last_prev_ts = 0.0
-
-    _ppt_fist_start = None
-    _ppt_last_black_ts = 0.0
+    _ppt_prev_fired = False
 
     _ppt_start_hold = None
     _ppt_last_start_ts = 0.0
@@ -290,12 +272,6 @@ def _ppt_reset():
     _ppt_end_hold = None
     _ppt_last_end_ts = 0.0
     _ppt_end_fired = False
-
-    _ppt_clap_contact = False
-    _ppt_clap_contact_ts = 0.0
-    _ppt_last_clap_ts = 0.0
-    _ppt_inhibit_start_until = 0.0
-
 
 # ============================================================
 # Utility
@@ -718,18 +694,18 @@ def handle_scroll_other_hand(scroll_active, scroll_cy, can_inject):
 # ============================================================
 def handle_presentation_mode(cursor_gesture, cursor_cxcy, other_gesture, other_cxcy, got_other, can_inject):
     """
-    PRESENTATION:
-      - NEXT (Right): CLAP (both OPEN_PALM near->far)
+    PRESENTATION (PPT) - minimal 4 keys
+      - NEXT (Right): PINCH_INDEX hold
       - PREV (Left): V_SIGN hold
-      - START (F5): both OPEN_PALM hold (단, 손이 충분히 떨어져 있고 clap 직후 inhibit)
-      - END (Esc): both PINCH_INDEX hold (최우선)
-      - BLACK (B): (optional) FIST hold
+      - START (F5): both OPEN_PALM hold
+      - END (Esc): both PINCH_INDEX hold (priority)
+
+    NOTE: PPT 모드에서는 마우스/커서 이동/클릭/스크롤 등은 주입하지 않도록 설계.
     """
-    global _ppt_v_start, _ppt_last_prev_ts
-    global _ppt_fist_start, _ppt_last_black_ts
+    global _ppt_next_hold, _ppt_last_next_ts, _ppt_next_fired
+    global _ppt_prev_hold, _ppt_last_prev_ts, _ppt_prev_fired
     global _ppt_start_hold, _ppt_last_start_ts, _ppt_start_fired
     global _ppt_end_hold, _ppt_last_end_ts, _ppt_end_fired
-    global _ppt_clap_contact, _ppt_clap_contact_ts, _ppt_last_clap_ts, _ppt_inhibit_start_until
 
     t = now()
 
@@ -752,84 +728,55 @@ def handle_presentation_mode(cursor_gesture, cursor_cxcy, other_gesture, other_c
         _ppt_end_hold = None
         _ppt_end_fired = False
 
-    # ---- NEXT (Right): CLAP (both OPEN_PALM near->far)
-    if got_other and (cursor_gesture == "OPEN_PALM") and (other_gesture == "OPEN_PALM"):
-        d = dist(cursor_cxcy, other_cxcy)
-
-        # contact start
-        if (not _ppt_clap_contact) and d <= PPT_CLAP_NEAR_DIST:
-            _ppt_clap_contact = True
-            _ppt_clap_contact_ts = t
-
-        # too long contact -> cancel (홀드/정지로 인한 오판 방지)
-        if _ppt_clap_contact and (t - _ppt_clap_contact_ts) > PPT_CLAP_MAX_CONTACT_SEC:
-            _ppt_clap_contact = False
-
-        # release -> fire next
-        if _ppt_clap_contact and d >= PPT_CLAP_FAR_DIST:
-            _ppt_clap_contact = False
-            if t >= _ppt_last_clap_ts + PPT_CLAP_COOLDOWN_SEC:
-                pyautogui.press("right")
-                _ppt_last_clap_ts = t
-                # clap 직후 START(F5) 오작동 방지
-                _ppt_inhibit_start_until = t + PPT_AFTER_CLAP_INHIBIT_START_SEC
-            return  # clap으로 다음 넘겼으면 다른 동작은 이번 프레임에 막기
-    else:
-        _ppt_clap_contact = False
-
-    # ---- START (F5): both OPEN_PALM hold (거리 조건 + clap 직후 inhibit)
-    # clap과의 충돌 방지:
-    # 1) clap 직후 inhibit 시간 동안은 시작홀드 무시
-    # 2) 두 손 거리가 FAR 이상(충분히 떨어짐)일 때만 시작홀드 카운트
+    # ---- START (F5): both OPEN_PALM hold (START 중에는 NEXT/PREV 차단)
     start_combo = got_other and (cursor_gesture == "OPEN_PALM") and (other_gesture == "OPEN_PALM")
-    if start_combo and (t >= _ppt_inhibit_start_until):
-        d2 = dist(cursor_cxcy, other_cxcy)
-        if d2 >= PPT_CLAP_FAR_DIST:
-            if not _ppt_start_fired:
-                if _ppt_start_hold is None:
-                    _ppt_start_hold = t
-                elif (t - _ppt_start_hold) >= PPT_START_HOLD_SEC and t >= _ppt_last_start_ts + PPT_START_COOLDOWN_SEC:
-                    pyautogui.press("f5")
-                    _ppt_last_start_ts = t
-                    _ppt_start_fired = True
-        else:
-            # 너무 가까우면(start로 안 보고) 리셋
-            _ppt_start_hold = None
-            _ppt_start_fired = False
+    if start_combo:
+        if not _ppt_start_fired:
+            if _ppt_start_hold is None:
+                _ppt_start_hold = t
+            elif (t - _ppt_start_hold) >= PPT_START_HOLD_SEC and t >= _ppt_last_start_ts + PPT_START_COOLDOWN_SEC:
+                pyautogui.press("f5")
+                _ppt_last_start_ts = t
+                _ppt_start_fired = True
+        return
     else:
         _ppt_start_hold = None
         _ppt_start_fired = False
 
+    # ---- NEXT (Right): PINCH_INDEX hold
+    if cursor_gesture == "PINCH_INDEX":
+        # cooldown 동안은 hold를 리셋해서 반복 입력 방지
+        if t < _ppt_last_next_ts + PPT_COOLDOWN_SEC:
+            _ppt_next_hold = None
+            _ppt_next_fired = False
+        else:
+            if not _ppt_next_fired:
+                if _ppt_next_hold is None:
+                    _ppt_next_hold = t
+                elif (t - _ppt_next_hold) >= PPT_NEXT_HOLD_SEC:
+                    pyautogui.press("right")
+                    _ppt_last_next_ts = t
+                    _ppt_next_fired = True
+    else:
+        _ppt_next_hold = None
+        _ppt_next_fired = False
+
     # ---- PREV (Left): V_SIGN hold
     if cursor_gesture == "V_SIGN":
         if t < _ppt_last_prev_ts + PPT_COOLDOWN_SEC:
-            _ppt_v_start = None
+            _ppt_prev_hold = None
+            _ppt_prev_fired = False
         else:
-            if _ppt_v_start is None:
-                _ppt_v_start = t
-            elif (t - _ppt_v_start) >= PPT_PREV_HOLD_SEC:
-                pyautogui.press("left")
-                _ppt_last_prev_ts = t
-                _ppt_v_start = None
+            if not _ppt_prev_fired:
+                if _ppt_prev_hold is None:
+                    _ppt_prev_hold = t
+                elif (t - _ppt_prev_hold) >= PPT_PREV_HOLD_SEC:
+                    pyautogui.press("left")
+                    _ppt_last_prev_ts = t
+                    _ppt_prev_fired = True
     else:
-        _ppt_v_start = None
-
-    # ---- BLACK (B): FIST hold (optional)
-    if PPT_ENABLE_BLACK:
-        if cursor_gesture == "FIST":
-            if t < _ppt_last_black_ts + PPT_BLACK_COOLDOWN_SEC:
-                _ppt_fist_start = None
-            else:
-                if _ppt_fist_start is None:
-                    _ppt_fist_start = t
-                elif (t - _ppt_fist_start) >= PPT_BLACK_HOLD_SEC:
-                    pyautogui.press("b")
-                    _ppt_last_black_ts = t
-                    _ppt_fist_start = None
-        else:
-            _ppt_fist_start = None
-    else:
-        _ppt_fist_start = None
+        _ppt_prev_hold = None
+        _ppt_prev_fired = False
 
 
 # ============================================================
@@ -931,7 +878,8 @@ def send_status(ws, fps, cursor_gesture, other_gesture, can_mouse_inject, can_ke
         "locked": bool(locked),
         "gesture": str(cursor_gesture),
         "fps": float(fps),
-        "canMove": bool((can_mouse_inject or can_ppt_inject) and (cursor_gesture == "OPEN_PALM")),
+        # (최소 기능 PPT) 발표모드에서는 커서 이동을 하지 않으므로 canMove는 mouse만 반영
+        "canMove": bool((can_mouse_inject) and (cursor_gesture == "OPEN_PALM")),
         "canClick": bool(can_mouse_inject and (cursor_gesture in ("PINCH_INDEX", "V_SIGN"))),
         "scrollActive": bool(scroll_active),
         "canKey": bool(can_key_inject),
@@ -997,7 +945,7 @@ def on_message(ws, msg):
         PREVIEW = bool(data.get("enabled", True))
         print("[PY] cmd SET_PREVIEW ->", PREVIEW)
 
-     
+
 # ============================================================
 # Main
 # ============================================================
@@ -1172,11 +1120,12 @@ def main():
             _mode_hold_start = None
 
         can_mouse_inject = enabled and (mode_u == "MOUSE") and (t >= _reacquire_until) and (not locked) and (not mode_switch_block)
-        can_key_inject = enabled and (mode_u == "KEYBOARD") and (t >= _reacquire_until) and (not locked) and (not mode_switch_block)
-        can_ppt_inject = enabled and (mode_u == "PRESENTATION") and (t >= _reacquire_until) and (not locked) and (not mode_switch_block)
+        can_key_inject   = enabled and (mode_u == "KEYBOARD") and (t >= _reacquire_until) and (not locked) and (not mode_switch_block)
+        can_ppt_inject   = enabled and (mode_u == "PRESENTATION") and (t >= _reacquire_until) and (not locked) and (not mode_switch_block)
 
-        # cursor move (MOUSE + PRESENTATION): OPEN_PALM only
-        if can_mouse_inject or can_ppt_inject:
+        # (최소 기능 PPT) 발표모드에서는 커서 이동을 하지 않음
+        # cursor move (MOUSE only): OPEN_PALM only
+        if can_mouse_inject:
             if cursor_gesture == "OPEN_PALM":
                 ux, uy = map_control_to_screen(cursor_cx, cursor_cy)
                 ex, ey = apply_ema(ux, uy)
