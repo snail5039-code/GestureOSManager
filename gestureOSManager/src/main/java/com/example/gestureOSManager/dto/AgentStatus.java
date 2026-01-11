@@ -36,6 +36,10 @@ public class AgentStatus {
     private boolean canClick;
     private boolean connected;
     
+    private Double pointerX;   // 0~1 정규화
+    private Double pointerY;   // 0~1 정규화
+    private Boolean tracking;  // true/false
+    
     @Builder.Default
     private boolean scrollActive = false;
     

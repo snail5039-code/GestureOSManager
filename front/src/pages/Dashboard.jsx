@@ -128,6 +128,9 @@ export default function Dashboard({
       const { data } = await api.get("/control/status", {
         signal: controller.signal,
       });
+
+      console.log("[STATUS]", data);
+
       setStatus(data);
       setMode((prev) => data?.mode ?? prev);
       setLastUpdated(new Date());
@@ -136,9 +139,8 @@ export default function Dashboard({
       if (e?.name === "CanceledError" || e?.name === "AbortError") return;
 
       const msg = e?.response
-        ? `STATUS HTTP ${e.response.status}${
-            e.response.data ? `: ${String(e.response.data)}` : ""
-          }`
+        ? `STATUS HTTP ${e.response.status}${e.response.data ? `: ${String(e.response.data)}` : ""
+        }`
         : e?.message || "STATUS fetch failed";
       setError(msg);
     } finally {
@@ -155,9 +157,8 @@ export default function Dashboard({
         await fetchStatus();
       } catch (e) {
         const msg = e?.response
-          ? `${url} HTTP ${e.response.status}${
-              e.response.data ? `: ${String(e.response.data)}` : ""
-            }`
+          ? `${url} HTTP ${e.response.status}${e.response.data ? `: ${String(e.response.data)}` : ""
+          }`
           : e?.message || "POST failed";
         setError(msg);
       } finally {
@@ -180,9 +181,8 @@ export default function Dashboard({
       await fetchStatus();
     } catch (e) {
       const msg = e?.response
-        ? `/control/preview HTTP ${e.response.status}${
-            e.response.data ? `: ${String(e.response.data)}` : ""
-          }`
+        ? `/control/preview HTTP ${e.response.status}${e.response.data ? `: ${String(e.response.data)}` : ""
+        }`
         : e?.message || "PREVIEW failed";
       setError(msg);
     } finally {
@@ -200,9 +200,8 @@ export default function Dashboard({
         await fetchStatus();
       } catch (e) {
         const msg = e?.response
-          ? `/control/mode HTTP ${e.response.status}${
-              e.response.data ? `: ${String(e.response.data)}` : ""
-            }`
+          ? `/control/mode HTTP ${e.response.status}${e.response.data ? `: ${String(e.response.data)}` : ""
+          }`
           : e?.message || "MODE failed";
         setError(msg);
       } finally {
@@ -225,9 +224,8 @@ export default function Dashboard({
         await fetchStatus();
       } catch (e) {
         const msg = e?.response
-          ? `/control/lock HTTP ${e.response.status}${
-              e.response.data ? `: ${String(e.response.data)}` : ""
-            }`
+          ? `/control/lock HTTP ${e.response.status}${e.response.data ? `: ${String(e.response.data)}` : ""
+          }`
           : e?.message || "LOCK failed";
         setError(msg);
       } finally {
@@ -653,8 +651,8 @@ export default function Dashboard({
               {status
                 ? JSON.stringify(status, null, 2)
                 : loading
-                ? "Loading..."
-                : "No data"}
+                  ? "Loading..."
+                  : "No data"}
             </pre>
           </Card>
         </main>

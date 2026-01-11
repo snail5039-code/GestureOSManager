@@ -1,5 +1,8 @@
 """
-GestureOS Agent (Mouse + Keyboard) - FULL (FN Layer Keyboard + per-action delay)
+GestureOS Agent (Mouse + Keyboard + RUSH) - FULL
+================================================
+
+이 파일 1개로 끝나는 “통짜” 버전이다.
 
 ========================
 MOUSE mode
@@ -30,11 +33,20 @@ KEYBOARD mode (FN 레이어 + 동작별 딜레이)
 * KEYBOARD는 의도치 않은 입력 방지를 위해:
   - 토큰(동작)별 최소 유지시간(hold) + 토큰별 쿨다운 적용
 
+========================
+RUSH mode (게임 데모용)
+========================
+- OS 제어(마우스/키보드 주입)는 하지 않음
+- 대신, "양손 포인터 좌표"를 Spring으로 계속 전송
+- Rush3DPage(React)가 /api/control/status를 폴링해서
+  leftPointerX/Y, rightPointerX/Y를 읽어 커서를 움직임
+
 Local keys (OpenCV window focused)
 - E: enabled toggle (test without Spring)
 - L: locked toggle
 - M: force mode=MOUSE
 - K: force mode=KEYBOARD (unlock)
+- R: force mode=RUSH (unlock)   <-- 추가
 - C: calibrate CONTROL_BOX around current cursor-hand position
 - ESC: exit
 """
@@ -53,11 +65,11 @@ from websocket import WebSocketApp
 
 
 # ============================================================
-# WebSocket
+# WebSocket (Spring Boot가 열어주는 WS 엔드포인트)
 # ============================================================
 WS_URL = "ws://127.0.0.1:8080/ws/agent"
 
-HEADLESS = ("--headless" in sys.argv)
+HEADLESS = ("--headless" in sys.argv)  # --headless 붙이면 OpenCV 프리뷰창 없이 동작
 PREVIEW = not HEADLESS
 _window_open = False
 
@@ -70,6 +82,8 @@ _ws_connected = False
 
 # ============================================================
 # Control box (normalized 0~1)
+# - 손바닥 중심(cx,cy)을 이 박스 안에서만 읽고,
+#   박스 -> 화면 전체(0~1)로 맵핑하여 커서를 이동
 # ============================================================
 CONTROL_BOX = (0.30, 0.35, 0.70, 0.92)
 CONTROL_GAIN = 1.35
@@ -132,6 +146,7 @@ _scroll_anchor_y = None
 
 # ============================================================
 # LOCK (mouse only)
+# - 커서 손이 FIST 상태로 중앙 박스에서 2초 고정 => locked 토글
 # ============================================================
 LOCK_HOLD_SEC = 2.0
 LOCK_TOGGLE_COOLDOWN_SEC = 1.0
@@ -145,6 +160,8 @@ _last_lock_toggle_ts = 0.0
 
 # ============================================================
 # Tracking loss handling
+# - 손 추적이 순간 끊겨도 LOSS_GRACE_SEC 동안은 마지막 값 유지
+# - HARD_LOSS_SEC 지나면 "재획득 블록" 걸어서 오동작 방지
 # ============================================================
 LOSS_GRACE_SEC = 0.30
 HARD_LOSS_SEC = 0.55
@@ -159,6 +176,7 @@ _reacquire_until = 0.0
 
 # ============================================================
 # Runtime state from Spring
+# - Spring에서 ENABLE / DISABLE / SET_MODE 받으면 여기 값이 바뀜
 # ============================================================
 enabled = False
 mode = "MOUSE"
@@ -166,7 +184,7 @@ locked = True
 
 
 # ============================================================
-# MediaPipe
+# MediaPipe Hands
 # ============================================================
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(
@@ -242,12 +260,20 @@ def dist(a, b):
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
 def palm_center(lm):
+    """
+    손바닥 중심 추정:
+    - wrist(0), index_mcp(5), middle_mcp(9), ring_mcp(13), pinky_mcp(17)
+    """
     idx = [0, 5, 9, 13, 17]
     xs = [lm[i][0] for i in idx]
     ys = [lm[i][1] for i in idx]
     return (sum(xs) / len(xs), sum(ys) / len(ys))
 
 def map_control_to_screen(cx, cy):
+    """
+    CONTROL_BOX(부분 박스) 안에서의 cx,cy를
+    화면 전체 normalized(0~1)로 맵핑
+    """
     minx, miny, maxx, maxy = CONTROL_BOX
     ux = (cx - minx) / max(1e-6, (maxx - minx))
     uy = (cy - miny) / max(1e-6, (maxy - miny))
@@ -258,6 +284,9 @@ def map_control_to_screen(cx, cy):
     return clamp01(ux), clamp01(uy)
 
 def apply_ema(nx, ny):
+    """
+    좌표 EMA 스무딩(손 떨림 완화)
+    """
     global _ema_x, _ema_y
     if _ema_x is None:
         _ema_x, _ema_y = nx, ny
@@ -267,6 +296,11 @@ def apply_ema(nx, ny):
     return _ema_x, _ema_y
 
 def move_cursor(norm_x, norm_y):
+    """
+    OS 커서 이동 (normalized 0~1 -> screen pixel)
+    - 너무 잦은 이동 방지(MOVE_INTERVAL_SEC)
+    - DEADZONE_PX 이하면 무시(미세 떨림 무시)
+    """
     global _last_move_ts
     t = now()
     if (t - _last_move_ts) < MOVE_INTERVAL_SEC:
@@ -284,6 +318,10 @@ def move_cursor(norm_x, norm_y):
     pyautogui.moveTo(x, y)
 
 def finger_extended(lm, tip, pip):
+    """
+    손가락이 펴져있는지(단순 판정):
+    - tip y가 pip y보다 위쪽이면(작으면) 펴졌다고 판단
+    """
     return lm[tip][1] < lm[pip][1]
 
 
@@ -323,9 +361,68 @@ def is_v_sign(lm):
 
 
 # ============================================================
+# (RUSH 추가) Rush용: 제스처 분류 + 화면 기준 좌/우 손 선택
+# ============================================================
+def classify_gesture(lm):
+    """
+    Rush/Status 전송용 제스처 문자열.
+    Rush3D에서는 gesture 자체를 안 써도 되지만(포인터 좌표가 핵심),
+    디버깅을 위해 leftGesture/rightGesture도 같이 전송할 수 있게 해둠.
+    """
+    if lm is None:
+        return "NONE"
+    if is_fist(lm):
+        return "FIST"
+    if is_pinch_index(lm):
+        return "PINCH_INDEX"
+    if is_v_sign(lm):
+        return "V_SIGN"
+    if is_open_palm(lm):
+        return "OPEN_PALM"
+    return "OTHER"
+
+def pick_lr_by_screen_x(hands_list):
+    """
+    hands_list: [(label, lm), ...]
+      - lm: [(x,y), ...] normalized (0~1)
+
+    반환:
+      - left_pack, right_pack
+      - pack: {"cx": float, "cy": float, "gesture": str}
+
+    규칙:
+      - 손 2개면 cx(화면 x) 기준으로 작은 손이 left, 큰 손이 right
+      - 손 1개면 right만 채우고 left는 None (Rush3D에서 단일 입력 fallback 가능)
+    """
+    if not hands_list:
+        return None, None
+
+    packs = []
+    for label, lm in hands_list:
+        cx, cy = palm_center(lm)
+        packs.append({
+            "cx": cx,
+            "cy": cy,
+            "gesture": classify_gesture(lm),
+        })
+
+    packs.sort(key=lambda p: p["cx"])
+
+    if len(packs) >= 2:
+        return packs[0], packs[-1]
+    else:
+        return None, packs[0]
+
+
+# ============================================================
 # LOCK handler (mouse only)
 # ============================================================
 def handle_lock(cursor_gesture, cx, cy, got_cursor_hand):
+    """
+    - 중앙 박스(LOCK_CENTER_BOX) 안에서
+    - FIST를 2초 유지 + 손이 거의 안 움직이면
+    -> locked 토글
+    """
     global locked, _fist_start, _fist_anchor, _last_lock_toggle_ts, _reacquire_until
     t = now()
 
@@ -340,7 +437,10 @@ def handle_lock(cursor_gesture, cx, cy, got_cursor_hand):
         return
 
     minx, miny, maxx, maxy = LOCK_CENTER_BOX
-    if not (minx <= cx <= maxx and miny <= cy <= maxx):
+
+    # ✅ 버그 수정 포인트:
+    # 기존에 "miny <= cy <= maxx"로 되어 있으면 y판정이 깨짐.
+    if not (minx <= cx <= maxx and miny <= cy <= maxy):
         _fist_start = None
         _fist_anchor = None
         return
@@ -378,6 +478,7 @@ def handle_index_pinch_click_drag(cursor_gesture, can_inject):
 
     t = now()
 
+    # 주입 불가능이면 드래그 상태 등 정리
     if not can_inject:
         if _dragging:
             try:
@@ -389,7 +490,7 @@ def handle_index_pinch_click_drag(cursor_gesture, can_inject):
         _pending_single_click = False
         return
 
-    # 대기 단일클릭 확정
+    # 단일클릭 대기(더블클릭 갭 지나면 확정)
     if _pending_single_click and t >= _single_click_deadline:
         if t >= _last_click_ts + CLICK_COOLDOWN_SEC:
             pyautogui.click()
@@ -406,7 +507,7 @@ def handle_index_pinch_click_drag(cursor_gesture, can_inject):
             _dragging = True
 
     else:
-        # 해제 시 탭/드래그 종료
+        # PINCH 해제 순간: 탭/드래그 종료 판정
         if _pinch_start_ts is not None:
             dur = t - _pinch_start_ts
 
@@ -416,11 +517,13 @@ def handle_index_pinch_click_drag(cursor_gesture, can_inject):
             else:
                 if dur <= CLICK_TAP_MAX_SEC:
                     if _pending_single_click:
+                        # 두 번째 탭이면 더블클릭
                         _pending_single_click = False
                         if t >= _last_click_ts + CLICK_COOLDOWN_SEC:
                             pyautogui.doubleClick()
                             _last_click_ts = t
                     else:
+                        # 첫 탭이면 더블클릭 대기 상태로 전환
                         _pending_single_click = True
                         _single_click_deadline = t + DOUBLECLICK_GAP_SEC
 
@@ -497,7 +600,6 @@ def _kb_reset():
     _kb_token_start_ts = 0.0
     _kb_armed = True
     _mod_until = 0.0
-    # one-shot map은 유지해도 되지만, 모드 전환 시 안정적으로 초기화
     _kb_last_fire_map["SPACE"] = 0.0
     _kb_last_fire_map["ENTER"] = 0.0
     _kb_last_fire_map["ESC"] = 0.0
@@ -581,7 +683,7 @@ def handle_keyboard_mode(can_inject,
     if _kb_streak < KB_STABLE_FRAMES:
         return
 
-    # ✅ 동작별 최소 유지 시간(hold) 체크
+    # 동작별 최소 유지 시간(hold) 체크
     need_hold = KB_HOLD_SEC.get(token, 0.12)
     if (t - _kb_token_start_ts) < need_hold:
         return
@@ -615,22 +717,76 @@ def handle_keyboard_mode(can_inject,
 # ============================================================
 # WS callbacks
 # ============================================================
-def send_status(ws, fps, cursor_gesture, can_mouse_inject, can_keyboard_inject, scroll_active, other_gesture):
+def send_status(
+    ws,
+    fps,
+    cursor_gesture,
+    can_mouse_inject,
+    can_keyboard_inject,
+    scroll_active,
+    other_gesture,
+    rush_left=None,   # ✅ RUSH: 화면 기준 왼손 pack
+    rush_right=None,  # ✅ RUSH: 화면 기준 오른손 pack
+):
+    """
+    Spring이 STATUS를 저장해두고, 프론트(/api/control/status)에서 polling 한다고 가정.
+    Rush3D가 읽는 키:
+      - leftPointerX/Y, leftTracking
+      - rightPointerX/Y, rightTracking
+      - (fallback) pointerX/Y, isTracking
+    """
     if ws is None or (not _ws_connected):
         return
+
     payload = {
         "type": "STATUS",
         "enabled": bool(enabled),
         "mode": str(mode),
         "locked": bool(locked),
+
+        # 디버깅/표시용
         "gesture": str(cursor_gesture),
         "fps": float(fps),
+
+        # 기존 플래그
         "canMove": bool(can_mouse_inject and (cursor_gesture in ("OPEN_PALM", "PINCH_INDEX"))),
         "canClick": bool(can_mouse_inject and (cursor_gesture in ("PINCH_INDEX", "V_SIGN"))),
         "scrollActive": bool(scroll_active),
         "canKey": bool(can_keyboard_inject),
         "otherGesture": str(other_gesture),
     }
+
+    # ===== RUSH/FRONT에서 쓰는 “양손 포인터” =====
+    # left
+    if rush_left is not None:
+        payload["leftPointerX"] = float(rush_left["cx"])
+        payload["leftPointerY"] = float(rush_left["cy"])
+        payload["leftTracking"] = True
+        payload["leftGesture"] = str(rush_left.get("gesture", "NONE"))
+    else:
+        payload["leftTracking"] = False
+
+    # right
+    if rush_right is not None:
+        payload["rightPointerX"] = float(rush_right["cx"])
+        payload["rightPointerY"] = float(rush_right["cy"])
+        payload["rightTracking"] = True
+        payload["rightGesture"] = str(rush_right.get("gesture", "NONE"))
+    else:
+        payload["rightTracking"] = False
+
+    # fallback 단일 포인터(한 손만 있어도 프론트에서 움직이게)
+    if rush_right is not None:
+        payload["pointerX"] = float(rush_right["cx"])
+        payload["pointerY"] = float(rush_right["cy"])
+        payload["isTracking"] = True
+    elif rush_left is not None:
+        payload["pointerX"] = float(rush_left["cx"])
+        payload["pointerY"] = float(rush_left["cy"])
+        payload["isTracking"] = True
+    else:
+        payload["isTracking"] = False
+
     try:
         ws.send(json.dumps(payload))
     except Exception as e:
@@ -650,6 +806,10 @@ def on_close(ws, status_code, msg):
     print("[PY] WS closed:", status_code, msg)
 
 def on_message(ws, msg):
+    """
+    Spring -> Python으로 오는 제어 명령 처리
+    - ENABLE / DISABLE / SET_MODE / SET_PREVIEW
+    """
     global enabled, mode, locked, PREVIEW
     global _dragging, _pinch_start_ts, _pending_single_click
 
@@ -696,12 +856,12 @@ def on_message(ws, msg):
             _pinch_start_ts = None
             _pending_single_click = False
 
-        # KEYBOARD 들어가면 잠금 해제 + 키보드 상태 초기화
-        if new_mode == "KEYBOARD":
+        # KEYBOARD / RUSH 들어가면 잠금 해제 + 키보드 상태 초기화(안전)
+        if new_mode in ("KEYBOARD", "RUSH"):
             locked = False
             _kb_reset()
 
-        # KEYBOARD에서 나가도 초기화
+        # KEYBOARD가 아니면 키보드 상태는 항상 초기화
         if new_mode != "KEYBOARD":
             _kb_reset()
 
@@ -727,6 +887,7 @@ def main():
     print("[PY] WS_URL:", WS_URL)
     print("[PY] CURSOR_HAND_LABEL:", CURSOR_HAND_LABEL)
 
+    # 카메라 오픈
     try:
         cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
     except Exception:
@@ -739,6 +900,7 @@ def main():
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
+    # WS 연결은 별도 스레드에서 계속 유지
     def ws_loop():
         global _ws
         while True:
@@ -766,6 +928,7 @@ def main():
         if not ok or frame is None:
             continue
 
+        # 미러(사용자 입장에선 거울이 편함)
         frame = cv2.flip(frame, 1)
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
@@ -774,12 +937,14 @@ def main():
         prev = t
         fps = 0.9 * fps + 0.1 * (1.0 / dt)
 
+        # MediaPipe Hands 추론
         res = hands.process(rgb)
         got_any = (res.multi_hand_landmarks is not None and len(res.multi_hand_landmarks) > 0)
 
         cursor_lm = None
         other_lm = None
 
+        # hands_list: [(label, lm), ...]
         hands_list = []
         if got_any:
             labels = []
@@ -794,8 +959,13 @@ def main():
                 label = labels[i] if i < len(labels) else None
                 hands_list.append((label, lm))
 
+        # ===== (RUSH) 화면 기준 좌/우 손 pack 만들기 =====
+        # - Rush3D는 "이 값들"을 Spring status에서 읽어간다.
+        rush_left, rush_right = pick_lr_by_screen_x(hands_list)
+
+        # cursor/other 손 결정(기존 방식 유지)
         if hands_list:
-            # cursor hand
+            # cursor hand: CURSOR_HAND_LABEL 우선
             for label, lm in hands_list:
                 if label == CURSOR_HAND_LABEL:
                     cursor_lm = lm
@@ -803,7 +973,7 @@ def main():
             if cursor_lm is None:
                 cursor_lm = hands_list[0][1]
 
-            # other hand
+            # other hand: cursor가 아닌 나머지
             if len(hands_list) >= 2:
                 for label, lm in hands_list:
                     if lm is not cursor_lm:
@@ -831,18 +1001,23 @@ def main():
             _last_cursor_cxcy = (cursor_cx, cursor_cy)
             _last_cursor_gesture = cursor_gesture
         else:
+            # 손 추적이 끊겨도 잠깐은 마지막 값 유지
             if _last_cursor_lm is not None and (t - _last_seen_ts) <= LOSS_GRACE_SEC:
                 cursor_cx, cursor_cy = _last_cursor_cxcy
                 cursor_gesture = _last_cursor_gesture
             else:
                 cursor_gesture = "NONE"
                 cursor_cx, cursor_cy = (0.5, 0.5)
+
+                # 드래그 상태가 남아있으면 강제 해제
                 if _dragging:
                     try:
                         pyautogui.mouseUp()
                     except:
                         pass
                     _dragging = False
+
+                # HARD_LOSS 지나면 재획득 블록
                 if _last_cursor_lm is None or (t - _last_seen_ts) >= HARD_LOSS_SEC:
                     _reacquire_until = t + REACQUIRE_BLOCK_SEC
 
@@ -865,19 +1040,25 @@ def main():
 
         mode_u = str(mode).upper()
 
-        # LOCK은 MOUSE에서만 (키보드에서 FIST(LEFT)와 충돌 방지)
+        # LOCK은 MOUSE에서만 (키보드/RUSH에서 FIST와 충돌 방지)
         if mode_u == "MOUSE":
             handle_lock(cursor_gesture, cursor_cx, cursor_cy, got_cursor)
         else:
             _fist_start = None
             _fist_anchor = None
 
+        # 주입 권한(재획득 블록, locked, enabled 고려)
         can_mouse_inject = (
             enabled and (mode_u == "MOUSE") and (t >= _reacquire_until) and (not locked)
         )
         can_keyboard_inject = (
             enabled and (mode_u == "KEYBOARD") and (t >= _reacquire_until) and (not locked)
         )
+
+        # RUSH는 OS에 마우스/키보드 입력 주입을 하지 않도록 유지
+        if mode_u == "RUSH":
+            can_mouse_inject = False
+            can_keyboard_inject = False
 
         # ---------- mouse move ----------
         if can_mouse_inject:
@@ -905,8 +1086,18 @@ def main():
             got_other, other_gesture, (other_cx, other_cy)
         )
 
-        # ---------- status ----------
-        send_status(_ws, fps, cursor_gesture, can_mouse_inject, can_keyboard_inject, scroll_active, other_gesture)
+        # ---------- status (핵심: RUSH 포인터 포함해서 전송) ----------
+        send_status(
+            _ws,
+            fps,
+            cursor_gesture,
+            can_mouse_inject,
+            can_keyboard_inject,
+            scroll_active,
+            other_gesture,
+            rush_left=rush_left,
+            rush_right=rush_right,
+        )
 
         # ---------- view / local keys ----------
         if not HEADLESS:
@@ -928,6 +1119,29 @@ def main():
                     (0, 255, 0),
                     2,
                 )
+
+                # RUSH 좌/우 손 상태도 확인용으로 표시
+                if rush_left is not None:
+                    cv2.putText(
+                        frame,
+                        f"RUSH L: ({rush_left['cx']:.2f},{rush_left['cy']:.2f}) {rush_left['gesture']}",
+                        (10, 50),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.55,
+                        (255, 255, 0),
+                        2,
+                    )
+                if rush_right is not None:
+                    cv2.putText(
+                        frame,
+                        f"RUSH R: ({rush_right['cx']:.2f},{rush_right['cy']:.2f}) {rush_right['gesture']}",
+                        (10, 75),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.55,
+                        (255, 0, 255),
+                        2,
+                    )
+
                 cv2.imshow("GestureOS Agent", frame)
 
                 key = cv2.waitKey(1) & 0xFF
@@ -947,7 +1161,13 @@ def main():
                     locked = False
                     _kb_reset()
                     print("[KEY] mode=KEYBOARD (unlock)")
+                elif key in (ord('r'), ord('R')):
+                    mode = "RUSH"
+                    locked = False
+                    _kb_reset()
+                    print("[KEY] mode=RUSH (unlock)")
                 elif key in (ord('c'), ord('C')):
+                    # 현재 커서 손 위치를 중심으로 control box 재설정
                     cx, cy = _last_cursor_cxcy if _last_cursor_cxcy is not None else (0.5, 0.5)
                     minx = clamp01(cx - CONTROL_HALF_W)
                     maxx = clamp01(cx + CONTROL_HALF_W)
