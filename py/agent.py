@@ -344,6 +344,35 @@ def is_open_palm(lm):
     pinky = finger_extended(lm, 20, 18)
     return idx and mid and ring and pinky
 
+def is_knife_hand(lm):
+    """
+    손날(knife-hand) 매우 단순 판정:
+    - 네 손가락(검지~새끼) 펴짐
+    - 손가락 끝들이 서로 "가깝게" 모여 있음(벌어진 오픈팜 제외)
+    - 엄지는 비교적 접혀 있음(완전 오픈팜 제외)
+    튜닝 필요하면 임계값만 조절.
+    """
+    if lm is None:
+        return False
+
+    # 1) 기본적으로 4손가락은 펴져 있어야 함
+    if not is_open_palm(lm):
+        return False
+
+    # 2) 손가락 벌어짐 방지: 끝 점들이 너무 멀면 오픈팜으로 간주하고 제외
+    d1 = dist(lm[8],  lm[12])  # index tip - middle tip
+    d2 = dist(lm[12], lm[16])  # middle tip - ring tip
+    d3 = dist(lm[16], lm[20])  # ring tip - pinky tip
+    avg = (d1 + d2 + d3) / 3.0
+    if avg > 0.055:  # 0.045~0.070 사이에서 튜닝
+        return False
+
+    # 3) 엄지: 엄지 tip이 index MCP에서 너무 멀면(엄지 활짝) 제외
+    if dist(lm[4], lm[5]) > 0.095:  # 0.08~0.12 튜닝
+        return False
+
+    return True
+
 def is_pinch_index(lm):
     return dist(lm[4], lm[8]) < PINCH_THRESH_INDEX
 
@@ -364,11 +393,6 @@ def is_v_sign(lm):
 # (RUSH 추가) Rush용: 제스처 분류 + 화면 기준 좌/우 손 선택
 # ============================================================
 def classify_gesture(lm):
-    """
-    Rush/Status 전송용 제스처 문자열.
-    Rush3D에서는 gesture 자체를 안 써도 되지만(포인터 좌표가 핵심),
-    디버깅을 위해 leftGesture/rightGesture도 같이 전송할 수 있게 해둠.
-    """
     if lm is None:
         return "NONE"
     if is_fist(lm):
@@ -377,42 +401,148 @@ def classify_gesture(lm):
         return "PINCH_INDEX"
     if is_v_sign(lm):
         return "V_SIGN"
+    if is_knife_hand(lm):          # ✅ 추가 (OPEN_PALM보다 먼저)
+        return "KNIFE"
     if is_open_palm(lm):
         return "OPEN_PALM"
     return "OTHER"
+
+
+# ============================================================
+# (RUSH 안정화) left/right 스왑 방지용 상태 (※ 반드시 전역, 들여쓰기 X)
+# ============================================================
+_lr_state = {
+    "left": None,       # {"cx":..,"cy":..,"gesture":..}
+    "right": None,
+    "pending_swap": 0,  # 스왑 후보 프레임 카운트
+}
+
+# 스왑 방지 튜닝 파라미터
+LR_DEADBAND = 0.06          # 두 손이 너무 가까우면(중앙 지터) 스왑 금지
+LR_SWAP_FRAMES = 4          # 스왑 신호가 연속 이만큼 나오면 스왑 확정
+LR_ONEHAND_KEEP_SEC = 0.25  # 두 손->한 손 순간 전환 시 깜빡임 완화
+
+_last_lr_twohand_ts = 0.0
+
+def _pack_from_lm(lm):
+    cx, cy = palm_center(lm)
+    return {"cx": cx, "cy": cy, "gesture": classify_gesture(lm)}
+
+def _dist2(a, b):
+    if a is None or b is None:
+        return 1e9
+    dx = a["cx"] - b["cx"]
+    dy = a["cy"] - b["cy"]
+    return dx * dx + dy * dy
+
 
 def pick_lr_by_screen_x(hands_list):
     """
     hands_list: [(label, lm), ...]
       - lm: [(x,y), ...] normalized (0~1)
 
-    반환:
-      - left_pack, right_pack
-      - pack: {"cx": float, "cy": float, "gesture": str}
-
-    규칙:
-      - 손 2개면 cx(화면 x) 기준으로 작은 손이 left, 큰 손이 right
-      - 손 1개면 right만 채우고 left는 None (Rush3D에서 단일 입력 fallback 가능)
+    안정화 버전:
+      - 지터로 인한 left/right 스왑 방지
+      - 실제 교차가 명확할 때만 "몇 프레임 연속"으로 스왑 확정
     """
+    global _lr_state, _last_lr_twohand_ts
+
     if not hands_list:
+        _lr_state["left"] = None
+        _lr_state["right"] = None
+        _lr_state["pending_swap"] = 0
         return None, None
 
+    # pack 생성
     packs = []
     for label, lm in hands_list:
-        cx, cy = palm_center(lm)
-        packs.append({
-            "cx": cx,
-            "cy": cy,
-            "gesture": classify_gesture(lm),
-        })
+        if lm is None:
+            continue
+        packs.append(_pack_from_lm(lm))
 
+    if not packs:
+        return None, None
+
+    # -----------------------
+    # 1손만 잡히는 경우
+    # -----------------------
+    if len(packs) == 1:
+        p = packs[0]
+
+        # 직전까지 2손이었다면 짧게 "기존 left/right 유지" 쪽으로 붙이기
+        if now() - _last_lr_twohand_ts < LR_ONEHAND_KEEP_SEC:
+            dl = _dist2(p, _lr_state["left"])
+            dr = _dist2(p, _lr_state["right"])
+            if dl < dr:
+                _lr_state["left"] = p
+                return _lr_state["left"], _lr_state["right"]
+            else:
+                _lr_state["right"] = p
+                return _lr_state["left"], _lr_state["right"]
+
+        # 기본: 한 손이면 right만 채움
+        _lr_state["left"] = None
+        _lr_state["right"] = p
+        _lr_state["pending_swap"] = 0
+        return None, p
+
+    # -----------------------
+    # 2손 이상: 좌/우 끝 2개만 사용
+    # -----------------------
     packs.sort(key=lambda p: p["cx"])
+    left_now = packs[0]
+    right_now = packs[-1]
+    _last_lr_twohand_ts = now()
 
-    if len(packs) >= 2:
-        return packs[0], packs[-1]
+    # 처음이면 그대로 채택
+    if _lr_state["left"] is None and _lr_state["right"] is None:
+        _lr_state["left"] = left_now
+        _lr_state["right"] = right_now
+        _lr_state["pending_swap"] = 0
+        return _lr_state["left"], _lr_state["right"]
+
+    # -----------------------
+    # 중앙 지터 구간: 스왑 금지(확정 X), 가까운 쪽으로만 갱신
+    # -----------------------
+    if abs(right_now["cx"] - left_now["cx"]) < LR_DEADBAND:
+        cost_keep = _dist2(left_now, _lr_state["left"]) + _dist2(right_now, _lr_state["right"])
+        cost_swap = _dist2(left_now, _lr_state["right"]) + _dist2(right_now, _lr_state["left"])
+
+        if cost_swap < cost_keep:
+            _lr_state["left"] = right_now
+            _lr_state["right"] = left_now
+        else:
+            _lr_state["left"] = left_now
+            _lr_state["right"] = right_now
+
+        _lr_state["pending_swap"] = 0
+        return _lr_state["left"], _lr_state["right"]
+
+    # -----------------------
+    # 지터 구간이 아니면: keep vs swap 비용 비교
+    # -----------------------
+    cost_keep = _dist2(left_now, _lr_state["left"]) + _dist2(right_now, _lr_state["right"])
+    cost_swap = _dist2(left_now, _lr_state["right"]) + _dist2(right_now, _lr_state["left"])
+
+    want_swap = cost_swap + 1e-9 < cost_keep
+
+    if want_swap:
+        _lr_state["pending_swap"] += 1
+
+        # 연속 swap 신호가 들어오면 그때만 확정
+        if _lr_state["pending_swap"] >= LR_SWAP_FRAMES:
+            _lr_state["left"] = right_now
+            _lr_state["right"] = left_now
+            _lr_state["pending_swap"] = 0
+        else:
+            # 확정 전: 기존 유지(튐 방지)
+            pass
     else:
-        return None, packs[0]
+        _lr_state["pending_swap"] = 0
+        _lr_state["left"] = left_now
+        _lr_state["right"] = right_now
 
+    return _lr_state["left"], _lr_state["right"]
 
 # ============================================================
 # LOCK handler (mouse only)

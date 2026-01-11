@@ -2,7 +2,7 @@ import axios from "axios";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const POLL_MS = 500;
-const MODE_OPTIONS = ["MOUSE", "KEYBOARD", "PRESENTATION", "DRAW", "DEFAULT"];
+const MODE_OPTIONS = ["MOUSE", "KEYBOARD", "PRESENTATION", "DRAW", "RUSH", "DEFAULT"];
 
 const api = axios.create({
   baseURL: "/api",

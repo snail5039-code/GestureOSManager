@@ -1,11 +1,17 @@
 // Rush3DPage.jsx
 // -----------------------------------------------------------------------------
-// 변경 핵심
-// 1) "차트 배열(hitTime...)"에 의존하지 않고, BPM/offset 기반 "비트 스폰"으로 노트 생성
-//    - songTime으로 "다음 박(또는 8분박)"이 spawnTime에 도달했는지 계산해서 스폰
-// 2) 곡마다 offsetSec(첫 박 시작 시간)를 맞추면 노트가 "비트에 딱 맞게" 나온다.
-// 3) 히트 성공(PERFECT/GOOD) 시 slice SFX 재생(WebAudio, 저지연)
-// 4) UI에 offset 조절 슬라이더 + "지금 시점을 첫 박으로" 버튼 제공
+// 손 모션 "뚝뚝 끊김" 개선 포함 전체 코드
+//
+// 핵심 개선(부드러움 + 렉 제거)
+// 0) (중요) status 폴링을 setInterval이 아니라 "요청 완료 후 다음 호출" 방식으로 변경
+//    - 네트워크/GC/메인스레드 상황에서 interval 누적/겹침으로 생기는 튐 감소
+// 1) status에 __ts(샘플 도착 시간) 붙여서, Scene에서는 "새 샘플일 때만" target(tx,ty)/속도(vx,vy) 갱신
+//    - 샘플이 10~30Hz여도 60fps 렌더에서 안정적으로 보간 가능
+// 2) tracking grace(예: 120ms): tracking이 순간 끊겨도 커서가 바로 꺼지지 않게 해서 깜빡임 감소
+// 3) One Euro Filter(가벼운 저지터 필터)로 샘플 지터 감소 + 빠른 움직임은 잘 따라가게
+// 4) (기존 유지) 매 프레임 new Vector3/Quaternion/Matrix 생성 제거 (ref 재사용)
+//
+// NOTE: /sfx/slice.wav 파일이 public 폴더에 있어야 함 (예: public/sfx/slice.wav)
 // -----------------------------------------------------------------------------
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -129,11 +135,17 @@ function readTwoHandsFromStatus(status) {
     status?.handRight?.tracking ??
     null;
 
-  const sx = status.pointerX ?? status.cursorX ?? status.x ?? status?.pointer?.x ?? null;
-  const sy = status.pointerY ?? status.cursorY ?? status.y ?? status?.pointer?.y ?? null;
+  const sx =
+    status.pointerX ?? status.cursorX ?? status.x ?? status?.pointer?.x ?? null;
+  const sy =
+    status.pointerY ?? status.cursorY ?? status.y ?? status?.pointer?.y ?? null;
 
   const sTracking =
-    status.isTracking ?? status.tracking ?? status.handTracking ?? status.handPresent ?? null;
+    status.isTracking ??
+    status.tracking ??
+    status.handTracking ??
+    status.handPresent ??
+    null;
 
   const hasLeft = lx != null && ly != null;
   const hasRight = rx != null && ry != null;
@@ -143,46 +155,99 @@ function readTwoHandsFromStatus(status) {
 
   const norm = (n) => clamp(Number(n), 0, 1);
 
+  const lg =
+    status.leftGesture ??
+    status.leftHandGesture ??
+    status?.left?.gesture ??
+    status?.handLeft?.gesture ??
+    null;
+
+  const rg =
+    status.rightGesture ??
+    status.rightHandGesture ??
+    status?.right?.gesture ??
+    status?.handRight?.gesture ??
+    null;
+
   const left = hasLeft
-    ? { nx: norm(lx), ny: norm(ly), tracking: (lTracking == null ? true : !!lTracking) && enabled }
+    ? {
+      nx: norm(lx),
+      ny: norm(ly),
+      tracking: (lTracking == null ? true : !!lTracking) && enabled,
+      gesture: lg ?? "NONE", // ✅ 추가
+    }
     : null;
 
   const right = hasRight
-    ? { nx: norm(rx), ny: norm(ry), tracking: (rTracking == null ? true : !!rTracking) && enabled }
+    ? {
+      nx: norm(rx),
+      ny: norm(ry),
+      tracking: (rTracking == null ? true : !!rTracking) && enabled,
+      gesture: rg ?? "NONE", // ✅ 추가
+    }
     : null;
 
   const single = hasSingle
-    ? { nx: norm(sx), ny: norm(sy), tracking: (sTracking == null ? true : !!sTracking) && enabled }
+    ? {
+      nx: norm(sx),
+      ny: norm(sy),
+      tracking: (sTracking == null ? true : !!sTracking) && enabled,
+    }
     : null;
 
   return { left, right, single };
 }
 
 /* =============================================================================
-   NDC → 트랙 로컬 z평면 교차
+   NDC → 트랙 로컬 z평면 교차 (할당 최소화 버전)
 ============================================================================= */
 
-function ndcToTrackLocalOnZPlane({ ndcX, ndcY, camera, trackObj, raycaster, localZPlane, outLocal }) {
+function ndcToTrackLocalOnZPlane_NoAlloc({
+  ndcX,
+  ndcY,
+  camera,
+  trackObj,
+  raycaster,
+  invWorldRef,
+  normalMatRef,
+  originLRef,
+  dirLRef,
+  localZPlane,
+  outLocal,
+}) {
   if (!trackObj) return false;
 
   raycaster.setFromCamera({ x: ndcX, y: ndcY }, camera);
 
-  const inv = new THREE.Matrix4().copy(trackObj.matrixWorld).invert();
+  invWorldRef.copy(trackObj.matrixWorld).invert();
 
-  const originL = raycaster.ray.origin.clone().applyMatrix4(inv);
+  originLRef.copy(raycaster.ray.origin).applyMatrix4(invWorldRef);
 
-  const dirW = raycaster.ray.direction.clone();
-  const nmat = new THREE.Matrix3().getNormalMatrix(inv);
-  const dirL = dirW.applyMatrix3(nmat).normalize();
+  normalMatRef.getNormalMatrix(invWorldRef);
+  dirLRef.copy(raycaster.ray.direction).applyMatrix3(normalMatRef).normalize();
 
-  const dz = dirL.z;
+  const dz = dirLRef.z;
   if (Math.abs(dz) < 1e-6) return false;
 
-  const t = (localZPlane - originL.z) / dz;
+  const t = (localZPlane - originLRef.z) / dz;
   if (t <= 0) return false;
 
-  outLocal.copy(originL).addScaledVector(dirL, t);
+  outLocal.copy(originLRef).addScaledVector(dirLRef, t);
   return true;
+}
+
+/* =============================================================================
+   One Euro Filter (저지터 + 빠른 움직임 추종)
+   - 샘플(폴링) 갱신 시점에만 적용 (프레임마다 돌리면 의미/비용 증가)
+============================================================================= */
+
+function alphaFromCutoff(cutoff, dtSec) {
+  const tau = 1 / (2 * Math.PI * cutoff);
+  return 1 / (1 + tau / Math.max(dtSec, 1e-4));
+}
+
+function lowpass(prev, next, a) {
+  return a * next + (1 - a) * prev;
 }
 
 /* =============================================================================
@@ -193,18 +258,12 @@ function RushScene({
   statusRef,
   onHUD,
   onJudge,
-
-  // 오디오 시간 ref(부모에서 raf로 계속 갱신)
   songTimeRef,
-
-  // 비트 파라미터
   bpm = 120,
-  beatOffsetSec = 0.65, // "첫 박"이 시작되는 시간(초) - 곡마다 튜닝
-  seed = 1,             // 패턴 결정용
+  beatOffsetSec = 0.65,
+  seed = 1,
   playing = false,
   resetNonce = 0,
-
-  // 히트 SFX 콜백
   onSliceSfx,
 }) {
   const { camera, pointer } = useThree();
@@ -224,7 +283,6 @@ function RushScene({
   const NOTE_SPEED = 13.0;
   const PASS_Z = HIT_Z + 10;
 
-  // 노트가 SPAWN_Z -> HIT_Z 도착까지 걸리는 시간
   const TRAVEL_TIME = (HIT_Z - SPAWN_Z) / NOTE_SPEED;
 
   // -----------------------------
@@ -233,7 +291,6 @@ function RushScene({
   const HIT_Z_WINDOW = 1.6;
   const SLASH_SPEED = 2.2;
 
-  // 허공 칼질 필터
   const ATTEMPT_X_TOL = 1.25;
   const ATTEMPT_Y_PAD = 0.35;
   const ATTEMPT_Z_WIN = 2.2;
@@ -250,30 +307,94 @@ function RushScene({
   // -----------------------------
   const trackRef = useRef(null);
   const raycasterRef = useRef(new THREE.Raycaster());
-  const tmpLocal = useRef(new THREE.Vector3());
+
+  // 할당 줄이기용 재사용 오브젝트들
   const tmpMat = useRef(new THREE.Matrix4());
+  const tmpQuat = useRef(new THREE.Quaternion());
+  const tmpPos = useRef(new THREE.Vector3());
+  const tmpScale = useRef(new THREE.Vector3());
+
+  const invWorld = useRef(new THREE.Matrix4());
+  const normalMat = useRef(new THREE.Matrix3());
+  const originL = useRef(new THREE.Vector3());
+  const dirL = useRef(new THREE.Vector3());
+  const hitLocal = useRef(new THREE.Vector3());
 
   const tmpAxisX = useRef(new THREE.Vector3(1, 0, 0));
   const tmpAxisY = useRef(new THREE.Vector3(0, 1, 0));
 
   // ✅ 비트 스폰 인덱스(0.5박 단위 = 8분박)
   const nextStepIdx = useRef(0);
-
-  // 곡 시간이 뒤로 점프하면(리셋/스크럽) 보정용
   const lastSongTime = useRef(0);
-
-  // 레인 패턴(너무 단조롭지 않게)
   const lastLaneRef = useRef(0);
 
+  // ✅ 새 status 샘플 감지용
+  const lastStatusTs = useRef(0);
+  const lastSingleLaneRef = useRef(1); // 한 손만 잡힐 때 마지막으로 사용한 레인(0=왼,1=오른)
+
   // -----------------------------
-  // 커서
+  // 커서(예측용 속도 포함)
   // -----------------------------
-  const cursorL = useRef({ x: 0, y: 1.2, tx: 0, ty: 1.2, tracking: false });
-  const cursorR = useRef({ x: 0, y: 1.2, tx: 0, ty: 1.2, tracking: false });
+  const cursorL = useRef({
+    x: 0,
+    y: 1.2,
+    tx: 0,
+    ty: 1.2,
+    tracking: false,
+
+    // vx/vy: "로컬 단위 / ms" (predMs와 곱해서 예측)
+    vx: 0,
+    vy: 0,
+
+    // 속도 추정용 마지막 샘플
+    _lastT: null,
+    _lastTx: 0,
+    _lastTy: 0,
+
+    // tracking grace용
+    _lastTrackMs: 0,
+
+    // One Euro filter state (샘플 기반)
+    _euroInited: false,
+    _euroLastT: 0,
+    _euroLastX: 0,
+    _euroLastY: 0,
+    _euroX: 0,
+    _euroY: 0,
+    _euroDx: 0,
+    _euroDy: 0,
+  });
+
+  const cursorR = useRef({
+    x: 0,
+    y: 1.2,
+    tx: 0,
+    ty: 1.2,
+    tracking: false,
+
+    vx: 0,
+    vy: 0,
+
+    _lastT: null,
+    _lastTx: 0,
+    _lastTy: 0,
+
+    _lastTrackMs: 0,
+
+    _euroInited: false,
+    _euroLastT: 0,
+    _euroLastX: 0,
+    _euroLastY: 0,
+    _euroX: 0,
+    _euroY: 0,
+    _euroDx: 0,
+    _euroDy: 0,
+  });
 
   const cursorMeshL = useRef(null);
   const cursorMeshR = useRef(null);
 
+  // 슬래시 판정용 이전 좌표(할당 방지: 객체 재사용)
   const prevL = useRef({ x: 0, y: 0, has: false });
   const prevR = useRef({ x: 0, y: 0, has: false });
 
@@ -283,6 +404,16 @@ function RushScene({
   const comboRef = useRef(0);
   const maxComboRef = useRef(0);
   const scoreRef = useRef(0);
+
+  // -----------------------------
+  // 판정 통계(결과창)
+  // -----------------------------
+  const statRef = useRef({
+    perfect: 0,
+    good: 0,
+    miss: 0,       // 노트가 지나간 MISS(자동)
+    swingMiss: 0,  // 헛스윙 MISS(선택)
+  });
 
   // -----------------------------
   // 노트/파편/스파크 풀
@@ -392,18 +523,6 @@ function RushScene({
     []
   );
 
-  const sparkMaterial = useMemo(
-    () =>
-      new THREE.PointsMaterial({
-        size: 0.08,
-        color: new THREE.Color("#ffffff"),
-        transparent: true,
-        opacity: 0.9,
-        depthWrite: false,
-      }),
-    []
-  );
-
   const matHitCore = useMemo(
     () =>
       new THREE.MeshBasicMaterial({
@@ -456,16 +575,53 @@ function RushScene({
     prevL.current.has = false;
     prevR.current.has = false;
 
-    // ✅ 비트 스폰 인덱스 리셋
     nextStepIdx.current = 0;
     lastSongTime.current = 0;
     lastLaneRef.current = 0;
 
-    // 인스턴스 숨김
+    lastStatusTs.current = 0;
+
+    statRef.current.perfect = 0;
+    statRef.current.good = 0;
+    statRef.current.miss = 0;
+    statRef.current.swingMiss = 0;
+
+    // 커서 상태 초기화(필터/속도 포함)
+    const resetCursor = (c) => {
+      c.current.x = 0;
+      c.current.y = 1.2;
+      c.current.tx = 0;
+      c.current.ty = 1.2;
+      c.current.tracking = false;
+
+      c.current.vx = 0;
+      c.current.vy = 0;
+      c.current._lastT = null;
+      c.current._lastTx = 0;
+      c.current._lastTy = 0;
+
+      c.current._lastTrackMs = 0;
+
+      c.current._euroInited = false;
+      c.current._euroLastT = 0;
+      c.current._euroLastX = 0;
+      c.current._euroLastY = 0;
+      c.current._euroX = 0;
+      c.current._euroY = 0;
+      c.current._euroDx = 0;
+      c.current._euroDy = 0;
+    };
+    resetCursor(cursorL);
+    resetCursor(cursorR);
+
+    // 인스턴스 숨김(할당 없이)
     if (notesMesh.current && glowMesh.current) {
       for (let i = 0; i < NOTE_COUNT; i++) {
         tmpMat.current.identity();
-        tmpMat.current.makeScale(0.0001, 0.0001, 0.0001);
+        tmpScale.current.set(0.0001, 0.0001, 0.0001);
+        tmpQuat.current.identity();
+        tmpPos.current.set(0, 0, 0);
+        tmpMat.current.compose(tmpPos.current, tmpQuat.current, tmpScale.current);
         notesMesh.current.setMatrixAt(i, tmpMat.current);
         glowMesh.current.setMatrixAt(i, tmpMat.current);
       }
@@ -476,31 +632,36 @@ function RushScene({
     if (shardMesh.current) {
       for (let i = 0; i < SHARD_COUNT; i++) {
         tmpMat.current.identity();
-        tmpMat.current.makeScale(0.0001, 0.0001, 0.0001);
+        tmpScale.current.set(0.0001, 0.0001, 0.0001);
+        tmpQuat.current.identity();
+        tmpPos.current.set(0, 0, 0);
+        tmpMat.current.compose(tmpPos.current, tmpQuat.current, tmpScale.current);
         shardMesh.current.setMatrixAt(i, tmpMat.current);
       }
       shardMesh.current.instanceMatrix.needsUpdate = true;
     }
 
-    if (sparksGeomRef.current) sparksGeomRef.current.attributes.position.needsUpdate = true;
+    if (sparksGeomRef.current) {
+      sparksGeomRef.current.attributes.position.needsUpdate = true;
+    }
   }, [resetNonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* =========================
      노트 스폰
-     - lateSec: 스폰 늦었으면 z를 앞으로 당겨 싱크 보정
   ========================= */
   const spawnNote = (lane, lateSec = 0) => {
     const arr = notes.current;
     const idx = noteWriteIdx.current;
     noteWriteIdx.current = (idx + 1) % arr.length;
 
-    arr[idx].alive = true;
-    arr[idx].judged = false;
-    arr[idx].lane = lane;
+    const n = arr[idx];
+    n.alive = true;
+    n.judged = false;
+    n.lane = lane;
 
     const late = clamp(lateSec, 0, TRAVEL_TIME);
-    arr[idx].z = SPAWN_Z + NOTE_SPEED * late;
-    arr[idx].baseSize = 0.78;
+    n.z = SPAWN_Z + NOTE_SPEED * late;
+    n.baseSize = 0.78;
   };
 
   const notePose = (n) => {
@@ -511,18 +672,24 @@ function RushScene({
     return { x, y, s, z: n.z };
   };
 
-  const applyJudge = (text, lane) => {
+  const applyJudge = (text, lane, kind = "HIT") => {
     if (text === "PERFECT") {
       comboRef.current += 1;
       scoreRef.current += 300;
+      statRef.current.perfect += 1;
     } else if (text === "GOOD") {
       comboRef.current += 1;
       scoreRef.current += 100;
+      statRef.current.good += 1;
     } else if (text === "MISS") {
       comboRef.current = 0;
+      if (kind === "AUTO") statRef.current.miss += 1;
+      else statRef.current.swingMiss += 1;
     }
 
-    if (comboRef.current > maxComboRef.current) maxComboRef.current = comboRef.current;
+    if (comboRef.current > maxComboRef.current) {
+      maxComboRef.current = comboRef.current;
+    }
     onJudge?.(text, lane);
   };
 
@@ -532,8 +699,12 @@ function RushScene({
     const minY = Math.min(a.y, b.y);
     const maxY = Math.max(a.y, b.y);
 
-    const okX = minX <= LANE_X[lane] + ATTEMPT_X_TOL && maxX >= LANE_X[lane] - ATTEMPT_X_TOL;
-    const okY = maxY >= HIT_BOT_Y - ATTEMPT_Y_PAD && minY <= HIT_TOP_Y + ATTEMPT_Y_PAD;
+    const okX =
+      minX <= LANE_X[lane] + ATTEMPT_X_TOL &&
+      maxX >= LANE_X[lane] - ATTEMPT_X_TOL;
+    const okY =
+      maxY >= HIT_BOT_Y - ATTEMPT_Y_PAD &&
+      minY <= HIT_TOP_Y + ATTEMPT_Y_PAD;
     return okX && okY;
   };
 
@@ -546,7 +717,8 @@ function RushScene({
       if (dz > ATTEMPT_Z_WIN) continue;
 
       const { y } = notePose(n);
-      const inY = y >= HIT_BOT_Y - ATTEMPT_Y_PAD && y <= HIT_TOP_Y + ATTEMPT_Y_PAD;
+      const inY =
+        y >= HIT_BOT_Y - ATTEMPT_Y_PAD && y <= HIT_TOP_Y + ATTEMPT_Y_PAD;
       if (!inY) continue;
 
       return true;
@@ -570,15 +742,22 @@ function RushScene({
     const bCenterOffset = +(0.5 - bFrac / 2) * sizeS;
 
     const spawnShardPiece = (dir, frac, centerOffset) => {
-      let pick = shards.current.find((s) => !s.alive);
-      if (!pick) pick = shards.current[(Math.random() * shards.current.length) | 0];
+      let pick = null;
+      for (let i = 0; i < SHARD_COUNT; i++) {
+        if (!shards.current[i].alive) {
+          pick = shards.current[i];
+          break;
+        }
+      }
+      if (!pick) pick = shards.current[(Math.random() * SHARD_COUNT) | 0];
 
       pick.alive = true;
       pick.life = 0.55 + Math.random() * 0.25;
 
       pick.pos.copy(hitPos).addScaledVector(sepAxis, centerOffset);
 
-      const kick = (6.0 + Math.random() * 3.2) * (1.0 + (0.35 - frac) * 0.6);
+      const kick =
+        (6.0 + Math.random() * 3.2) * (1.0 + (0.35 - frac) * 0.6);
       pick.vel.copy(sepAxis).multiplyScalar(dir * kick);
 
       if (splitAxis === "Y") {
@@ -597,9 +776,9 @@ function RushScene({
       );
 
       if (splitAxis === "Y") {
-        pick.scale.set(sizeS * 1.0, sizeS * frac, sizeS * 0.35); // 위/아래 분리
+        pick.scale.set(sizeS * 1.0, sizeS * frac, sizeS * 0.35);
       } else {
-        pick.scale.set(sizeS * frac, sizeS * 1.0, sizeS * 0.35); // 좌/우 분리
+        pick.scale.set(sizeS * frac, sizeS * 1.0, sizeS * 0.35);
       }
 
       pick.color.copy(laneColor);
@@ -609,8 +788,14 @@ function RushScene({
     spawnShardPiece(+1, bFrac, bCenterOffset);
 
     for (let i = 0; i < 18; i++) {
-      let sp = sparks.current.find((s) => !s.alive);
-      if (!sp) sp = sparks.current[(Math.random() * sparks.current.length) | 0];
+      let sp = null;
+      for (let k = 0; k < SPARK_COUNT; k++) {
+        if (!sparks.current[k].alive) {
+          sp = sparks.current[k];
+          break;
+        }
+      }
+      if (!sp) sp = sparks.current[(Math.random() * SPARK_COUNT) | 0];
 
       const ang = Math.random() * Math.PI * 2;
       const spd = 6 + Math.random() * 11;
@@ -618,14 +803,16 @@ function RushScene({
       sp.alive = true;
       sp.life = 0.45 + Math.random() * 0.35;
       sp.pos.copy(hitPos);
-      sp.vel.set(Math.cos(ang) * spd, 3 + Math.random() * 6, -2 - Math.random() * 4);
+      sp.vel.set(
+        Math.cos(ang) * spd,
+        3 + Math.random() * 6,
+        -2 - Math.random() * 4
+      );
     }
   };
 
   /* =========================
      히트 판정
-     - 가로로 휘두르면 splitAxis="Y" => 위/아래로 갈라짐
-     - 세로로 휘두르면 splitAxis="X" => 좌/우로 갈라짐
   ========================= */
   const tryHitLane = (lane, segA, segB) => {
     let best = null;
@@ -658,8 +845,6 @@ function RushScene({
       const slashDx = segB.x - segA.x;
       const slashDy = segB.y - segA.y;
 
-      // 가로 휘두름 => 위/아래 분리(Y)
-      // 세로 휘두름 => 좌/우 분리(X)
       const splitAxis = Math.abs(slashDx) >= Math.abs(slashDy) ? "Y" : "X";
 
       const rawRatio =
@@ -681,66 +866,129 @@ function RushScene({
 
     const PERFECT = 0.7;
     const GOOD = 1.6;
-    const text = bestDist <= PERFECT ? "PERFECT" : bestDist <= GOOD ? "GOOD" : "MISS";
+    const text =
+      bestDist <= PERFECT ? "PERFECT" : bestDist <= GOOD ? "GOOD" : "MISS";
 
     if (text !== "MISS") {
       const { x, y, s, z } = notePose(best);
-      const hitLocal = new THREE.Vector3(x, y, z);
+      hitLocal.current.set(x, y, z);
 
-      spawnSplitFX(lane, hitLocal, s, bestSplitAxis, bestCutRatio);
+      spawnSplitFX(lane, hitLocal.current, s, bestSplitAxis, bestCutRatio);
 
-      // ✅ 히트 성공 시 슬라이스 소리
+      // ✅ 히트 성공 SFX
       onSliceSfx?.();
 
       best.judged = true;
       best.alive = false;
     }
 
-    applyJudge(text, lane);
+    applyJudge(text, lane, text === "MISS" ? "SWING" : "HIT");
   };
 
+  // 슬래시 속도 판정(할당 줄이기)
   const stepSlash = (curRef, prevRef, lane, dt) => {
-    const now = { x: curRef.current.x, y: curRef.current.y };
+    // tracking이 꺼져 있으면 이전 점 버려서 "재등장시 갑툭튀 슬래시" 방지
+    if (!curRef.current.tracking) {
+      prevRef.current.has = false;
+      return false;
+    }
+
+    const cx = curRef.current.x;
+    const cy = curRef.current.y;
 
     if (!prevRef.current.has) {
-      prevRef.current.x = now.x;
-      prevRef.current.y = now.y;
+      prevRef.current.x = cx;
+      prevRef.current.y = cy;
       prevRef.current.has = true;
       return false;
     }
 
-    const a = { x: prevRef.current.x, y: prevRef.current.y };
-    const b = { x: now.x, y: now.y };
+    const ax = prevRef.current.x;
+    const ay = prevRef.current.y;
 
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
+    const dx = cx - ax;
+    const dy = cy - ay;
     const speed = Math.sqrt(dx * dx + dy * dy) / Math.max(dt, 1e-4);
 
     let didSlash = false;
 
-    if (curRef.current.tracking && speed >= SLASH_SPEED) {
-      const attempt = hasCuttableNoteNearHit(lane) && isSlashInLaneBand(lane, a, b);
+    if (speed >= SLASH_SPEED) {
+      const segA = { x: ax, y: ay };
+      const segB = { x: cx, y: cy };
+      const attempt =
+        hasCuttableNoteNearHit(lane) && isSlashInLaneBand(lane, segA, segB);
       if (attempt) {
         didSlash = true;
-        tryHitLane(lane, a, b);
+        tryHitLane(lane, segA, segB);
       }
     }
 
-    prevRef.current.x = now.x;
-    prevRef.current.y = now.y;
+    prevRef.current.x = cx;
+    prevRef.current.y = cy;
     return didSlash;
   };
 
+  // ✅ One Euro filter 적용 (샘플 기반)
+  const applyOneEuro = (curRef, tNowMs, rawX, rawY) => {
+    // 파라미터(필요하면 여기만 조정)
+    // - minCutoff: 기본 부드러움(낮을수록 더 부드럽지만 느려짐)
+    // - beta: 속도에 따른 cutoff 증가(클수록 빠르게 움직일 때 더 잘 따라감)
+    // - dCutoff: 미분 필터 컷오프
+    const minCutoff = 1.15;
+    const beta = 0.03;
+    const dCutoff = 1.0;
+
+    if (!curRef.current._euroInited) {
+      curRef.current._euroInited = true;
+      curRef.current._euroLastT = tNowMs;
+      curRef.current._euroLastX = rawX;
+      curRef.current._euroLastY = rawY;
+      curRef.current._euroX = rawX;
+      curRef.current._euroY = rawY;
+      curRef.current._euroDx = 0;
+      curRef.current._euroDy = 0;
+      return { fx: rawX, fy: rawY };
+    }
+
+    const dtSec = clamp((tNowMs - curRef.current._euroLastT) / 1000, 0.001, 0.2);
+
+    // 미분(속도) 추정
+    const dx = (rawX - curRef.current._euroLastX) / dtSec;
+    const dy = (rawY - curRef.current._euroLastY) / dtSec;
+
+    // dx/dy low-pass
+    const aD = alphaFromCutoff(dCutoff, dtSec);
+    curRef.current._euroDx = lowpass(curRef.current._euroDx, dx, aD);
+    curRef.current._euroDy = lowpass(curRef.current._euroDy, dy, aD);
+
+    // 속도 기반 cutoff
+    const cutoffX = minCutoff + beta * Math.abs(curRef.current._euroDx);
+    const cutoffY = minCutoff + beta * Math.abs(curRef.current._euroDy);
+
+    const aX = alphaFromCutoff(cutoffX, dtSec);
+    const aY = alphaFromCutoff(cutoffY, dtSec);
+
+    curRef.current._euroX = lowpass(curRef.current._euroX, rawX, aX);
+    curRef.current._euroY = lowpass(curRef.current._euroY, rawY, aY);
+
+    curRef.current._euroLastT = tNowMs;
+    curRef.current._euroLastX = rawX;
+    curRef.current._euroLastY = rawY;
+
+    return { fx: curRef.current._euroX, fy: curRef.current._euroY };
+  };
+
   /* =============================================================================
-     useFrame: 비트 기반 스폰 핵심
-     - stepSec = (60/bpm) * 0.5  (8분박 단위)
-     - stepTime = beatOffsetSec + stepIdx * stepSec  (해당 스텝이 울리는 시간)
-     - spawnTime = stepTime - TRAVEL_TIME
-     - songTime >= spawnTime 이면 스폰
-  ============================================================================= */
+     useFrame
+============================================================================= */
   useFrame((state, dt) => {
     const st = statusRef.current;
     const hand = readTwoHandsFromStatus(st);
+
+    // status 샘플 타임스탬프(폴링에서 주입)
+    const stTs = st?.__ts ?? 0;
+    const isNewSample = stTs && stTs !== lastStatusTs.current;
+    if (isNewSample) lastStatusTs.current = stTs;
 
     const mouseNdcX = pointer.x;
     const mouseNdcY = pointer.y;
@@ -748,61 +996,170 @@ function RushScene({
     let leftNdc = null;
     let rightNdc = null;
 
+    // NDC 변환 헬퍼(가독성용)
+    const toNdc = (h) => ({
+      x: h.nx * 2 - 1,
+      y: (1 - h.ny) * 2 - 1,
+      tracking: h.tracking,
+    });
+
     if (hand) {
-      if (hand.left) {
-        leftNdc = { x: hand.left.nx * 2 - 1, y: (1 - hand.left.ny) * 2 - 1, tracking: hand.left.tracking };
+      // 1) 가능한 손 후보 수집(라벨은 참고만 하고, 실제 배치는 x로 결정)
+      const cands = [];
+      if (hand.left) cands.push(toNdc(hand.left));
+      if (hand.right) cands.push(toNdc(hand.right));
+
+      // 2) 두 손이 잡히면: "더 왼쪽(x가 작은)" 것을 왼쪽 레인, 나머지를 오른쪽 레인
+      if (cands.length >= 2) {
+        // x 기준 정렬
+        cands.sort((a, b) => a.x - b.x);
+
+        leftNdc = cands[0];
+        rightNdc = cands[1];
+
+        // 두 손이 있을 때는 single 레인 기록도 갱신(가운데 기준)
+        lastSingleLaneRef.current = 1; // 기본값 오른쪽(원하면 0으로 바꿔도 됨)
       }
-      if (hand.right) {
-        rightNdc = { x: hand.right.nx * 2 - 1, y: (1 - hand.right.ny) * 2 - 1, tracking: hand.right.tracking };
+      // 3) 한 손만 잡히면: 가운데에서 튀지 않게 히스테리시스 적용해서 레인 유지
+      else if (cands.length === 1) {
+        const s = cands[0];
+
+        // 히스테리시스(중앙 부근에서는 기존 레인 유지)
+        const HYS = 0.18; // 0.12~0.28 사이에서 취향 조절
+        if (s.x < -HYS) lastSingleLaneRef.current = 0;
+        else if (s.x > HYS) lastSingleLaneRef.current = 1;
+
+        if (lastSingleLaneRef.current === 0) leftNdc = s;
+        else rightNdc = s;
       }
-      if (!leftNdc && !rightNdc && hand.single) {
-        rightNdc = { x: hand.single.nx * 2 - 1, y: (1 - hand.single.ny) * 2 - 1, tracking: hand.single.tracking };
+      // 4) left/right가 둘 다 없고 single만 있으면: single로 동일 처리
+      else if (hand.single) {
+        const s = toNdc(hand.single);
+
+        const HYS = 0.18;
+        if (s.x < -HYS) lastSingleLaneRef.current = 0;
+        else if (s.x > HYS) lastSingleLaneRef.current = 1;
+
+        if (lastSingleLaneRef.current === 0) leftNdc = s;
+        else rightNdc = s;
       }
     }
 
-    if (!leftNdc && !rightNdc) {
+    // fallback: 손 데이터가 아예 없을 때는 마우스를 매 프레임 샘플처럼 취급
+    const usingMouseFallback = !leftNdc && !rightNdc;
+    if (usingMouseFallback) {
       leftNdc = { x: mouseNdcX, y: mouseNdcY, tracking: true };
       rightNdc = { x: mouseNdcX, y: mouseNdcY, tracking: true };
     }
 
-    // 레이캐스트 -> 커서 타겟
     const trackObj = trackRef.current;
     const raycaster = raycasterRef.current;
-    const hit = tmpLocal.current;
 
-    const updateCursorFromNdc = (ndc, curRef) => {
+    // 커서 타겟 업데이트 + 속도 추정
+    // - "새 샘플일 때만" tx/ty 갱신 (mouse fallback은 매 프레임 갱신)
+    const updateCursorFromNdc = (ndc, curRef, shouldUpdateTarget, tNowMs) => {
       if (!ndc) {
         curRef.current.tracking = false;
         return;
       }
-      curRef.current.tracking = !!ndc.tracking;
+
+      // tracking grace(잠깐 끊겨도 깜빡임 덜함)
+      const nowMs = performance.now();
+      if (ndc.tracking) curRef.current._lastTrackMs = nowMs;
+      const grace = 120; // ms (필요하면 80~180 사이 조정)
+      const tracking =
+        !!ndc.tracking ||
+        (curRef.current._lastTrackMs && nowMs - curRef.current._lastTrackMs < grace);
+
+      curRef.current.tracking = tracking;
+
       if (!trackObj) return;
 
-      const ok = ndcToTrackLocalOnZPlane({
+      // 새 타겟 갱신이 아닌 프레임이면 여기서 종료(아래 스무딩은 계속)
+      if (!shouldUpdateTarget) return;
+
+      const ok = ndcToTrackLocalOnZPlane_NoAlloc({
         ndcX: ndc.x,
         ndcY: ndc.y,
         camera,
         trackObj,
         raycaster,
+        invWorldRef: invWorld.current,
+        normalMatRef: normalMat.current,
+        originLRef: originL.current,
+        dirLRef: dirL.current,
         localZPlane: CURSOR_Z,
-        outLocal: hit,
+        outLocal: hitLocal.current,
       });
       if (!ok) return;
 
-      curRef.current.tx = hit.x;
-      curRef.current.ty = hit.y;
+      const rawX = hitLocal.current.x;
+      const rawY = hitLocal.current.y;
+
+      // ✅ 샘플 지터 제거(One Euro) → 필터된 좌표를 target로 사용
+      const { fx, fy } = applyOneEuro(curRef, tNowMs, rawX, rawY);
+
+      // 속도 추정(샘플 기반)
+      if (curRef.current._lastT != null) {
+        const dms = Math.max(1, tNowMs - curRef.current._lastT);
+        const ivx = (fx - curRef.current._lastTx) / dms;
+        const ivy = (fy - curRef.current._lastTy) / dms;
+        curRef.current.vx = curRef.current.vx * 0.75 + ivx * 0.25;
+        curRef.current.vy = curRef.current.vy * 0.75 + ivy * 0.25;
+      }
+      curRef.current._lastT = tNowMs;
+      curRef.current._lastTx = fx;
+      curRef.current._lastTy = fy;
+
+      curRef.current.tx = fx;
+      curRef.current.ty = fy;
     };
 
-    updateCursorFromNdc(leftNdc, cursorL);
-    updateCursorFromNdc(rightNdc, cursorR);
+    // tNow: 손 샘플은 stTs, 마우스는 performance.now()
+    const tNowHands = stTs || performance.now();
+    const tNowMouse = performance.now();
 
-    // 커서 스무딩
+    updateCursorFromNdc(leftNdc, cursorL, usingMouseFallback ? true : isNewSample, usingMouseFallback ? tNowMouse : tNowHands);
+    updateCursorFromNdc(rightNdc, cursorR, usingMouseFallback ? true : isNewSample, usingMouseFallback ? tNowMouse : tNowHands);
+
+    // 커서 스무딩(+예측)
     {
+      const predMs = 70;
+
       const smooth = (curRef) => {
-        const k = 1 - Math.exp(-dt * 28);
-        curRef.current.x += (curRef.current.tx - curRef.current.x) * k;
-        curRef.current.y += (curRef.current.ty - curRef.current.y) * k;
+        // tracking이 완전히 꺼졌으면 속도 감쇠(드리프트 방지)
+        if (!curRef.current.tracking) {
+          const damp = Math.exp(-dt * 14);
+          curRef.current.vx *= damp;
+          curRef.current.vy *= damp;
+        }
+
+        const ptx = curRef.current.tx + curRef.current.vx * predMs;
+        const pty = curRef.current.ty + curRef.current.vy * predMs;
+
+        const err = Math.hypot(ptx - curRef.current.x, pty - curRef.current.y);
+
+        // err가 큰데 추적이 끊겼다면 급점프 방지 위해 lambda 낮춤
+        const base = 28 + err * 0.08;
+        const lambda = clamp(curRef.current.tracking ? base : base * 0.65, 18, 120);
+
+        const k = 1 - Math.exp(-dt * lambda);
+
+        if (err > 2.2) {
+          // 큰 튐은 스냅으로 따라가되, tracking off면 스냅 덜함
+          if (curRef.current.tracking) {
+            curRef.current.x = ptx;
+            curRef.current.y = pty;
+          } else {
+            curRef.current.x += (ptx - curRef.current.x) * k;
+            curRef.current.y += (pty - curRef.current.y) * k;
+          }
+        } else {
+          curRef.current.x += (ptx - curRef.current.x) * k;
+          curRef.current.y += (pty - curRef.current.y) * k;
+        }
       };
+
       smooth(cursorL);
       smooth(cursorR);
     }
@@ -810,7 +1167,6 @@ function RushScene({
     // ✅ 비트 스폰
     const songTime = songTimeRef?.current ?? 0;
 
-    // 시간이 뒤로 점프하면(리셋/스크럽) 스폰 인덱스도 리셋
     if (songTime < lastSongTime.current - 0.05) {
       nextStepIdx.current = 0;
       lastLaneRef.current = 0;
@@ -819,48 +1175,28 @@ function RushScene({
 
     if (playing && bpm > 0) {
       const beatSec = 60 / bpm;
-      const stepSec = beatSec * 0.5; // 8분박 단위
+      const stepSec = beatSec * 0.5;
 
-      // while로 "지금 시간까지 스폰되어야 할 스텝"을 다 처리
       while (true) {
         const stepIdx = nextStepIdx.current;
-        const stepTime = beatOffsetSec + stepIdx * stepSec; // 이 스텝이 울리는 시각
-        const spawnTime = stepTime - TRAVEL_TIME;          // 이 스텝 노트를 스폰해야 하는 시각
+        const stepTime = beatOffsetSec + stepIdx * stepSec;
+        const spawnTime = stepTime - TRAVEL_TIME;
 
-        if (songTime < spawnTime) break; // 아직 스폰 시간 아님
+        if (songTime < spawnTime) break;
 
-        // 늦게 스폰된 정도(보정용)
         const late = songTime - spawnTime;
-
-        // 스텝 종류: on-beat(박) vs off-beat(8분)
         const onBeat = stepIdx % 2 === 0;
 
-        // 결정적 난수(곡마다, 스텝마다 고정)
         const r = hash01((seed * 1000000 + stepIdx) | 0);
-
-        // 중간 난이도 규칙:
-        // - onBeat는 항상 스폰
-        // - offBeat는 확률로만(너무 어렵지 않게)
         const spawnThisStep = onBeat ? true : r < 0.35;
 
         if (spawnThisStep) {
-          // 레인 선택
-          let lane;
-
-          if (onBeat) {
-            // 기본은 번갈이, 가끔 같은 레인
-            lane = lastLaneRef.current ^ 1;
-            if (r < 0.20) lane = lastLaneRef.current;
-          } else {
-            // offBeat는 보통 반대 레인(손맛), 가끔 같은 레인
-            lane = lastLaneRef.current ^ 1;
-            if (r < 0.12) lane = lastLaneRef.current;
-          }
+          let lane = lastLaneRef.current ^ 1;
+          if (r < (onBeat ? 0.2 : 0.12)) lane = lastLaneRef.current;
 
           spawnNote(lane, late);
           lastLaneRef.current = lane;
 
-          // 아주 가끔 강박(예: 16박마다) 양손 동시치기 1번
           if (onBeat) {
             const beatIdx = (stepIdx / 2) | 0;
             const r2 = hash01((seed * 777777 + beatIdx) | 0);
@@ -874,60 +1210,59 @@ function RushScene({
       }
     }
 
-    // 노트 이동 + MISS 처리
-    if (playing) {
-      const noteIM = notesMesh.current;
-      const glowIM = glowMesh.current;
+    // 노트 이동 + 인스턴스 업데이트(할당 0)
+    if (notesMesh.current && glowMesh.current) {
+      for (let i = 0; i < NOTE_COUNT; i++) {
+        const n = notes.current[i];
 
-      if (noteIM && glowIM) {
-        for (let i = 0; i < NOTE_COUNT; i++) {
-          const n = notes.current[i];
+        if (playing && n.alive) {
+          n.z += NOTE_SPEED * dt;
 
-          if (n.alive) {
-            n.z += NOTE_SPEED * dt;
-
-            if (!n.judged && n.z > HIT_Z + HIT_Z_WINDOW) {
-              n.judged = true;
-              n.alive = false;
-              applyJudge("MISS", n.lane);
-            }
-
-            if (n.z > PASS_Z) n.alive = false;
+          if (!n.judged && n.z > HIT_Z + HIT_Z_WINDOW) {
+            n.judged = true;
+            n.alive = false;
+            applyJudge("MISS", n.lane, "AUTO");
           }
 
-          if (!n.alive) {
-            tmpMat.current.identity();
-            tmpMat.current.makeScale(0.0001, 0.0001, 0.0001);
-            noteIM.setMatrixAt(i, tmpMat.current);
-            glowIM.setMatrixAt(i, tmpMat.current);
-            continue;
-          }
-
-          const progress = clamp((n.z - SPAWN_Z) / (HIT_Z - SPAWN_Z), 0, 1);
-
-          const x = LANE_X[n.lane];
-          const y = THREE.MathUtils.lerp(2.9, HIT_TOP_Y, progress);
-          const z = n.z;
-
-          const s = n.baseSize * THREE.MathUtils.lerp(0.55, 1.25, progress);
-
-          tmpMat.current.compose(new THREE.Vector3(x, y, z), new THREE.Quaternion(), new THREE.Vector3(s, s, s * 0.35));
-          noteIM.setMatrixAt(i, tmpMat.current);
-
-          tmpMat.current.compose(
-            new THREE.Vector3(x, y, z - 0.08),
-            new THREE.Quaternion(),
-            new THREE.Vector3(s * 1.25, s * 1.25, s * 0.25)
-          );
-          glowIM.setMatrixAt(i, tmpMat.current);
-
-          noteIM.setColorAt(i, n.lane === 0 ? colLeft : colRight);
+          if (n.z > PASS_Z) n.alive = false;
         }
 
-        noteIM.instanceMatrix.needsUpdate = true;
-        glowIM.instanceMatrix.needsUpdate = true;
-        if (noteIM.instanceColor) noteIM.instanceColor.needsUpdate = true;
+        if (!n.alive) {
+          tmpMat.current.identity();
+          tmpQuat.current.identity();
+          tmpPos.current.set(0, 0, 0);
+          tmpScale.current.set(0.0001, 0.0001, 0.0001);
+          tmpMat.current.compose(tmpPos.current, tmpQuat.current, tmpScale.current);
+          notesMesh.current.setMatrixAt(i, tmpMat.current);
+          glowMesh.current.setMatrixAt(i, tmpMat.current);
+          continue;
+        }
+
+        const progress = clamp((n.z - SPAWN_Z) / (HIT_Z - SPAWN_Z), 0, 1);
+        const x = LANE_X[n.lane];
+        const y = THREE.MathUtils.lerp(2.9, HIT_TOP_Y, progress);
+        const z = n.z;
+        const s = n.baseSize * THREE.MathUtils.lerp(0.55, 1.25, progress);
+
+        // note
+        tmpQuat.current.identity();
+        tmpPos.current.set(x, y, z);
+        tmpScale.current.set(s, s, s * 0.35);
+        tmpMat.current.compose(tmpPos.current, tmpQuat.current, tmpScale.current);
+        notesMesh.current.setMatrixAt(i, tmpMat.current);
+
+        // glow
+        tmpPos.current.set(x, y, z - 0.08);
+        tmpScale.current.set(s * 1.25, s * 1.25, s * 0.25);
+        tmpMat.current.compose(tmpPos.current, tmpQuat.current, tmpScale.current);
+        glowMesh.current.setMatrixAt(i, tmpMat.current);
+
+        notesMesh.current.setColorAt(i, n.lane === 0 ? colLeft : colRight);
       }
+
+      notesMesh.current.instanceMatrix.needsUpdate = true;
+      glowMesh.current.instanceMatrix.needsUpdate = true;
+      if (notesMesh.current.instanceColor) notesMesh.current.instanceColor.needsUpdate = true;
     }
 
     // 히트(양손)
@@ -948,7 +1283,7 @@ function RushScene({
       cursorMeshR.current.position.set(cursorR.current.x, cursorR.current.y, CURSOR_Z);
     }
 
-    // 파편 업데이트
+    // 파편 업데이트(할당 0)
     if (shardMesh.current) {
       const g = -13.0;
 
@@ -957,7 +1292,10 @@ function RushScene({
 
         if (!sh.alive) {
           tmpMat.current.identity();
-          tmpMat.current.makeScale(0.0001, 0.0001, 0.0001);
+          tmpQuat.current.identity();
+          tmpPos.current.set(0, 0, 0);
+          tmpScale.current.set(0.0001, 0.0001, 0.0001);
+          tmpMat.current.compose(tmpPos.current, tmpQuat.current, tmpScale.current);
           shardMesh.current.setMatrixAt(i, tmpMat.current);
           continue;
         }
@@ -966,7 +1304,10 @@ function RushScene({
         if (sh.life <= 0) {
           sh.alive = false;
           tmpMat.current.identity();
-          tmpMat.current.makeScale(0.0001, 0.0001, 0.0001);
+          tmpQuat.current.identity();
+          tmpPos.current.set(0, 0, 0);
+          tmpScale.current.set(0.0001, 0.0001, 0.0001);
+          tmpMat.current.compose(tmpPos.current, tmpQuat.current, tmpScale.current);
           shardMesh.current.setMatrixAt(i, tmpMat.current);
           continue;
         }
@@ -978,8 +1319,8 @@ function RushScene({
         sh.rot.y += sh.rotVel.y * dt;
         sh.rot.z += sh.rotVel.z * dt;
 
-        const q = new THREE.Quaternion().setFromEuler(sh.rot);
-        tmpMat.current.compose(sh.pos, q, sh.scale);
+        tmpQuat.current.setFromEuler(sh.rot);
+        tmpMat.current.compose(sh.pos, tmpQuat.current, sh.scale);
 
         shardMesh.current.setMatrixAt(i, tmpMat.current);
         shardMesh.current.setColorAt(i, sh.color);
@@ -1039,6 +1380,14 @@ function RushScene({
         score: scoreRef.current,
         songTime,
         beatOffsetSec,
+        score: scoreRef.current,
+        combo: comboRef.current,
+        maxCombo: maxComboRef.current,
+
+        perfect: statRef.current.perfect,
+        good: statRef.current.good,
+        miss: statRef.current.miss,
+        swingMiss: statRef.current.swingMiss,
       });
     }
   });
@@ -1093,9 +1442,21 @@ function RushScene({
 
         <points>
           <bufferGeometry ref={sparksGeomRef}>
-            <bufferAttribute attach="attributes-position" array={sparkPositions.current} itemSize={3} count={SPARK_COUNT} />
+            <bufferAttribute
+              attach="attributes-position"
+              array={sparkPositions.current}
+              itemSize={3}
+              count={SPARK_COUNT}
+            />
           </bufferGeometry>
-          <pointsMaterial ref={sparksMatRef} attach="material" {...sparkMaterial} />
+          <pointsMaterial
+            ref={sparksMatRef}
+            size={0.08}
+            color={"#ffffff"}
+            transparent
+            opacity={0.9}
+            depthWrite={false}
+          />
         </points>
 
         {/* 커서 RIGHT */}
@@ -1157,47 +1518,59 @@ function RushScene({
 }
 
 /* =============================================================================
-   Rush3DPage (곡 선택 + 오디오 + offset 조절 + SFX 로딩)
+   Rush3DPage (곡 선택 + 오디오 + offset 조절 + SFX)
 ============================================================================= */
 
 export default function Rush3DPage({ status, connected = true }) {
+  // 최신 status는 ref로만 유지(리렌더 방지)
   const statusRef = useRef(null);
   useEffect(() => {
-    statusRef.current = status ?? null;
+    if (status != null) {
+      const j = { ...status, __ts: performance.now() };
+      statusRef.current = j;
+    }
   }, [status]);
 
-  // (테스트용) polling
-  const [fastStatus, setFastStatus] = useState(null);
+  // ✅ 폴링: setInterval 금지 → 요청 완료 후 setTimeout 재예약
   useEffect(() => {
     let alive = true;
-    const tick = async () => {
+    let timer = null;
+    let ctrl = null;
+
+    const loop = async () => {
+      if (!alive) return;
+
+      if (ctrl) ctrl.abort();
+      ctrl = new AbortController();
+
       try {
-        const r = await fetch("/api/control/status");
+        const r = await fetch("/api/control/status", {
+          cache: "no-store",
+          signal: ctrl.signal,
+        });
         const j = await r.json();
-        if (alive) setFastStatus(j);
-      } catch {}
+        j.__ts = performance.now();
+        if (alive) statusRef.current = j;
+      } catch {
+        // ignore
+      } finally {
+        if (alive) timer = setTimeout(loop, 33); // ~30Hz
+      }
     };
-    tick();
-    const id = setInterval(tick, 100);
+
+    loop();
     return () => {
       alive = false;
-      clearInterval(id);
+      if (ctrl) ctrl.abort();
+      if (timer) clearTimeout(timer);
     };
   }, []);
 
-  useEffect(() => {
-    statusRef.current = fastStatus ?? status ?? null;
-  }, [fastStatus, status]);
-
-  // ✅ 곡 목록
-  // - 공백/한글 파일명은 환경에 따라 로딩 이슈가 생길 수 있어(특히 배포)
-  // - 가장 안전: 파일명을 ASCII로(da.mp3, lemon_tree.mp3, rush_f.mp3)
   const SONGS = useMemo(
     () => [
-      // offsetSec: "첫 박(다운비트)"가 시작되는 시점 (처음엔 대충 넣고 슬라이더로 맞추면 됨)
       { id: "da", title: "다 멍청해", src: encodeURI("/audio/다 멍청해.mp3"), bpm: 120, offsetSec: 0.65, seed: 11 },
-      { id: "lemon", title: "Lemon Tree", src: encodeURI("/audio/lemon_tree.mp3"), bpm: 128, offsetSec: 0.80, seed: 22 },
-      { id: "rush", title: "Rush F", src: encodeURI("/audio/rush_e.mp3"), bpm: 112, offsetSec: 0.70, seed: 33 },
+      { id: "lemon", title: "Lemon Tree", src: encodeURI("/audio/lemon_tree.mp3"), bpm: 128, offsetSec: 0.8, seed: 22 },
+      { id: "rush", title: "Rush F", src: encodeURI("/audio/rush_e.mp3"), bpm: 112, offsetSec: 0.7, seed: 33 },
     ],
     []
   );
@@ -1205,7 +1578,6 @@ export default function Rush3DPage({ status, connected = true }) {
   const [selectedId, setSelectedId] = useState(SONGS[0].id);
   const selectedSong = SONGS.find((s) => s.id === selectedId) || SONGS[0];
 
-  // 곡별 offset을 state로 관리(슬라이더로 튜닝 가능)
   const [offsets, setOffsets] = useState(() => {
     const obj = {};
     for (const s of SONGS) obj[s.id] = s.offsetSec;
@@ -1218,9 +1590,12 @@ export default function Rush3DPage({ status, connected = true }) {
   const audioRef = useRef(null);
   const songTimeRef = useRef(0);
 
+  // phase: LOBBY -> PLAYING -> RESULT
+  const [phase, setPhase] = useState("LOBBY");
   const [playing, setPlaying] = useState(false);
   const [resetNonce, setResetNonce] = useState(0);
 
+  // HUD (RushScene에서 올라오는 값)
   const [hud, setHud] = useState({
     trackingL: false,
     trackingR: false,
@@ -1232,40 +1607,36 @@ export default function Rush3DPage({ status, connected = true }) {
     score: 0,
     songTime: 0,
     beatOffsetSec: selectedOffsetSec,
+    gestureL: "NONE",
+    gestureR: "NONE",
+
+    perfect: 0,
+    good: 0,
+    miss: 0,
+    swingMiss: 0,
   });
 
   const [judge, setJudge] = useState(null);
 
+  // RESULT 스냅샷
+  const [result, setResult] = useState(null);
+
   // ---------------------------------------------------------------------------
-  // ✅ Slice SFX (WebAudio - 저지연)
-  // - 브라우저 정책 때문에 "사용자 클릭"에서 AudioContext resume/로드가 안전함
+  // Slice SFX (WebAudio - 저지연)
   // ---------------------------------------------------------------------------
-  const sfxRef = useRef({
-    ctx: null,
-    buf: null,
-    ready: false,
-  });
+  const sfxRef = useRef({ ctx: null, buf: null, ready: false });
 
   const ensureSfxReady = async () => {
     if (sfxRef.current.ready) return;
-
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     if (!AudioCtx) return;
 
-    if (!sfxRef.current.ctx) {
-      sfxRef.current.ctx = new AudioCtx();
-    }
+    if (!sfxRef.current.ctx) sfxRef.current.ctx = new AudioCtx();
+    if (sfxRef.current.ctx.state !== "running") await sfxRef.current.ctx.resume();
 
-    // 사용자 제스처에서 resume되어야 함
-    if (sfxRef.current.ctx.state !== "running") {
-      await sfxRef.current.ctx.resume();
-    }
-
-    // 버퍼 로드/디코드
-    const res = await fetch("/sfx/slice.wav");
+    const res = await fetch("/sfx/slice.wav", { cache: "force-cache" });
     const arr = await res.arrayBuffer();
     const buf = await sfxRef.current.ctx.decodeAudioData(arr);
-
     sfxRef.current.buf = buf;
     sfxRef.current.ready = true;
   };
@@ -1277,19 +1648,17 @@ export default function Rush3DPage({ status, connected = true }) {
 
     const src = ctx.createBufferSource();
     src.buffer = buf;
-
     const gain = ctx.createGain();
-    gain.gain.value = 0.65; // 소리 크기
-
+    gain.gain.value = 0.65;
     src.connect(gain).connect(ctx.destination);
     src.start(0);
   };
 
-  // ---------------------------------------------------------------------------
-  // 곡 변경 시 오디오 로드/리셋
-  // ---------------------------------------------------------------------------
+  // 곡 변경 시: 로비로 복귀 + 오디오 리셋
   useEffect(() => {
+    setPhase("LOBBY");
     setPlaying(false);
+    setResult(null);
     setResetNonce((n) => n + 1);
 
     const audio = audioRef.current;
@@ -1300,44 +1669,64 @@ export default function Rush3DPage({ status, connected = true }) {
     audio.src = selectedSong.src;
   }, [selectedId, selectedSong.src]);
 
-  // songTimeRef 갱신
+  // songTimeRef 갱신 + 곡 종료 감지(RESULT로 전환)
   useEffect(() => {
     let raf = 0;
+
     const loop = () => {
       const a = audioRef.current;
-      songTimeRef.current = a ? a.currentTime || 0 : 0;
+      const t = a ? a.currentTime || 0 : 0;
+      songTimeRef.current = t;
 
-      if (a && playing && a.duration && a.currentTime >= a.duration) {
-        setPlaying(false);
+      if (a && phase === "PLAYING") {
+        const ended = a.duration && a.currentTime >= a.duration - 0.02;
+        if (ended) {
+          // 종료 처리
+          a.pause();
+          setPlaying(false);
+          setPhase("RESULT");
+
+          // 마지막 HUD 스냅샷
+          setResult((prev) => ({
+            ...(prev || {}),
+            songId: selectedId,
+            title: selectedSong.title,
+            bpm: selectedSong.bpm,
+            offsetSec: selectedOffsetSec,
+            score: hud.score,
+            maxCombo: hud.maxCombo,
+            perfect: hud.perfect,
+            good: hud.good,
+            miss: hud.miss,
+            swingMiss: hud.swingMiss,
+          }));
+        }
       }
 
       raf = requestAnimationFrame(loop);
     };
+
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [playing]);
+  }, [phase, selectedId, selectedSong.title, selectedSong.bpm, selectedOffsetSec, hud]);
 
-  // ---------------------------------------------------------------------------
-  // 버튼
-  // ---------------------------------------------------------------------------
-  const start = async () => {
+  const startGame = async () => {
     const a = audioRef.current;
     if (!a) return;
 
-    // ✅ SFX 준비 (사용자 클릭에서만 안정적으로 동작)
-    try {
-      await ensureSfxReady();
-    } catch {
-      // SFX 실패해도 게임은 진행
-    }
+    try { await ensureSfxReady(); } catch {}
+
+    setResult(null);
+    setResetNonce((n) => n + 1);
 
     a.currentTime = 0;
     try {
       await a.play();
+      setPhase("PLAYING");
       setPlaying(true);
-      setResetNonce((n) => n + 1);
     } catch {
       setPlaying(false);
+      setPhase("LOBBY");
     }
   };
 
@@ -1345,6 +1734,17 @@ export default function Rush3DPage({ status, connected = true }) {
     const a = audioRef.current;
     if (a) a.pause();
     setPlaying(false);
+  };
+
+  const resume = async () => {
+    const a = audioRef.current;
+    if (!a) return;
+    try {
+      await a.play();
+      setPlaying(true);
+    } catch {
+      setPlaying(false);
+    }
   };
 
   const reset = () => {
@@ -1357,19 +1757,41 @@ export default function Rush3DPage({ status, connected = true }) {
     setResetNonce((n) => n + 1);
   };
 
-  // "지금 시점을 첫 박으로" (offset 빠르게 맞추기)
+  const retry = async () => {
+    reset();
+    await startGame();
+  };
+
+  const backToLobby = () => {
+    reset();
+    setResult(null);
+    setPhase("LOBBY");
+  };
+
   const setNowAsFirstBeat = () => {
     const a = audioRef.current;
     if (!a) return;
     const t = a.currentTime || 0;
-
     setOffsets((prev) => ({ ...prev, [selectedId]: t }));
     setResetNonce((n) => n + 1);
   };
 
-  // 판정 텍스트 색
+  // RESULT 랭크(간단)
+  const totalNotes = (result?.perfect || 0) + (result?.good || 0) + (result?.miss || 0);
+  const acc = totalNotes > 0 ? ((result.perfect + result.good) / totalNotes) : 0;
+  const rank =
+    acc >= 0.95 ? "S" :
+    acc >= 0.90 ? "A" :
+    acc >= 0.80 ? "B" :
+    acc >= 0.65 ? "C" : "D";
+
+  // RUSH 모드 안내
+  const modeU = String(statusRef.current?.mode || "").toUpperCase();
+  const rushOk = connected && modeU === "RUSH" && !!statusRef.current?.enabled;
+
   const judgeColor =
-    judge?.lane === 0 ? "text-cyan-200" : judge?.lane === 1 ? "text-fuchsia-200" : "text-white";
+    judge?.lane === 0 ? "text-cyan-200" :
+    judge?.lane === 1 ? "text-fuchsia-200" : "text-white";
 
   return (
     <div className="w-full bg-slate-950 text-slate-100 relative overflow-hidden" style={{ height: "100dvh" }}>
@@ -1391,7 +1813,7 @@ export default function Rush3DPage({ status, connected = true }) {
             bpm={selectedSong.bpm}
             beatOffsetSec={selectedOffsetSec}
             seed={selectedSong.seed}
-            playing={playing}
+            playing={phase === "PLAYING" && playing}
             resetNonce={resetNonce}
             onSliceSfx={playSliceSfx}
             onHUD={(h) => setHud(h)}
@@ -1403,118 +1825,259 @@ export default function Rush3DPage({ status, connected = true }) {
         </group>
       </Canvas>
 
-      {/* 상단: 곡 선택 + 컨트롤 */}
-      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 w-[min(820px,92vw)] pointer-events-auto">
-        <div className="bg-black/45 border border-white/10 rounded-2xl px-4 py-3 backdrop-blur">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="text-xs tracking-[0.25em] text-white/70">MUSIC SELECT</div>
-              <div className="text-lg font-bold">{selectedSong.title}</div>
-              <div className="text-xs text-white/60">
-                BPM {selectedSong.bpm} · BeatOffset {Math.round(selectedOffsetSec * 1000)}ms
+      {/* =========================
+          LOBBY UI
+      ========================= */}
+      {phase === "LOBBY" && (
+        <div className="absolute inset-0 z-20 pointer-events-auto">
+          <div className="absolute inset-0 bg-gradient-to-b from-black/70 via-black/45 to-black/70" />
+          <div className="relative h-full flex items-center justify-center px-6">
+            <div className="w-[min(980px,94vw)] bg-black/40 border border-white/10 rounded-3xl p-6 backdrop-blur">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-xs tracking-[0.35em] text-white/70">RHYTHM RUSH</div>
+                  <div className="text-2xl font-black mt-1">Lobby</div>
+                  <div className="text-sm text-white/60 mt-1">
+                    노래 선택 후 시작. (Manager에서 Mode=RUSH, Enabled=ON 권장)
+                  </div>
+                </div>
+
+                <div className="text-right">
+                  <div className={"inline-flex items-center gap-2 px-3 py-1.5 rounded-full border " + (rushOk ? "border-emerald-300/30 bg-emerald-400/10 text-emerald-200" : "border-rose-300/30 bg-rose-400/10 text-rose-200")}>
+                    <span className="text-xs font-semibold">{rushOk ? "RUSH READY" : "CHECK MANAGER"}</span>
+                  </div>
+                  <div className="mt-2 text-xs text-white/55">
+                    connected: {String(connected)} / mode: {modeU || "?"} / enabled: {String(!!statusRef.current?.enabled)}
+                  </div>
+                </div>
               </div>
-            </div>
 
-            <div className="flex gap-2">
-              <button className="px-4 py-2 rounded-lg bg-white/10 border border-white/15 hover:bg-white/15" onClick={start}>
-                Start
-              </button>
-              <button className="px-4 py-2 rounded-lg bg-white/10 border border-white/15 hover:bg-white/15" onClick={pause}>
-                Pause
-              </button>
-              <button className="px-4 py-2 rounded-lg bg-white/10 border border-white/15 hover:bg-white/15" onClick={reset}>
-                Reset
-              </button>
-            </div>
-          </div>
+              {/* 곡 선택 카드 */}
+              <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-3">
+                {SONGS.map((s) => {
+                  const active = s.id === selectedId;
+                  return (
+                    <button
+                      key={s.id}
+                      onClick={() => setSelectedId(s.id)}
+                      className={
+                        "text-left rounded-2xl border p-4 transition " +
+                        (active
+                          ? "bg-white/12 border-white/25"
+                          : "bg-white/5 border-white/10 hover:bg-white/10")
+                      }
+                    >
+                      <div className="text-sm tracking-[0.25em] text-white/60">TRACK</div>
+                      <div className="text-lg font-bold mt-1">{s.title}</div>
+                      <div className="text-xs text-white/60 mt-1">BPM {s.bpm}</div>
+                      <div className="text-xs text-white/50 mt-1">Seed {s.seed}</div>
+                    </button>
+                  );
+                })}
+              </div>
 
-          {/* 곡 버튼 */}
-          <div className="mt-3 flex gap-2 flex-wrap">
-            {SONGS.map((s) => {
-              const active = s.id === selectedId;
-              return (
+              {/* 오프셋 조절 */}
+              <div className="mt-5 bg-white/5 border border-white/10 rounded-2xl p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-xs tracking-[0.25em] text-white/70">BEAT OFFSET</div>
+                    <div className="text-sm text-white/70 mt-1">
+                      첫 박 시작 시점(노트가 밀리면 여기만 조절)
+                    </div>
+                  </div>
+                  <div className="text-xs text-white/70 tabular-nums">
+                    {Math.round(selectedOffsetSec * 1000)}ms
+                  </div>
+                </div>
+                <div className="mt-3 flex items-center gap-3">
+                  <input
+                    type="range"
+                    min={0}
+                    max={2.5}
+                    step={0.01}
+                    value={selectedOffsetSec}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      setOffsets((prev) => ({ ...prev, [selectedId]: v }));
+                      setResetNonce((n) => n + 1);
+                    }}
+                    className="w-full"
+                  />
+                  <button
+                    className="px-3 py-2 rounded-lg bg-white/10 border border-white/15 hover:bg-white/15 text-xs"
+                    onClick={setNowAsFirstBeat}
+                    title="음악 들으면서 '첫 박'에 맞춰 눌러 오프셋 잡기"
+                  >
+                    Now=1st Beat
+                  </button>
+                </div>
+              </div>
+
+              {/* 시작 버튼 */}
+              <div className="mt-5 flex items-center justify-between gap-3">
+                <div className="text-xs text-white/55 leading-5">
+                  컨트롤: 손/펜 트래킹이 안 잡히면 Manager/Agent 상태부터 확인.<br />
+                  (Mode=RUSH일 때는 마우스 fallback 금지하는 게 정상)
+                </div>
+
                 <button
-                  key={s.id}
-                  onClick={() => setSelectedId(s.id)}
-                  className={
-                    "px-3 py-2 rounded-xl border text-sm " +
-                    (active ? "bg-white/15 border-white/25" : "bg-white/5 border-white/10 hover:bg-white/10")
-                  }
+                  onClick={startGame}
+                  className="px-5 py-3 rounded-xl bg-white/15 border border-white/20 hover:bg-white/20 font-bold"
                 >
-                  {s.title}
+                  Start Game
                 </button>
-              );
-            })}
-          </div>
-
-          {/* ✅ Beat Offset 튜닝 UI */}
-          <div className="mt-3 grid gap-2">
-            <div className="text-xs text-white/70">Beat Offset (첫 박 시작 시점) — 노트가 박자에서 밀리면 여기만 맞추면 됨</div>
-            <div className="flex items-center gap-3">
-              <input
-                type="range"
-                min={0}
-                max={2.5}
-                step={0.01}
-                value={selectedOffsetSec}
-                onChange={(e) => {
-                  const v = Number(e.target.value);
-                  setOffsets((prev) => ({ ...prev, [selectedId]: v }));
-                  // 튜닝 중엔 즉시 반영되게 씬 리셋
-                  setResetNonce((n) => n + 1);
-                }}
-                className="w-full"
-              />
-              <div className="w-24 text-right text-xs text-white/80 tabular-nums">
-                {Math.round(selectedOffsetSec * 1000)}ms
               </div>
-              <button
-                className="px-3 py-2 rounded-lg bg-white/10 border border-white/15 hover:bg-white/15 text-xs"
-                onClick={setNowAsFirstBeat}
-                title="음악 들으면서 '첫 박'에 맞춰 눌러서 오프셋을 잡기"
-              >
-                Now=1st Beat
-              </button>
             </div>
           </div>
         </div>
-      </div>
+      )}
+
+      {/* =========================
+          PLAYING HUD (상단 최소화)
+      ========================= */}
+      {phase === "PLAYING" && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 w-[min(820px,92vw)] pointer-events-auto">
+          <div className="bg-black/45 border border-white/10 rounded-2xl px-4 py-3 backdrop-blur">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-xs tracking-[0.25em] text-white/70">NOW PLAYING</div>
+                <div className="text-lg font-bold">{selectedSong.title}</div>
+                <div className="text-xs text-white/60">
+                  BPM {selectedSong.bpm} · Offset {Math.round(selectedOffsetSec * 1000)}ms · Score {hud.score} · Combo {hud.combo}
+                </div>
+              </div>
+
+              <div className="flex gap-2">
+                {!playing ? (
+                  <button className="px-4 py-2 rounded-lg bg-white/10 border border-white/15 hover:bg-white/15" onClick={resume}>
+                    Resume
+                  </button>
+                ) : (
+                  <button className="px-4 py-2 rounded-lg bg-white/10 border border-white/15 hover:bg-white/15" onClick={pause}>
+                    Pause
+                  </button>
+                )}
+                <button className="px-4 py-2 rounded-lg bg-white/10 border border-white/15 hover:bg-white/15" onClick={reset}>
+                  Reset
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 큰 SCORE / COMBO */}
-      <div className="absolute top-28 left-1/2 -translate-x-1/2 text-center pointer-events-none z-10">
-        <div className="text-xs tracking-[0.35em] text-white/70">SCORE</div>
-        <div className="text-5xl font-black drop-shadow">{hud.score}</div>
+      {phase === "PLAYING" && (
+        <div className="absolute top-28 left-1/2 -translate-x-1/2 text-center pointer-events-none z-10">
+          <div className="text-xs tracking-[0.35em] text-white/70">SCORE</div>
+          <div className="text-5xl font-black drop-shadow">{hud.score}</div>
 
-        {hud.combo > 1 && (
-          <div className="mt-2 text-6xl font-black drop-shadow">
-            {hud.combo} <span className="text-white/80">COMBO</span>
-          </div>
-        )}
-        <div className="mt-1 text-sm text-white/60">MAX {hud.maxCombo}</div>
-      </div>
+          {hud.combo > 1 && (
+            <div className="mt-2 text-6xl font-black drop-shadow">
+              {hud.combo} <span className="text-white/80">COMBO</span>
+            </div>
+          )}
+          <div className="mt-1 text-sm text-white/60">MAX {hud.maxCombo}</div>
+        </div>
+      )}
 
       {/* 판정 텍스트 */}
-      {judge && (
+      {phase === "PLAYING" && judge && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <div className={`text-6xl font-black drop-shadow ${judgeColor}`}>{judge.text}</div>
-        </div>
-      )}
-
-      {!connected && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <div className="bg-black/60 border border-white/10 rounded-2xl px-5 py-4 text-sm backdrop-blur">
-            백엔드 연결 OFF
+          <div className={`text-6xl font-black drop-shadow ${judgeColor}`}>
+            {judge.text}
           </div>
         </div>
       )}
 
-      {/* 디버그 */}
+      {/* =========================
+          RESULT UI
+      ========================= */}
+      {phase === "RESULT" && (
+        <div className="absolute inset-0 z-30 pointer-events-auto">
+          <div className="absolute inset-0 bg-black/70" />
+          <div className="relative h-full flex items-center justify-center px-6">
+            <div className="w-[min(720px,92vw)] bg-black/45 border border-white/10 rounded-3xl p-6 backdrop-blur">
+              <div className="text-xs tracking-[0.35em] text-white/70">RESULT</div>
+              <div className="mt-1 flex items-end justify-between gap-3">
+                <div>
+                  <div className="text-2xl font-black">{selectedSong.title}</div>
+                  <div className="text-sm text-white/60 mt-1">
+                    BPM {selectedSong.bpm} · Offset {Math.round(selectedOffsetSec * 1000)}ms
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-xs text-white/60">RANK</div>
+                  <div className="text-4xl font-black">{rank}</div>
+                  <div className="text-xs text-white/55 mt-1">
+                    ACC {(acc * 100).toFixed(1)}%
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-5 grid grid-cols-2 gap-3">
+                <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
+                  <div className="text-xs text-white/60">FINAL SCORE</div>
+                  <div className="text-4xl font-black mt-1">{result?.score ?? hud.score}</div>
+                </div>
+                <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
+                  <div className="text-xs text-white/60">MAX COMBO</div>
+                  <div className="text-4xl font-black mt-1">{result?.maxCombo ?? hud.maxCombo}</div>
+                </div>
+              </div>
+
+              <div className="mt-3 bg-white/5 border border-white/10 rounded-2xl p-4">
+                <div className="text-xs text-white/60 mb-2">JUDGEMENT</div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+                  <div className="flex justify-between bg-black/20 rounded-xl px-3 py-2">
+                    <span className="text-white/70">PERFECT</span>
+                    <span className="font-bold">{result?.perfect ?? hud.perfect}</span>
+                  </div>
+                  <div className="flex justify-between bg-black/20 rounded-xl px-3 py-2">
+                    <span className="text-white/70">GOOD</span>
+                    <span className="font-bold">{result?.good ?? hud.good}</span>
+                  </div>
+                  <div className="flex justify-between bg-black/20 rounded-xl px-3 py-2">
+                    <span className="text-white/70">MISS</span>
+                    <span className="font-bold">{result?.miss ?? hud.miss}</span>
+                  </div>
+                  <div className="flex justify-between bg-black/20 rounded-xl px-3 py-2">
+                    <span className="text-white/70">SWING MISS</span>
+                    <span className="font-bold">{result?.swingMiss ?? hud.swingMiss}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-5 flex items-center justify-end gap-2">
+                <button className="px-4 py-2 rounded-lg bg-white/10 border border-white/15 hover:bg-white/15" onClick={backToLobby}>
+                  Back to Lobby
+                </button>
+                <button className="px-4 py-2 rounded-lg bg-white/15 border border-white/20 hover:bg-white/20 font-bold" onClick={retry}>
+                  Retry
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 연결 OFF 표시(로비에서만 크게 보여도 됨) */}
+      {!connected && phase !== "RESULT" && (
+        <div className="absolute bottom-4 left-4 z-10 bg-black/60 border border-white/10 rounded-2xl px-4 py-3 text-xs backdrop-blur pointer-events-none">
+          백엔드 연결 OFF
+        </div>
+      )}
+
+      {/* 디버그(원하면 로비/플레이 모두 표시) */}
       <div className="absolute bottom-4 right-4 bg-black/45 border border-white/10 rounded-xl px-3 py-2 text-xs leading-5 pointer-events-none">
+        <div>phase: {phase}</div>
         <div>playing: {String(playing)}</div>
         <div>songTime: {hud.songTime?.toFixed?.(2) ?? "0.00"}</div>
         <div>offset: {hud.beatOffsetSec?.toFixed?.(2) ?? "0.00"}s</div>
         <div>tracking L/R: {String(hud.trackingL)} / {String(hud.trackingR)}</div>
+        <div>gesture L/R: {String(hud.gestureL)} / {String(hud.gestureR)}</div>
       </div>
     </div>
   );
 }
+

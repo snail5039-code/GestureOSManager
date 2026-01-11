@@ -25,68 +25,78 @@ import com.example.gestureOSManager.websocket.AgentSessionRegistry;
 @CrossOrigin(origins = "http://localhost:5173")
 public class ControlController {
 
-	private final ControlService controlService;
-	private final StatusService statusService;
-	private final AgentSessionRegistry registry;
+  private final ControlService controlService;
+  private final AgentSessionRegistry registry;
+  private final StatusService statusService;
 
-	public ControlController(ControlService controlService, StatusService statusService,
-			AgentSessionRegistry registry) {
-		this.controlService = controlService;
-		this.statusService = statusService;
-		this.registry = registry;
-	}
+  public ControlController(ControlService controlService, AgentSessionRegistry registry, StatusService statusService) {
+    this.controlService = controlService;
+    this.registry = registry;
+    this.statusService = statusService;
+  }
 
-	@PostMapping("/start")
-	public ResponseEntity<?> start() {
-		boolean ok = controlService.start();
-		return ResponseEntity.ok(Map.of("ok", ok));
-	}
+  @GetMapping("/status")
+  public AgentStatus status() {
+    AgentStatus out = statusService.getSnapshot();
+    out.setConnected(registry.isConnected());
 
-	@PostMapping("/stop")
-	public ResponseEntity<?> stop() {
-		boolean ok = controlService.stop();
-		return ResponseEntity.ok(Map.of("ok", ok));
-	}
+    // MOUSE 모드에서만 pointerX/Y를 OS 커서로 덮어쓰기
+    // RUSH 모드에서는 left/right 포인터가 핵심이므로 절대 overwrite 금지
+    if (out.getMode() == ModeType.MOUSE) {
+      try {
+        Point p = MouseInfo.getPointerInfo().getLocation();
+        Dimension d = Toolkit.getDefaultToolkit().getScreenSize();
+        out.setPointerX(p.getX() / d.getWidth());
+        out.setPointerY(p.getY() / d.getHeight());
+        out.setTracking(Boolean.TRUE);
+      } catch (Exception ignore) {
+        // headless 등 예외 무시
+      }
+    }
 
-	@PostMapping("/mode")
-	public ResponseEntity<?> mode(@RequestParam String mode) {
-		ModeType mt = ModeType.valueOf(mode.trim().toUpperCase());
-		boolean ok = controlService.setMode(mt);
-		return ResponseEntity.ok(Map.of("ok", ok, "mode", mt.name()));
-	}
+    return out;
+  }
 
-	@GetMapping("/status")
-	public AgentStatus status() {
-		AgentStatus s = statusService.get();
-		s.setConnected(registry.isConnected());
+  @PostMapping("/start")
+  public ResponseEntity<?> start() {
+    boolean ok = controlService.start();
+    if (ok) {
+      AgentStatus curr = statusService.getSnapshot();
+      statusService.update(curr.toBuilder().enabled(true).build());
+    }
+    return ResponseEntity.ok(Map.of("ok", ok));
+  }
 
-		// ✅ 현재 OS 커서 좌표를 0~1로 정규화해서 내려줌 (Rush 입력용)
-		try {
-			Point p = MouseInfo.getPointerInfo().getLocation();
-			Dimension d = Toolkit.getDefaultToolkit().getScreenSize();
+  @PostMapping("/stop")
+  public ResponseEntity<?> stop() {
+    boolean ok = controlService.stop();
+    if (ok) {
+      AgentStatus curr = statusService.getSnapshot();
+      statusService.update(curr.toBuilder().enabled(false).build());
+    }
+    return ResponseEntity.ok(Map.of("ok", ok));
+  }
 
-			double pointerX = p.getX() / d.getWidth();
-			double pointerY = p.getY() / d.getHeight();
+  @PostMapping("/mode")
+  public ResponseEntity<?> mode(@RequestParam String mode) {
+    ModeType m;
+    try {
+      m = ModeType.valueOf(mode.trim().toUpperCase());
+    } catch (Exception e) {
+      return ResponseEntity.badRequest().body(Map.of("ok", false, "error", "Unknown mode: " + mode));
+    }
 
-			s.setPointerX(pointerX);
-			s.setPointerY(pointerY);
-			s.setTracking(true); // 일단 true로 고정(나중에 실제 손 트래킹 여부로 교체)
+    boolean ok = controlService.setMode(m);
+    if (ok) {
+      AgentStatus curr = statusService.getSnapshot();
+      statusService.update(curr.toBuilder().mode(m).build());
+    }
+    return ResponseEntity.ok(Map.of("ok", ok, "mode", m.name()));
+  }
 
-		} catch (Exception e) {
-			System.out.println("### STATUS: CATCH ### " + e);
-		    e.printStackTrace();
-			// headless/권한/환경 문제 시 안전하게 null 처리
-			s.setPointerX(null);
-			s.setPointerY(null);
-			s.setTracking(false);
-		}
-
-		return s;
-	}
-
-	@PostMapping("/preview")
-	public ResponseEntity<?> preview(@RequestParam boolean enabled) {
-		boolean ok = controlService.setPreview(enabled);
-		return ResponseEntity.ok(Map.of("ok", ok, "preview", enabled));
-	}
+  @PostMapping("/preview")
+  public ResponseEntity<?> preview(@RequestParam boolean on) {
+    boolean ok = controlService.setPreview(on);
+    return ResponseEntity.ok(Map.of("ok", ok, "on", on));
+  }
 }
