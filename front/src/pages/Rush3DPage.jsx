@@ -199,29 +199,29 @@ function readTwoHandsFromStatus(status) {
 
   const left = hasLeft
     ? {
-        nx: norm(lx, "x"),
-        ny: norm(ly, "y"),
-        tracking: (lTracking == null ? true : !!lTracking) && enabled,
-        gesture: lg ?? "NONE",
-      }
+      nx: norm(lx, "x"),
+      ny: norm(ly, "y"),
+      tracking: (lTracking == null ? true : !!lTracking) && enabled,
+      gesture: lg ?? "NONE",
+    }
     : null;
 
   const right = hasRight
     ? {
-        nx: norm(rx, "x"),
-        ny: norm(ry, "y"),
-        tracking: (rTracking == null ? true : !!rTracking) && enabled,
-        gesture: rg ?? "NONE",
-      }
+      nx: norm(rx, "x"),
+      ny: norm(ry, "y"),
+      tracking: (rTracking == null ? true : !!rTracking) && enabled,
+      gesture: rg ?? "NONE",
+    }
     : null;
 
   const single = hasSingle
     ? {
-        nx: norm(sx, "x"),
-        ny: norm(sy, "y"),
-        tracking: (sTracking == null ? true : !!sTracking) && enabled,
-        gesture: "NONE",
-      }
+      nx: norm(sx, "x"),
+      ny: norm(sy, "y"),
+      tracking: (sTracking == null ? true : !!sTracking) && enabled,
+      gesture: "NONE",
+    }
     : null;
 
   // 정규화 실패(null)면 해당 손 무효 처리
@@ -327,10 +327,10 @@ function RushScene({
   // 판정/슬래시 파라미터
   // -----------------------------
   const HIT_Z_WINDOW = 1.6;
-  const SLASH_SPEED = 2.2;
+  const SLASH_SPEED = 1.4;
 
   const ATTEMPT_X_TOL = 1.25;
-  const ATTEMPT_Y_PAD = 0.35;
+  const ATTEMPT_Y_PAD = 0.55;
   const ATTEMPT_Z_WIN = 2.2;
 
   // -----------------------------
@@ -1066,33 +1066,56 @@ function RushScene({
     });
 
     if (hand) {
-      // 가능한 손 후보 수집(라벨보다 실제 x 정렬로 레인 배치)
+      // 1) 후보 수집(gesture 포함)
       const cands = [];
       if (hand.left) cands.push(toNdc(hand.left));
       if (hand.right) cands.push(toNdc(hand.right));
 
-      if (cands.length >= 2) {
-        cands.sort((a, b) => a.x - b.x);
-        leftNdc = cands[0];
-        rightNdc = cands[1];
-        lastSingleLaneRef.current = 1;
-      } else if (cands.length === 1) {
-        const s = cands[0];
-        const HYS = 0.18;
-        if (s.x < -HYS) lastSingleLaneRef.current = 0;
-        else if (s.x > HYS) lastSingleLaneRef.current = 1;
+      // single도 후보로(파이썬에서 pointerX/Y만 오는 경우)
+      if (cands.length === 0 && hand.single) cands.push(toNdc(hand.single));
 
-        if (lastSingleLaneRef.current === 0) leftNdc = s;
-        else rightNdc = s;
-      } else if (hand.single) {
-        const s = toNdc(hand.single);
-        const HYS = 0.18;
-        if (s.x < -HYS) lastSingleLaneRef.current = 0;
-        else if (s.x > HYS) lastSingleLaneRef.current = 1;
+      // 2) gesture로 레인 고정 매핑 (BLUE->left, RED->right)
+      const normG = (g) => String(g || "").toUpperCase();
+      const blueIdx = cands.findIndex((c) => normG(c.gesture) === "BLUE");
+      const redIdx = cands.findIndex((c) => normG(c.gesture) === "RED");
 
-        if (lastSingleLaneRef.current === 0) leftNdc = s;
-        else rightNdc = s;
+      const blue = blueIdx >= 0 ? cands[blueIdx] : null;
+      const red = redIdx >= 0 ? cands[redIdx] : null;
+
+      if (blue) leftNdc = blue;
+      if (red) rightNdc = red;
+
+      // ✅ 한쪽만 잡힌 경우: 남은 후보를 반대 레인에 강제 할당(흔들림 방지)
+      if (leftNdc && !rightNdc && cands.length >= 2) {
+        const other = cands.find((c, i) => i !== blueIdx);
+        if (other) rightNdc = other;
       }
+      if (rightNdc && !leftNdc && cands.length >= 2) {
+        const other = cands.find((c, i) => i !== redIdx);
+        if (other) leftNdc = other;
+      }
+
+      // 3) 둘 다 못 찾았으면 fallback(x정렬)
+      if (!leftNdc && !rightNdc) {
+        if (cands.length >= 2) {
+          cands.sort((a, b) => a.x - b.x);
+          leftNdc = cands[0];
+          rightNdc = cands[1];
+          lastSingleLaneRef.current = 1;
+        } else if (cands.length === 1) {
+          const s = cands[0];
+          const HYS = 0.18;
+          if (s.x < -HYS) lastSingleLaneRef.current = 0;
+          else if (s.x > HYS) lastSingleLaneRef.current = 1;
+
+          if (lastSingleLaneRef.current === 0) leftNdc = s;
+          else rightNdc = s;
+        }
+      }
+
+      // 4) 하나만 잡힐 때도, 색이면 그 레인에 고정
+      if (leftNdc && !rightNdc) lastSingleLaneRef.current = 0;
+      if (rightNdc && !leftNdc) lastSingleLaneRef.current = 1;
     }
 
     // ✅ 손 모션 전용: 기본은 마우스 fallback 금지
@@ -1176,8 +1199,8 @@ function RushScene({
       // ✅ 슬래시 판정용 샘플 갱신 정보
       curRef.current._sampleUpdated = true;
       curRef.current._sampleT = tNowMs;
-      curRef.current._sampleX = fx;
-      curRef.current._sampleY = fy;
+      curRef.current._sampleX = rawX;  // ← fx 말고 rawX
+      curRef.current._sampleY = rawY;  // ← fy 말고 rawY
 
       return true;
     };
@@ -1863,7 +1886,7 @@ export default function Rush3DPage({ status, connected = true }) {
 
     try {
       await ensureSfxReady();
-    } catch {}
+    } catch { }
 
     setResult(null);
     setResetNonce((n) => n + 1);
@@ -1935,9 +1958,9 @@ export default function Rush3DPage({ status, connected = true }) {
 
   const rank =
     acc >= 0.95 ? "S" :
-    acc >= 0.90 ? "A" :
-    acc >= 0.80 ? "B" :
-    acc >= 0.65 ? "C" : "D";
+      acc >= 0.90 ? "A" :
+        acc >= 0.80 ? "B" :
+          acc >= 0.65 ? "C" : "D";
 
   // RUSH 모드 안내
   const modeU = String(statusRef.current?.mode || "").toUpperCase();
@@ -1945,7 +1968,7 @@ export default function Rush3DPage({ status, connected = true }) {
 
   const judgeColor =
     judge?.lane === 0 ? "text-cyan-200" :
-    judge?.lane === 1 ? "text-fuchsia-200" : "text-white";
+      judge?.lane === 1 ? "text-fuchsia-200" : "text-white";
 
   return (
     <div
