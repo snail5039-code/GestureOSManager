@@ -2,7 +2,17 @@ import axios from "axios";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const POLL_MS = 500;
+
+// 서버에 보내는 mode 값(영문)은 그대로, UI 표시는 한글로
 const MODE_OPTIONS = ["MOUSE", "KEYBOARD", "PRESENTATION", "DRAW", "RUSH", "DEFAULT"];
+const MODE_LABEL = {
+  MOUSE: "마우스",
+  KEYBOARD: "키보드",
+  PRESENTATION: "프레젠테이션",
+  DRAW: "그리기",
+  RUSH: "러쉬",
+  DEFAULT: "기본",
+};
 
 const api = axios.create({
   baseURL: "/api",
@@ -14,31 +24,54 @@ function cn(...xs) {
   return xs.filter(Boolean).join(" ");
 }
 
+function clamp01(v) {
+  if (typeof v !== "number" || Number.isNaN(v)) return null;
+  return Math.max(0, Math.min(1, v));
+}
+
 function Badge({ children, tone = "slate" }) {
   const map = {
-    slate: "bg-slate-800/80 text-slate-200 ring-slate-700/60",
-    blue: "bg-sky-900/40 text-sky-200 ring-sky-800/60",
-    green: "bg-emerald-900/35 text-emerald-200 ring-emerald-800/60",
-    yellow: "bg-amber-900/35 text-amber-200 ring-amber-800/60",
-    red: "bg-rose-900/35 text-rose-200 ring-rose-800/60",
+    slate: "bg-slate-800/65 text-slate-200 ring-white/10",
+    blue: "bg-sky-500/16 text-sky-200 ring-sky-400/25",
+    green: "bg-emerald-500/16 text-emerald-200 ring-emerald-400/25",
+    yellow: "bg-amber-500/16 text-amber-200 ring-amber-400/25",
+    red: "bg-rose-500/16 text-rose-200 ring-rose-400/25",
   };
   return (
-    <span
-      className={cn(
-        "inline-flex items-center rounded-full px-2 py-0.5 text-xs ring-1",
-        map[tone] || map.slate
-      )}
-    >
+    <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-xs ring-1", map[tone] || map.slate)}>
       {children}
     </span>
   );
 }
 
-function Card({ title, right, children }) {
+function Card({ title, right, children, accent = "slate" }) {
+  const accentMap = {
+    slate: "from-white/10 via-white/0 to-white/0",
+    blue: "from-sky-400/22 via-sky-400/0 to-white/0",
+    green: "from-emerald-400/22 via-emerald-400/0 to-white/0",
+    red: "from-rose-400/22 via-rose-400/0 to-white/0",
+    yellow: "from-amber-400/22 via-amber-400/0 to-white/0",
+  };
+
+  const glowMap = {
+    slate: "shadow-[0_12px_40px_rgba(0,0,0,0.30)]",
+    blue: "shadow-[0_16px_55px_rgba(56,189,248,0.10)]",
+    green: "shadow-[0_16px_55px_rgba(52,211,153,0.08)]",
+    red: "shadow-[0_16px_55px_rgba(244,63,94,0.08)]",
+    yellow: "shadow-[0_16px_55px_rgba(251,191,36,0.07)]",
+  };
+
   return (
-    <div className="rounded-2xl bg-slate-950/40 ring-1 ring-white/10 shadow-sm">
+    <div
+      className={cn(
+        "rounded-2xl bg-slate-950/45 ring-1 ring-white/10 overflow-hidden",
+        glowMap[accent] || glowMap.slate,
+        "transition-transform duration-200 hover:-translate-y-[1px]"
+      )}
+    >
+      <div className={cn("h-px w-full bg-gradient-to-r", accentMap[accent] || accentMap.slate)} />
       <div className="flex items-center justify-between px-5 py-4 border-b border-white/10">
-        <div className="text-sm font-semibold text-slate-100">{title}</div>
+        <div className="text-sm font-semibold text-slate-100 tracking-tight">{title}</div>
         {right}
       </div>
       <div className="px-5 py-4">{children}</div>
@@ -48,7 +81,7 @@ function Card({ title, right, children }) {
 
 function Btn({ tone = "slate", className, ...props }) {
   const map = {
-    slate: "bg-slate-800 hover:bg-slate-700 text-slate-100",
+    slate: "bg-slate-800/85 hover:bg-slate-700 text-slate-100",
     blue: "bg-sky-600/90 hover:bg-sky-600 text-white",
     green: "bg-emerald-600/90 hover:bg-emerald-600 text-white",
     red: "bg-rose-600/90 hover:bg-rose-600 text-white",
@@ -56,7 +89,7 @@ function Btn({ tone = "slate", className, ...props }) {
   return (
     <button
       className={cn(
-        "rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed",
+        "rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition",
         map[tone] || map.slate,
         className
       )}
@@ -70,38 +103,240 @@ function formatNum(n, digits = 1) {
   return Number(n).toFixed(digits);
 }
 
-function IconGrid() {
+/* =========================
+   Icons (SVG)
+========================= */
+function IconPlay() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="opacity-90">
+      <path d="M8 5v14l12-7-12-7Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+    </svg>
+  );
+}
+function IconStop() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="opacity-90">
+      <path d="M7 7h10v10H7V7Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+    </svg>
+  );
+}
+function IconRefresh({ spinning }) {
   return (
     <svg
       width="18"
       height="18"
       viewBox="0 0 24 24"
       fill="none"
-      className="text-sky-200"
+      className={cn("opacity-90", spinning && "animate-spin")}
     >
       <path
-        d="M4 8.5h4v4H4v-4Zm6 0h4v4h-4v-4Zm6 0h4v4h-4v-4ZM4 14.5h4v4H4v-4Zm6 0h10v4H10v-4Z"
+        d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6"
         stroke="currentColor"
-        strokeWidth="1.5"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
       />
     </svg>
   );
 }
+function IconEye() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="opacity-90">
+      <path
+        d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinejoin="round"
+      />
+      <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" stroke="currentColor" strokeWidth="1.7" />
+    </svg>
+  );
+}
+function IconLock() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="opacity-90">
+      <path
+        d="M8 11V8a4 4 0 0 1 8 0v3"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+      />
+      <path d="M7 11h10v10H7V11Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+    </svg>
+  );
+}
+function IconChevron() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="opacity-85">
+      <path d="m9 6 6 6-6 6" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
 
-export default function Dashboard({
-  hudOn,
-  onToggleHud,
-  onHudState,
-  onHudActions,
-} = {}) {
+/* =========================
+   Action Tile
+========================= */
+function ActionTile({ tone = "slate", icon, title, desc, className, ...props }) {
+  const map = {
+    slate:
+      "bg-gradient-to-b from-white/6 to-white/0 hover:from-white/9 ring-white/10",
+    green:
+      "bg-gradient-to-b from-emerald-400/14 to-white/0 hover:from-emerald-400/18 ring-emerald-400/25",
+    red:
+      "bg-gradient-to-b from-rose-400/14 to-white/0 hover:from-rose-400/18 ring-rose-400/25",
+    blue:
+      "bg-gradient-to-b from-sky-400/14 to-white/0 hover:from-sky-400/18 ring-sky-400/25",
+  };
+
+  const chipMap = {
+    slate: "bg-slate-950/45 ring-white/10",
+    green: "bg-emerald-950/35 ring-emerald-400/20",
+    red: "bg-rose-950/35 ring-rose-400/20",
+    blue: "bg-sky-950/35 ring-sky-400/20",
+  };
+
+  return (
+    <button
+      className={cn(
+        "w-full rounded-2xl p-4 ring-1 transition text-left disabled:opacity-50 disabled:cursor-not-allowed",
+        "shadow-[0_10px_35px_rgba(0,0,0,0.25)] hover:shadow-[0_16px_50px_rgba(0,0,0,0.35)]",
+        map[tone] || map.slate,
+        className
+      )}
+      {...props}
+    >
+      <div className="flex items-center gap-3">
+        <div className={cn("h-11 w-11 rounded-2xl ring-1 grid place-items-center", chipMap[tone] || chipMap.slate)}>
+          <div className="text-slate-100">{icon}</div>
+        </div>
+
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-slate-100">{title}</div>
+          <div className="text-xs text-slate-300/80 mt-0.5 truncate">{desc}</div>
+        </div>
+
+        <div className="ml-auto text-slate-300/60">
+          <IconChevron />
+        </div>
+      </div>
+    </button>
+  );
+}
+
+/* =========================
+   Switch
+========================= */
+function Switch({ checked, onChange, disabled }) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={() => onChange?.(!checked)}
+      className={cn(
+        "relative inline-flex h-6 w-11 items-center rounded-full ring-1 transition disabled:opacity-50 disabled:cursor-not-allowed",
+        checked ? "bg-sky-500/30 ring-sky-400/30" : "bg-slate-800/70 ring-white/10"
+      )}
+      aria-checked={checked}
+      role="switch"
+    >
+      <span
+        className={cn(
+          "inline-block h-5 w-5 transform rounded-full bg-white/90 transition",
+          checked ? "translate-x-5" : "translate-x-1"
+        )}
+      />
+    </button>
+  );
+}
+
+function StatTile({ label, value, tone = "slate" }) {
+  const ring =
+    tone === "green"
+      ? "ring-emerald-400/22"
+      : tone === "blue"
+      ? "ring-sky-400/22"
+      : tone === "yellow"
+      ? "ring-amber-400/22"
+      : tone === "red"
+      ? "ring-rose-400/22"
+      : "ring-white/10";
+
+  const topGlow =
+    tone === "green"
+      ? "from-emerald-400/20"
+      : tone === "blue"
+      ? "from-sky-400/20"
+      : tone === "yellow"
+      ? "from-amber-400/18"
+      : tone === "red"
+      ? "from-rose-400/18"
+      : "from-white/10";
+
+  return (
+    <div className={cn("rounded-xl bg-slate-950/45 ring-1 p-3 overflow-hidden", ring)}>
+      <div className={cn("h-px w-full bg-gradient-to-r", topGlow, "via-white/0 to-white/0")} />
+      <div className="mt-2 text-xs text-slate-400">{label}</div>
+      <div className="mt-1 font-semibold text-sm text-slate-100">{value}</div>
+    </div>
+  );
+}
+
+function PointerMiniMap({ x, y }) {
+  const cx = clamp01(x);
+  const cy = clamp01(y);
+
+  const left = cx === null ? 50 : cx * 100;
+  const top = cy === null ? 50 : cy * 100;
+
+  return (
+    <div className="rounded-xl bg-slate-950/45 ring-1 ring-white/10 p-3 overflow-hidden">
+      <div className="flex items-center justify-between">
+        <div className="text-xs text-slate-400">포인터</div>
+        <div className="text-xs text-slate-400 tabular-nums">
+          {cx === null ? "-" : cx.toFixed(3)} / {cy === null ? "-" : cy.toFixed(3)}
+        </div>
+      </div>
+
+      <div className="mt-3 relative h-20 rounded-lg bg-slate-900/35 ring-1 ring-white/10 overflow-hidden">
+        {/* subtle grid */}
+        <div className="absolute inset-0 opacity-[0.20]">
+          <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(255,255,255,.08)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,.08)_1px,transparent_1px)] bg-[size:16px_16px]" />
+        </div>
+
+        {/* dot */}
+        <div
+          className="absolute h-2.5 w-2.5 rounded-full bg-sky-300 shadow-[0_0_18px_rgba(56,189,248,0.65)]"
+          style={{ left: `${left}%`, top: `${top}%`, transform: "translate(-50%,-50%)" }}
+        />
+      </div>
+    </div>
+  );
+}
+
+export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions } = {}) {
   const [status, setStatus] = useState(null);
   const [mode, setMode] = useState("MOUSE");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [lastUpdated, setLastUpdated] = useState(null);
+
   const [preview, setPreview] = useState(false);
+  const previewRef = useRef(false);
+  const previewBusyRef = useRef(false);
+
   const abortRef = useRef(null);
+
+  // 요청 완료 후 다음 호출(겹침 방지)
+  const pollTimerRef = useRef(null);
+  const unmountedRef = useRef(false);
+
+  // Debug
+  const [showRaw, setShowRaw] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    previewRef.current = preview;
+  }, [preview]);
 
   const derived = useMemo(() => {
     const s = status || {};
@@ -112,12 +347,30 @@ export default function Dashboard({
       gesture: s.gesture ?? s.lastGesture ?? "NONE",
       fps: s.fps ?? s.agentFps ?? null,
       scrollActive: !!s.scrollActive,
-      canMove: s.canMove ?? null,
-      canClick: s.canClick ?? null,
+      canMove: typeof s.canMove === "boolean" ? s.canMove : null,
+      canClick: typeof s.canClick === "boolean" ? s.canClick : null,
       mode: s.mode ?? mode,
       type: s.type ?? "STATUS",
+      serverPreview: typeof s.preview === "boolean" ? s.preview : undefined,
+      pointerX: typeof s.pointerX === "number" ? s.pointerX : null,
+      pointerY: typeof s.pointerY === "number" ? s.pointerY : null,
+      tracking: typeof s.tracking === "boolean" ? s.tracking : null,
     };
   }, [status, mode]);
+
+  // 표시용 텍스트(밋밋함 줄이기 + true/false 제거)
+  const view = useMemo(() => {
+    return {
+      connText: derived.connected ? "연결됨" : "끊김",
+      enabledText: derived.enabled ? "실행 중" : "정지",
+      lockText: derived.locked ? "잠금" : "해제",
+      moveText: derived.canMove === null ? "-" : derived.canMove ? "가능" : "불가",
+      clickText: derived.canClick === null ? "-" : derived.canClick ? "가능" : "불가",
+      scrollText: derived.scrollActive ? "활성" : "비활성",
+      trackingText: derived.tracking === null ? "-" : derived.tracking ? "ON" : "OFF",
+      modeText: MODE_LABEL[derived.mode] ?? derived.mode,
+    };
+  }, [derived]);
 
   const fetchStatus = useCallback(async () => {
     if (abortRef.current) abortRef.current.abort();
@@ -125,28 +378,54 @@ export default function Dashboard({
     abortRef.current = controller;
 
     try {
-      const { data } = await api.get("/control/status", {
-        signal: controller.signal,
-      });
-
-      console.log("[STATUS]", data);
+      const { data } = await api.get("/control/status", { signal: controller.signal });
 
       setStatus(data);
       setMode((prev) => data?.mode ?? prev);
-      setLastUpdated(new Date());
+
+      // preview는 서버가 내려줄 때만 동기화
+      if (typeof data?.preview === "boolean") {
+        setPreview(data.preview);
+        previewRef.current = data.preview;
+        if (previewBusyRef.current) previewBusyRef.current = false;
+      }
+
       setError("");
     } catch (e) {
       if (e?.name === "CanceledError" || e?.name === "AbortError") return;
 
       const msg = e?.response
-        ? `STATUS HTTP ${e.response.status}${e.response.data ? `: ${String(e.response.data)}` : ""
-        }`
-        : e?.message || "STATUS fetch failed";
+        ? `상태 조회 실패 (HTTP ${e.response.status})${e.response.data ? `: ${String(e.response.data)}` : ""}`
+        : e?.message || "상태 조회 실패";
       setError(msg);
     } finally {
       setLoading(false);
     }
   }, []);
+
+  const scheduleNextPoll = useCallback(() => {
+    if (unmountedRef.current) return;
+    if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    pollTimerRef.current = setTimeout(async () => {
+      await fetchStatus();
+      scheduleNextPoll();
+    }, POLL_MS);
+  }, [fetchStatus]);
+
+  useEffect(() => {
+    unmountedRef.current = false;
+
+    (async () => {
+      await fetchStatus();
+      scheduleNextPoll();
+    })();
+
+    return () => {
+      unmountedRef.current = true;
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+      if (abortRef.current) abortRef.current.abort();
+    };
+  }, [fetchStatus, scheduleNextPoll]);
 
   const postJson = useCallback(
     async (url, body) => {
@@ -157,9 +436,8 @@ export default function Dashboard({
         await fetchStatus();
       } catch (e) {
         const msg = e?.response
-          ? `${url} HTTP ${e.response.status}${e.response.data ? `: ${String(e.response.data)}` : ""
-          }`
-          : e?.message || "POST failed";
+          ? `요청 실패: ${url} (HTTP ${e.response.status})${e.response.data ? `: ${String(e.response.data)}` : ""}`
+          : e?.message || "요청 실패";
         setError(msg);
       } finally {
         setBusy(false);
@@ -172,23 +450,32 @@ export default function Dashboard({
   const stop = useCallback(() => postJson("/control/stop"), [postJson]);
 
   const togglePreview = useCallback(async () => {
-    const next = !preview;
+    if (previewBusyRef.current) return;
+
+    const next = !previewRef.current;
+
+    previewBusyRef.current = true;
+    previewRef.current = next;
+    setPreview(next);
+
     setBusy(true);
     setError("");
     try {
       await api.post("/control/preview", null, { params: { enabled: next } });
-      setPreview(next);
       await fetchStatus();
     } catch (e) {
+      previewBusyRef.current = false;
+      previewRef.current = !next;
+      setPreview(!next);
+
       const msg = e?.response
-        ? `/control/preview HTTP ${e.response.status}${e.response.data ? `: ${String(e.response.data)}` : ""
-        }`
-        : e?.message || "PREVIEW failed";
+        ? `프리뷰 변경 실패 (HTTP ${e.response.status})${e.response.data ? `: ${String(e.response.data)}` : ""}`
+        : e?.message || "프리뷰 변경 실패";
       setError(msg);
     } finally {
       setBusy(false);
     }
-  }, [preview, fetchStatus]);
+  }, [fetchStatus]);
 
   const applyMode = useCallback(
     async (nextMode) => {
@@ -200,9 +487,8 @@ export default function Dashboard({
         await fetchStatus();
       } catch (e) {
         const msg = e?.response
-          ? `/control/mode HTTP ${e.response.status}${e.response.data ? `: ${String(e.response.data)}` : ""
-          }`
-          : e?.message || "MODE failed";
+          ? `모드 변경 실패 (HTTP ${e.response.status})${e.response.data ? `: ${String(e.response.data)}` : ""}`
+          : e?.message || "모드 변경 실패";
         setError(msg);
       } finally {
         setBusy(false);
@@ -211,22 +497,17 @@ export default function Dashboard({
     [fetchStatus]
   );
 
-  // ✅ Lock: "권장"은 setLock(nextLocked) 형태 (HUD에서 next를 넘겨줌)
   const setLock = useCallback(
     async (nextLocked) => {
       setBusy(true);
       setError("");
       try {
-        // 백엔드가 이 엔드포인트를 아직 안 만들면 404가 뜸 (지금 너 상황)
-        await api.post("/control/lock", null, {
-          params: { enabled: !!nextLocked },
-        });
+        await api.post("/control/lock", null, { params: { enabled: !!nextLocked } });
         await fetchStatus();
       } catch (e) {
         const msg = e?.response
-          ? `/control/lock HTTP ${e.response.status}${e.response.data ? `: ${String(e.response.data)}` : ""
-          }`
-          : e?.message || "LOCK failed";
+          ? `잠금 변경 실패 (HTTP ${e.response.status})${e.response.data ? `: ${String(e.response.data)}` : ""}`
+          : e?.message || "잠금 변경 실패";
         setError(msg);
       } finally {
         setBusy(false);
@@ -235,90 +516,60 @@ export default function Dashboard({
     [fetchStatus]
   );
 
-  // ✅ 대안: 토글 방식도 같이 제공(필요시 사용)
-  const lockToggle = useCallback(
-    () => setLock(!derived.locked),
-    [setLock, derived.locked]
-  );
-
-  // ✅ App(HUD)에 “액션” 전달
+  // HUD 액션 전달
   useEffect(() => {
-    onHudActions?.({
-      start,
-      stop,
-      applyMode,
-      togglePreview,
-      fetchStatus,
-      setLock,
-      lockToggle,
-    });
-  }, [
-    onHudActions,
-    start,
-    stop,
-    applyMode,
-    togglePreview,
-    fetchStatus,
-    setLock,
-    lockToggle,
-  ]);
+    onHudActions?.({ start, stop, applyMode, togglePreview, fetchStatus, setLock });
+  }, [onHudActions, start, stop, applyMode, togglePreview, fetchStatus, setLock]);
 
-  // ✅ App(HUD)에 “표시 데이터” 전달
+  // HUD 표시 데이터 전달
   useEffect(() => {
-    onHudState?.({
-      status, // raw 그대로
-      connected: derived.connected,
-      modeOptions: MODE_OPTIONS,
-    });
+    onHudState?.({ status, connected: derived.connected, modeOptions: MODE_OPTIONS });
   }, [onHudState, status, derived.connected]);
 
-  // 최초 폴링
-  useEffect(() => {
-    fetchStatus();
-    const t = setInterval(fetchStatus, POLL_MS);
-    return () => {
-      clearInterval(t);
-      if (abortRef.current) abortRef.current.abort();
-    };
-  }, [fetchStatus]);
+  const copyRaw = useCallback(async () => {
+    try {
+      const text = status ? JSON.stringify(status, null, 2) : "";
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 900);
+    } catch {
+      // noop
+    }
+  }, [status]);
+
+  const topOk = !error;
+
+  // Start/Stop 자동 비활성화
+  const canStart = !busy && !derived.enabled;
+  const canStop = !busy && !!derived.enabled;
 
   return (
-    <div className="min-h-screen bg-[#0b1220] text-slate-100">
+    <div className="min-h-screen relative overflow-hidden bg-[#070c16] text-slate-100">
+      {/* background: subtle glow + grid */}
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute -top-40 -left-40 h-[520px] w-[520px] rounded-full bg-sky-500/10 blur-3xl" />
+        <div className="absolute -bottom-52 -right-48 h-[560px] w-[560px] rounded-full bg-emerald-500/8 blur-3xl" />
+        <div className="absolute inset-0 opacity-[0.08] bg-[linear-gradient(to_right,rgba(255,255,255,.10)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,.10)_1px,transparent_1px)] bg-[size:60px_60px]" />
+      </div>
+
       {/* Topbar */}
-      <div className="sticky top-0 z-20 border-b border-white/10 bg-gradient-to-r from-[#0b4aa2]/40 via-[#0b1220]/80 to-[#0b1220]/80 backdrop-blur">
+      <div className="sticky top-0 z-20 border-b border-white/10 bg-gradient-to-r from-[#0b4aa2]/22 via-[#0b1220]/85 to-[#0b1220]/85 backdrop-blur">
         <div className="mx-auto max-w-[1200px] px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="h-9 w-9 rounded-xl bg-sky-500/20 ring-1 ring-sky-400/30 grid place-items-center">
-              <IconGrid />
+            <div className="h-9 w-9 rounded-2xl bg-gradient-to-b from-sky-400/20 to-sky-400/0 ring-1 ring-sky-400/20 grid place-items-center shadow-[0_0_24px_rgba(56,189,248,0.15)]">
+              <span className="text-sky-200 font-bold text-sm">G</span>
             </div>
-            <div>
-              <div className="text-base font-bold tracking-tight">
-                Gesture Agent Manager
-              </div>
-              <div className="text-xs text-slate-300/80">
-                REST polling {POLL_MS}ms ·{" "}
-                {lastUpdated
-                  ? `Last: ${lastUpdated.toLocaleTimeString()}`
-                  : "—"}
-              </div>
-            </div>
+            <div className="text-base font-bold tracking-tight">GestureOSManager</div>
           </div>
 
           <div className="flex items-center gap-2">
-            {error ? (
-              <Badge tone="red">ERROR</Badge>
-            ) : (
-              <Badge tone="green">OK</Badge>
-            )}
-            <Badge tone={derived.enabled ? "green" : "slate"}>
-              {derived.enabled ? "ENABLED" : "DISABLED"}
-            </Badge>
-            <Badge tone={derived.locked ? "yellow" : "slate"}>
-              {derived.locked ? "LOCKED" : "UNLOCKED"}
-            </Badge>
-            <Badge tone={preview ? "blue" : "slate"}>
-              {preview ? "PREVIEW" : "NO PREVIEW"}
-            </Badge>
+            {topOk ? <Badge tone="green">정상</Badge> : <Badge tone="red">오류</Badge>}
+            <Badge tone={derived.enabled ? "green" : "slate"}>{view.enabledText}</Badge>
+            <Badge tone={derived.connected ? "blue" : "red"}>{view.connText}</Badge>
+            <Badge tone={derived.locked ? "yellow" : "slate"}>{view.lockText}</Badge>
+            <Badge tone={preview ? "blue" : "slate"}>{preview ? "프리뷰" : "노프리뷰"}</Badge>
+            <Badge tone="slate">모드: {view.modeText}</Badge>
+
             <button
               type="button"
               onClick={onToggleHud}
@@ -328,334 +579,200 @@ export default function Dashboard({
                   ? "bg-sky-500/15 text-sky-200 ring-sky-400/25 hover:bg-sky-500/25"
                   : "bg-slate-800/70 text-slate-200 ring-white/10 hover:bg-white/10"
               )}
-              title="HUD On/Off"
+              title="HUD 켬/끔"
             >
-              <span
-                className={cn(
-                  "h-2 w-2 rounded-full",
-                  hudOn ? "bg-sky-300" : "bg-slate-500"
-                )}
-              />
-              HUD {hudOn ? "ON" : "OFF"}
+              <span className={cn("h-2 w-2 rounded-full", hudOn ? "bg-sky-300" : "bg-slate-500")} />
+              HUD {hudOn ? "켬" : "끔"}
             </button>
-            <div className="ml-2 h-9 w-9 rounded-full bg-slate-800/80 ring-1 ring-white/10 grid place-items-center text-xs font-semibold">
-              P
-            </div>
           </div>
         </div>
       </div>
 
-      {/* Main Layout */}
-      <div className="mx-auto max-w-[1200px] px-6 py-6 grid grid-cols-12 gap-5">
-        {/* Sidebar */}
-        <aside className="col-span-12 lg:col-span-3 space-y-5">
-          <div className="rounded-2xl bg-slate-950/35 ring-1 ring-white/10 overflow-hidden">
-            <div className="px-5 py-4 border-b border-white/10">
-              <div className="text-sm font-semibold">Navigation</div>
-              <div className="text-xs text-slate-400 mt-1">Manager Shell</div>
-            </div>
-
-            <nav className="p-2">
-              {[
-                { k: "dashboard", label: "Dashboard", active: true },
-                { k: "profiles", label: "Profiles", active: false },
-                { k: "settings", label: "Settings", active: false },
-              ].map((it) => (
-                <div
-                  key={it.k}
-                  className={cn(
-                    "flex items-center justify-between rounded-xl px-4 py-3 text-sm cursor-default",
-                    it.active
-                      ? "bg-sky-500/15 ring-1 ring-sky-400/20"
-                      : "hover:bg-white/5"
-                  )}
-                >
-                  <div className="flex items-center gap-3">
-                    <span
-                      className={cn(
-                        "h-2.5 w-2.5 rounded-full",
-                        it.active ? "bg-sky-300" : "bg-slate-600"
-                      )}
-                    />
-                    <span className="text-slate-100">{it.label}</span>
-                  </div>
-                  {it.active ? <Badge tone="blue">ACTIVE</Badge> : null}
-                </div>
-              ))}
-            </nav>
-
-            <div className="px-5 py-4 border-t border-white/10">
-              <div className="text-xs text-slate-400">
-                다음 단계에서 react-router로 실제 라우팅 붙이면 됨.
-              </div>
-            </div>
+      {/* Content */}
+      <div className="relative mx-auto max-w-[1200px] px-6 py-6 space-y-5">
+        {error ? (
+          <div className="rounded-2xl bg-rose-950/30 ring-1 ring-rose-900/60 px-5 py-4 text-sm text-rose-100 shadow-[0_18px_55px_rgba(244,63,94,0.08)]">
+            {error}
           </div>
+        ) : null}
 
-          {/* Quick Actions */}
-          <Card
-            title="Quick Actions"
-            right={
-              busy ? (
-                <Badge tone="blue">BUSY</Badge>
-              ) : (
-                <Badge tone="slate">READY</Badge>
-              )
-            }
-          >
-            <div className="flex flex-wrap gap-2">
-              <Btn tone="green" onClick={start} disabled={busy}>
-                Start
-              </Btn>
-              <Btn tone="red" onClick={stop} disabled={busy}>
-                Stop
-              </Btn>
-              <Btn tone="slate" onClick={fetchStatus} disabled={busy}>
-                Refresh
-              </Btn>
-              <Btn tone="blue" onClick={togglePreview} disabled={busy}>
-                {preview ? "Preview OFF" : "Preview ON"}
-              </Btn>
-
-              {/* ✅ Lock 토글(백엔드 구현 필요) */}
-              <Btn tone="slate" onClick={lockToggle} disabled={busy}>
-                Lock 토글
-              </Btn>
-            </div>
-
-            {error ? (
-              <div className="mt-3 text-xs text-rose-200 bg-rose-950/40 ring-1 ring-rose-900/60 rounded-xl p-3">
-                {error}
-              </div>
-            ) : null}
-
-            <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
-              <div className="rounded-xl bg-slate-950/50 ring-1 ring-white/10 p-3">
-                <div className="text-slate-400">fps</div>
-                <div className="mt-1 font-semibold">
-                  {formatNum(derived.fps, 1)}
-                </div>
-              </div>
-              <div className="rounded-xl bg-slate-950/50 ring-1 ring-white/10 p-3">
-                <div className="text-slate-400">gesture</div>
-                <div className="mt-1 font-semibold">{derived.gesture}</div>
-              </div>
-            </div>
-
-            <div className="mt-4 text-xs text-slate-400">
-              Start/Stop:{" "}
-              <span className="text-slate-200">POST /api/control/start</span>,{" "}
-              <span className="text-slate-200">POST /api/control/stop</span>
-            </div>
-          </Card>
-        </aside>
-
-        {/* Main Content */}
-        <main className="col-span-12 lg:col-span-9 space-y-5">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            <Card title="Mode">
-              <div className="flex items-center gap-3">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+          {/* 좌: 모드(위) + 퀵액션 */}
+          <div className="lg:col-span-5 space-y-5">
+            <Card title="모드" accent="blue">
+              <div className="space-y-3">
                 <select
                   value={mode}
                   onChange={(e) => applyMode(e.target.value)}
                   disabled={busy}
-                  className="w-full rounded-xl bg-slate-950/60 ring-1 ring-white/10 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-sky-500/50 disabled:opacity-50"
+                  className="w-full rounded-xl bg-slate-950/55 ring-1 ring-white/10 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-sky-500/45 disabled:opacity-50"
                 >
                   {MODE_OPTIONS.map((m) => (
                     <option key={m} value={m}>
-                      {m}
+                      {MODE_LABEL[m] ?? m}
                     </option>
                   ))}
                 </select>
-              </div>
 
-              <div className="mt-3 flex flex-wrap gap-2">
-                <Badge tone="slate">current: {derived.mode}</Badge>
-                <Badge tone="slate">type: {derived.type}</Badge>
-              </div>
-
-              <div className="mt-4 text-xs text-slate-400">
-                Mode 변경:{" "}
-                <span className="text-slate-200">POST /api/control/mode</span>{" "}
-                {"{ mode }"}
+                <div className="flex flex-wrap gap-2">
+                  {MODE_OPTIONS.map((m) => {
+                    const active = (derived.mode ?? mode) === m;
+                    return (
+                      <button
+                        key={m}
+                        onClick={() => applyMode(m)}
+                        disabled={busy}
+                        className={cn(
+                          "px-3 py-1 rounded-full text-xs font-semibold ring-1 transition",
+                          active
+                            ? "bg-sky-500/18 text-sky-200 ring-sky-400/25 shadow-[0_0_20px_rgba(56,189,248,0.12)]"
+                            : "bg-slate-900/35 text-slate-200 ring-white/10 hover:bg-white/5",
+                          busy && "opacity-50 cursor-not-allowed"
+                        )}
+                      >
+                        {MODE_LABEL[m] ?? m}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </Card>
 
             <Card
-              title="Connection"
+              title="빠른 동작"
+              accent="green"
+              right={busy ? <Badge tone="blue">처리 중</Badge> : <Badge tone="slate">대기</Badge>}
+            >
+              <div className="grid grid-cols-2 gap-3">
+                <ActionTile
+                  tone="green"
+                  icon={<IconPlay />}
+                  title="시작"
+                  desc="Start"
+                  onClick={start}
+                  disabled={!canStart}
+                />
+                <ActionTile
+                  tone="red"
+                  icon={<IconStop />}
+                  title="정지"
+                  desc="Stop"
+                  onClick={stop}
+                  disabled={!canStop}
+                />
+              </div>
+
+              <div className="mt-4 rounded-2xl bg-gradient-to-b from-white/6 to-white/0 ring-1 ring-white/10 p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <span className="text-slate-200">
+                      <IconEye />
+                    </span>
+                    <div>
+                      <div className="text-sm font-semibold">프리뷰</div>
+                      <div className="text-xs text-slate-400">카메라/랜드마크 미리보기</div>
+                    </div>
+                  </div>
+                  <Switch checked={preview} onChange={() => togglePreview()} disabled={busy} />
+                </div>
+
+                <div className="h-px bg-white/10" />
+
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <span className="text-slate-200">
+                      <IconLock />
+                    </span>
+                    <div>
+                      <div className="text-sm font-semibold">잠금</div>
+                      <div className="text-xs text-slate-400">제스처 입력 잠금/해제</div>
+                    </div>
+                  </div>
+                  <Switch checked={derived.locked} onChange={(v) => setLock(!!v)} disabled={busy} />
+                </div>
+              </div>
+
+              <Btn
+                tone="slate"
+                onClick={fetchStatus}
+                disabled={busy}
+                className="w-full mt-4 flex items-center justify-center gap-2 rounded-2xl py-3 bg-gradient-to-b from-white/8 to-white/0"
+              >
+                <IconRefresh spinning={busy} />
+                새로고침
+              </Btn>
+
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                <StatTile label="FPS" value={formatNum(derived.fps, 1)} tone="blue" />
+                <StatTile label="현재 제스처" value={derived.gesture} tone="slate" />
+              </div>
+            </Card>
+          </div>
+
+          {/* 우: 상태 + Debug(영어) */}
+          <div className="lg:col-span-7 space-y-5">
+            <Card
+              title="상태"
+              accent="blue"
+              right={loading ? <Badge tone="yellow">불러오는 중</Badge> : <Badge tone="slate">라이브</Badge>}
+            >
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                <StatTile label="연결" value={view.connText} tone={derived.connected ? "blue" : "red"} />
+                <StatTile label="실행" value={view.enabledText} tone={derived.enabled ? "green" : "slate"} />
+                <StatTile label="잠금" value={view.lockText} tone={derived.locked ? "yellow" : "slate"} />
+
+                <StatTile label="이동" value={view.moveText} tone={derived.canMove ? "green" : "slate"} />
+                <StatTile label="클릭" value={view.clickText} tone={derived.canClick ? "green" : "slate"} />
+                <StatTile label="스크롤" value={view.scrollText} tone={derived.scrollActive ? "blue" : "slate"} />
+
+                <StatTile label="트래킹" value={view.trackingText} tone={derived.tracking ? "green" : "slate"} />
+                <StatTile label="포인터 X" value={derived.pointerX === null ? "-" : formatNum(derived.pointerX, 3)} tone="slate" />
+                <StatTile label="포인터 Y" value={derived.pointerY === null ? "-" : formatNum(derived.pointerY, 3)} tone="slate" />
+              </div>
+
+              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+                <PointerMiniMap x={derived.pointerX} y={derived.pointerY} />
+                <div className="rounded-xl bg-slate-950/45 ring-1 ring-white/10 p-3">
+                  <div className="text-xs text-slate-400">요약</div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <Badge tone="slate">제스처: {derived.gesture}</Badge>
+                    <Badge tone={preview ? "blue" : "slate"}>{preview ? "Preview ON" : "Preview OFF"}</Badge>
+                    <Badge tone="slate">Mode: {view.modeText}</Badge>
+                  </div>
+                </div>
+              </div>
+            </Card>
+
+            <Card
+              title="Debug"
+              accent="slate"
               right={
-                loading ? (
-                  <Badge tone="yellow">LOADING</Badge>
-                ) : (
-                  <Badge tone="slate">LIVE</Badge>
-                )
+                <div className="flex items-center gap-2">
+                  <Btn tone="slate" className="px-3 py-1.5 text-xs rounded-full" onClick={copyRaw} disabled={!status}>
+                    {copied ? "Copied" : "Copy JSON"}
+                  </Btn>
+                  <Btn
+                    tone="slate"
+                    className="px-3 py-1.5 text-xs rounded-full"
+                    onClick={() => setShowRaw((v) => !v)}
+                    disabled={loading}
+                  >
+                    {showRaw ? "Hide Raw" : "Show Raw"}
+                  </Btn>
+                </div>
               }
             >
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div className="rounded-xl bg-slate-950/50 ring-1 ring-white/10 p-3">
-                  <div className="text-xs text-slate-400">connected</div>
-                  <div className="mt-1 font-semibold">
-                    {String(derived.connected)}
-                  </div>
-                </div>
-                <div className="rounded-xl bg-slate-950/50 ring-1 ring-white/10 p-3">
-                  <div className="text-xs text-slate-400">fps</div>
-                  <div className="mt-1 font-semibold">
-                    {formatNum(derived.fps, 1)}
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-4 flex flex-wrap gap-2">
-                <Badge tone={error ? "red" : "green"}>
-                  {error ? "DEGRADED" : "HEALTHY"}
-                </Badge>
-                <Badge tone={derived.scrollActive ? "blue" : "slate"}>
-                  scrollActive: {String(derived.scrollActive)}
-                </Badge>
-              </div>
-
-              <div className="mt-4 text-xs text-slate-400">
-                connected/fps는 백엔드 필드명에 따라 표시(없으면 기본값).
-              </div>
-            </Card>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            <Card title="Agent State">
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div className="rounded-xl bg-slate-950/50 ring-1 ring-white/10 p-3">
-                  <div className="text-xs text-slate-400">enabled</div>
-                  <div className="mt-1 font-semibold">
-                    {String(derived.enabled)}
-                  </div>
-                </div>
-                <div className="rounded-xl bg-slate-950/50 ring-1 ring-white/10 p-3">
-                  <div className="text-xs text-slate-400">locked</div>
-                  <div className="mt-1 font-semibold">
-                    {String(derived.locked)}
-                  </div>
-                </div>
-                <div className="rounded-xl bg-slate-950/50 ring-1 ring-white/10 p-3">
-                  <div className="text-xs text-slate-400">canMove</div>
-                  <div className="mt-1 font-semibold">
-                    {derived.canMove === null ? "-" : String(derived.canMove)}
-                  </div>
-                </div>
-                <div className="rounded-xl bg-slate-950/50 ring-1 ring-white/10 p-3">
-                  <div className="text-xs text-slate-400">canClick</div>
-                  <div className="mt-1 font-semibold">
-                    {derived.canClick === null ? "-" : String(derived.canClick)}
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-4 flex flex-wrap gap-2">
-                <Badge tone="slate">gesture: {derived.gesture}</Badge>
-                <Badge tone={derived.enabled ? "green" : "slate"}>
-                  enabled: {String(derived.enabled)}
-                </Badge>
-                <Badge tone={derived.locked ? "yellow" : "slate"}>
-                  locked: {String(derived.locked)}
-                </Badge>
-              </div>
-            </Card>
-
-            <Card title="Containers (Docker-style list)">
-              <div className="rounded-xl bg-slate-950/50 ring-1 ring-white/10 overflow-hidden">
-                <div className="grid grid-cols-12 px-4 py-3 text-xs text-slate-300 border-b border-white/10">
-                  <div className="col-span-6">NAME</div>
-                  <div className="col-span-3">STATUS</div>
-                  <div className="col-span-3 text-right">METRIC</div>
-                </div>
-
-                <div className="grid grid-cols-12 px-4 py-3 text-sm items-center">
-                  <div className="col-span-6 flex items-center gap-3">
-                    <span
-                      className={cn(
-                        "h-2.5 w-2.5 rounded-full",
-                        derived.enabled ? "bg-emerald-400" : "bg-slate-600"
-                      )}
-                    />
-                    <div>
-                      <div className="font-semibold">gesture-agent</div>
-                      <div className="text-xs text-slate-400">
-                        mode: {derived.mode}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="col-span-3 flex items-center gap-2">
-                    <Badge tone={derived.enabled ? "green" : "slate"}>
-                      {derived.enabled ? "running" : "stopped"}
-                    </Badge>
-                    <Badge tone={derived.locked ? "yellow" : "slate"}>
-                      {derived.locked ? "locked" : "unlocked"}
-                    </Badge>
-                  </div>
-
-                  <div className="col-span-3 text-right">
-                    <div className="text-xs text-slate-400">fps</div>
-                    <div className="font-semibold">
-                      {formatNum(derived.fps, 1)}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-12 px-4 py-3 text-sm items-center border-t border-white/10">
-                  <div className="col-span-6 flex items-center gap-3">
-                    <span
-                      className={cn(
-                        "h-2.5 w-2.5 rounded-full",
-                        derived.scrollActive ? "bg-sky-300" : "bg-slate-600"
-                      )}
-                    />
-                    <div>
-                      <div className="font-semibold">scroll-module</div>
-                      <div className="text-xs text-slate-400">
-                        gesture: FIST (assist hand)
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="col-span-3">
-                    <Badge tone={derived.scrollActive ? "blue" : "slate"}>
-                      {derived.scrollActive ? "active" : "idle"}
-                    </Badge>
-                  </div>
-
-                  <div className="col-span-3 text-right">
-                    <div className="text-xs text-slate-400">gesture</div>
-                    <div className="font-semibold">{derived.gesture}</div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-4 text-xs text-slate-400">
-                발표용 “도커 리스트 느낌” 더미 UI. 실제 컨테이너가 아니라 상태
-                기반 표시.
-              </div>
-            </Card>
-          </div>
-
-          <Card
-            title="Raw Status JSON"
-            right={
-              loading ? (
-                <Badge tone="yellow">LOADING</Badge>
+              {showRaw ? (
+                <pre className="text-xs leading-relaxed overflow-auto max-h-96 rounded-xl bg-slate-950/50 ring-1 ring-white/10 p-4">
+                  {status ? JSON.stringify(status, null, 2) : loading ? "Loading..." : "No data"}
+                </pre>
               ) : (
-                <Badge tone="slate">LIVE</Badge>
-              )
-            }
-          >
-            <pre className="text-xs leading-relaxed overflow-auto max-h-80 rounded-xl bg-slate-950/50 ring-1 ring-white/10 p-4">
-              {status
-                ? JSON.stringify(status, null, 2)
-                : loading
-                  ? "Loading..."
-                  : "No data"}
-            </pre>
-          </Card>
-        </main>
+                // 안내 문구 제거 요청 반영: 내용은 비우되, 카드가 죽어 보이지 않게 높이만 유지
+                <div className="h-2" />
+              )}
+            </Card>
+          </div>
+        </div>
       </div>
     </div>
   );

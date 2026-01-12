@@ -95,8 +95,13 @@ public class ControlController {
   }
 
   @PostMapping("/preview")
-  public ResponseEntity<?> preview(@RequestParam boolean on) {
-    boolean ok = controlService.setPreview(on);
-    return ResponseEntity.ok(Map.of("ok", ok, "on", on));
+  public ResponseEntity<?> preview(@RequestParam(name="enabled") boolean enabled) {
+	  System.out.println("[SPRING] /preview enabled=" + enabled);
+    boolean ok = controlService.setPreview(enabled);
+    if (ok) {
+      AgentStatus curr = statusService.getSnapshot();
+      statusService.update(curr.toBuilder().preview(enabled).build());
+    }
+    return ResponseEntity.ok(Map.of("ok", ok, "enabled", enabled));
   }
 }

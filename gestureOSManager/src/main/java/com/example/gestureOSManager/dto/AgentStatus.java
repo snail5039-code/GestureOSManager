@@ -43,6 +43,10 @@ public class AgentStatus {
     @JsonAlias({"isTracking"})
     private Boolean tracking;  // true/false
     
+    // ✅ 추가
+    @Builder.Default
+    private boolean preview = false;
+    
     @Builder.Default
     private boolean scrollActive = false;
     
