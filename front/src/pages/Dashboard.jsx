@@ -4,13 +4,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 const POLL_MS = 500;
 
 // 서버에 보내는 mode 값(영문)은 그대로, UI 표시는 한글로
-const MODE_OPTIONS = ["MOUSE", "KEYBOARD", "PRESENTATION", "DRAW", "RUSH", "DEFAULT"];
+const MODE_OPTIONS = ["MOUSE", "KEYBOARD", "PRESENTATION", "DRAW", "RUSH", "VKEY", "DEFAULT"];
 const MODE_LABEL = {
   MOUSE: "마우스",
   KEYBOARD: "키보드",
   PRESENTATION: "프레젠테이션",
   DRAW: "그리기",
   RUSH: "러쉬",
+  VKEY: "가상 키보드",
   DEFAULT: "기본",
 };
 

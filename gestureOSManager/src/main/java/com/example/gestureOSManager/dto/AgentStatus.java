@@ -43,6 +43,14 @@ public class AgentStatus {
     @JsonAlias({"isTracking"})
     private Boolean tracking;  // true/false
     
+    
+    // ===== VKEY AirTap 이벤트 =====
+    private Integer tapSeq;     // 증가하는 탭 시퀀스
+    private Double tapX;        // 0~1 정규화
+    private Double tapY;        // 0~1 정규화
+    private Integer tapFinger;  // 탭을 발생시킨 손가락 tip index(예: 4/8/12/16/20)
+    private Double tapTs;       // epoch seconds(디버그용)
+
     // ✅ 추가
     @Builder.Default
     private boolean preview = false;

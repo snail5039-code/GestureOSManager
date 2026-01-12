@@ -2,7 +2,12 @@ function cn(...xs) {
   return xs.filter(Boolean).join(" ");
 }
 
-export default function TitleBar({ hudOn, onToggleHud, screen, onChangeScreen }) {
+export default function TitleBar({
+  hudOn,
+  onToggleHud,
+  screen,
+  onChangeScreen,
+}) {
   const onMin = () => window.managerWin?.minimize?.();
   const onMax = () => window.managerWin?.toggleMaximize?.();
   const onClose = () => window.managerWin?.close?.();
@@ -50,6 +55,18 @@ export default function TitleBar({ hudOn, onToggleHud, screen, onChangeScreen })
           >
             Rush
           </button>
+          <button
+            type="button"
+            onClick={() => onChangeScreen?.("vkey")}
+            className={cn(
+              "px-3 py-1 text-xs rounded-md transition",
+              screen === "vkey"
+                ? "bg-white/20 text-white"
+                : "text-white/70 hover:bg-white/10 hover:text-white"
+            )}
+          >
+            VKey
+          </button>
         </div>
 
         {/* ✅ HUD 토글 (원하면 TitleBar에도 둠) */}
@@ -70,7 +87,10 @@ export default function TitleBar({ hudOn, onToggleHud, screen, onChangeScreen })
       </div>
 
       {/* RIGHT: Window Controls (no-drag) */}
-      <div className="flex items-center gap-2" style={{ WebkitAppRegion: "no-drag" }}>
+      <div
+        className="flex items-center gap-2"
+        style={{ WebkitAppRegion: "no-drag" }}
+      >
         <button
           className="w-10 h-8 rounded-md hover:bg-white/10 text-slate-200"
           onClick={onMin}
