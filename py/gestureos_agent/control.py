@@ -1,6 +1,9 @@
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
+import os
+import ctypes
+
 import pyautogui
 
 from .mathutil import clamp01
@@ -48,9 +51,29 @@ class ControlMapper:
             return
         self.last_move_ts = now_ts
 
-        sx, sy = pyautogui.size()
-        x = int(norm_x * sx)
-        y = int(norm_y * sy)
+        # ---- virtual screen (multi-monitor) 기반 좌표 계산 ----
+        if os.name == "nt":
+            user32 = ctypes.windll.user32
+            SM_XVIRTUALSCREEN  = 76
+            SM_YVIRTUALSCREEN  = 77
+            SM_CXVIRTUALSCREEN = 78
+            SM_CYVIRTUALSCREEN = 79
+
+            vx = user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
+            vy = user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
+            vw = user32.GetSystemMetrics(SM_CXVIRTUALSCREEN)
+            vh = user32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
+
+            x = int(vx + norm_x * max(1, vw))
+            y = int(vy + norm_y * max(1, vh))
+
+            # clamp
+            x = max(vx, min(vx + vw - 1, x))
+            y = max(vy, min(vy + vh - 1, y))
+        else:
+            sx, sy = pyautogui.size()
+            x = int(norm_x * sx)
+            y = int(norm_y * sy)
 
         cur = pyautogui.position()
         if abs(x - cur.x) < self.deadzone_px and abs(y - cur.y) < self.deadzone_px:

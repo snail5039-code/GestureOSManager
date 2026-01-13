@@ -2,6 +2,7 @@ import sys
 import threading
 import time
 import math
+import ctypes
 
 from gestureos_agent.config import parse_cli
 from gestureos_agent.hud_overlay import OverlayHUD
@@ -9,6 +10,20 @@ from gestureos_agent.hud_overlay import OverlayHUD
 from gestureos_agent.agents.hands_agent import HandsAgent
 from gestureos_agent.agents.color_rush_agent import ColorRushAgent
 
+
+
+
+def _set_dpi_awareness():
+    # Windows DPI scaling (125%/150%)에서도 좌표계 일치시키기
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # Per-monitor DPI aware
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()   # System DPI aware (fallback)
+        except Exception:
+            pass
+
+_set_dpi_awareness()
 
 class CfgProxy:
     """frozen dataclass cfg에도 hud를 '추가로' 제공하기 위한 래퍼"""
@@ -56,9 +71,6 @@ def main():
     no_hud = ("--no-hud" in sys.argv)
     hud = OverlayHUD(enable=(not no_hud))
     hud.start()
-
-    # ✅ 더미 테스트(확인 끝나면 지워도 됨)
-    threading.Thread(target=_hud_test, args=(hud,), daemon=True).start()
 
     try:
         if isinstance(cfg, dict):

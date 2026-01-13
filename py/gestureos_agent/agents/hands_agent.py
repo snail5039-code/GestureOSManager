@@ -2,6 +2,7 @@ import json
 import os
 import time
 os.environ.setdefault("GLOG_minloglevel", "2")
+import ctypes
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 
@@ -13,6 +14,44 @@ from ..timeutil import now
 from ..gestures import palm_center, classify_gesture
 from ..control import ControlMapper
 from ..ws_client import WSClient
+
+# =============================================================================
+# OS cursor -> virtual screen normalized (0~1) for HUD reticle alignment
+# =============================================================================
+class _POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+def _get_os_cursor_norm01():
+    """Return (x01,y01) normalized to Windows virtual screen (multi-monitor).
+    Returns (None,None) if not available."""
+    if os.name != "nt":
+        return (None, None)
+    try:
+        user32 = ctypes.windll.user32
+        SM_XVIRTUALSCREEN  = 76
+        SM_YVIRTUALSCREEN  = 77
+        SM_CXVIRTUALSCREEN = 78
+        SM_CYVIRTUALSCREEN = 79
+
+        vx = user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
+        vy = user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
+        vw = user32.GetSystemMetrics(SM_CXVIRTUALSCREEN)
+        vh = user32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
+
+        pt = _POINT()
+        if not user32.GetCursorPos(ctypes.byref(pt)):
+            return (None, None)
+
+        x01 = (pt.x - vx) / max(1, vw)
+        y01 = (pt.y - vy) / max(1, vh)
+
+        # clamp
+        x01 = 0.0 if x01 < 0.0 else (1.0 if x01 > 1.0 else float(x01))
+        y01 = 0.0 if y01 < 0.0 else (1.0 if y01 > 1.0 else float(y01))
+        return (x01, y01)
+    except Exception:
+        return (None, None)
+
 
 from ..modes.mouse import MouseClickDrag, MouseRightClick, MouseScroll, MouseLockToggle
 from ..modes.keyboard import KeyboardHandler
@@ -544,14 +583,10 @@ class HandsAgent:
         payload["connected"] = bool(self.ws.connected)
         payload["tracking"] = bool(got_cursor)
 
-        if got_cursor:
-            payload["pointerX"] = float(cursor_cx)
-            payload["pointerY"] = float(cursor_cy)
-            payload["isTracking"] = True
-        else:
-            payload["pointerX"] = None
-            payload["pointerY"] = None
-            payload["isTracking"] = False
+        # pointerX/Y: decide once at the end (mode-aware) to keep HUD reticle aligned
+        payload["pointerX"] = None
+        payload["pointerY"] = None
+        payload["isTracking"] = False        
 
         if self.vkey.last_tap is not None:
             payload["tapX"] = float(self.vkey.last_tap["x"])
@@ -576,55 +611,41 @@ class HandsAgent:
         else:
             payload["rightTracking"] = False
 
-        # fallback pointer  (HUD/매니저 공통)
-        if rush_right is not None:
-            payload["pointerX"] = float(rush_right["cx"])
-            payload["pointerY"] = float(rush_right["cy"])
-            payload["isTracking"] = True
-
-        elif rush_left is not None:
-            payload["pointerX"] = float(rush_left["cx"])
-            payload["pointerY"] = float(rush_left["cy"])
-            payload["isTracking"] = True
+        # pointer (HUD/매니저 공통): "한 번만" 결정해서 HUD 레티클과 실제 커서가 일치하게 함
+        if mode_u == "RUSH":
+            # Rush는 게임용 손 포인터를 그대로 사용
+            if rush_right is not None:
+                payload["pointerX"] = float(rush_right["cx"])
+                payload["pointerY"] = float(rush_right["cy"])
+                payload["isTracking"] = True
+            elif rush_left is not None:
+                payload["pointerX"] = float(rush_left["cx"])
+                payload["pointerY"] = float(rush_left["cy"])
+                payload["isTracking"] = True
 
         elif mode_u == "VKEY" and cursor_lm is not None:
+            # VKEY는 손가락 끝(검지 tip) 기준
             payload["pointerX"] = float(cursor_lm[8][0])
             payload["pointerY"] = float(cursor_lm[8][1])
             payload["isTracking"] = True
 
-        # ✅ RUSH/VKEY 아니어도 손이 잡히면 HUD 포인터 뜨게 (MOUSE/DRAW/PPT도 커서 보임)
-        elif cursor_lm is not None:
-            cx, cy = palm_center(cursor_lm)
-            payload["pointerX"] = float(cx)
-            payload["pointerY"] = float(cy)
-            payload["isTracking"] = True
+        elif got_cursor:
+            # MOUSE/DRAW/PPT/KEYBOARD 등: OS 커서 위치를 virtual screen 기준 0~1로 보내서 1:1 정렬
+            x01, y01 = _get_os_cursor_norm01()
+            if x01 is not None and y01 is not None:
+                payload["pointerX"] = float(x01)
+                payload["pointerY"] = float(y01)
+                payload["isTracking"] = True
+            else:
+                # 안전 fallback
+                payload["pointerX"] = float(cursor_cx)
+                payload["pointerY"] = float(cursor_cy)
+                payload["isTracking"] = True
 
         else:
             payload["pointerX"] = None
             payload["pointerY"] = None
-            payload["isTracking"] = False
-
-        # ---- HUD overlay push (local) ----
-        hud = getattr(self.cfg, "hud", None)
-        if hud:
-            hud_payload = dict(payload)
-            hud_payload["connected"] = bool(self.ws.connected)
-            hud_payload["tracking"] = bool(payload.get("isTracking", False))  # HUD 호환
-            hud.push(hud_payload)
-
-        # ---- HUD overlay push (local) ----
-        hud = getattr(self.cfg, "hud", None)
-        if hud:
-            hud.push({
-                "mode": str(self.mode).upper(),
-                "gesture": str(cursor_gesture),
-                "locked": bool(self.locked),
-                "fps": float(fps),
-                "connected": bool(self.ws.connected),
-                "tracking": bool(got_cursor),
-                "pointerX": float(cursor_cx) if got_cursor else None,
-                "pointerY": float(cursor_cy) if got_cursor else None,
-            })
+            payload["isTracking"] = False        
 
         # ---- WS send (server) ----
         if not self.cfg.no_ws:
