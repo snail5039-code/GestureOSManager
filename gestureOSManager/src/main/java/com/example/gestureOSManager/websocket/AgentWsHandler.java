@@ -89,7 +89,7 @@ public class AgentWsHandler extends TextWebSocketHandler {
         // 기존 NEXT_MODE 로직 유지
         if ("NEXT_MODE".equals(name)) {
 
-          AgentStatus st = statusService.get();
+          AgentStatus st = statusService.getSnapshot();
           // (선택) 서버 기준 enabled가 false면 무시하고 싶으면:
           // if (st == null || !st.isEnabled()) return;
 

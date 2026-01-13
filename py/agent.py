@@ -1,5 +1,7 @@
 """
 GestureOS Agent (Mouse + Keyboard + RUSH + VKEY/OSK) - SINGLE FILE (agent.py)
+"""
+
 import json
 import time
 import threading
@@ -180,6 +182,49 @@ def _draw_reset():
     _draw_cut_fired = False
 
 
+# ============================================================
+# PRESENTATION mode (slide control)
+# ============================================================
+PPT_STABLE_FRAMES = 3
+PPT_REPEAT_SEC = 0.18
+
+PPT_HOLD_SEC = {
+    "NEXT": 0.10,
+    "PREV": 0.10,
+    "START": 0.16,
+    "START_HERE": 0.16,
+    "END": 0.14,
+    "BLACK": 0.12,
+}
+
+PPT_COOLDOWN_SEC = {
+    "START": 0.90,
+    "START_HERE": 0.90,
+    "END": 0.55,
+    "BLACK": 0.40,
+}
+
+_ppt_last_token = None
+_ppt_streak = 0
+_ppt_last_repeat_ts = 0.0
+_ppt_last_fire_map = {"START": 0.0, "START_HERE": 0.0, "END": 0.0, "BLACK": 0.0}
+_ppt_token_start_ts = 0.0
+_ppt_armed = True
+_ppt_mod_until = 0.0
+
+
+def _ppt_reset():
+    """PRESENTATION 모드 내부 상태 리셋."""
+    global _ppt_last_token, _ppt_streak, _ppt_last_repeat_ts, _ppt_token_start_ts, _ppt_armed, _ppt_last_fire_map
+    _ppt_last_token = None
+    _ppt_streak = 0
+    _ppt_last_repeat_ts = 0.0
+    _ppt_token_start_ts = 0.0
+    _ppt_armed = True
+    if isinstance(_ppt_last_fire_map, dict):
+        for k in list(_ppt_last_fire_map.keys()):
+            _ppt_last_fire_map[k] = 0.0
+
 def handle_draw_mode(cursor_gesture: str, can_inject: bool):
     """DRAW 모드: PINCH_INDEX 유지하면 좌클릭 드래그로 그리기"""
     global _draw_pinch_start_ts, _draw_down
@@ -328,7 +373,11 @@ elif START_VKEY:
     mode = "VKEY"
 
 locked = True
-if mode in ("KEYBOARD", "RUSH", "VKEY"):
+# 기본 안전장치: enabled가 아니라면 잠금 상태로 시작
+# --start-enabled 또는 Manager ENABLE 명령을 쓰면 바로 unlock
+if enabled:
+    locked = False
+if mode in ("KEYBOARD", "PRESENTATION", "DRAW", "RUSH", "VKEY"):
     locked = False  # 실사용 편의: 이 모드 진입 시 unlock
 
 # ============================================================
@@ -371,6 +420,41 @@ _kb_token_start_ts = 0.0
 _kb_armed = True
 
 # ============================================================
+
+# ============================================================
+# PRESENTATION mode (PowerPoint / Google Slides)
+# - 기본: V_SIGN = Next, FIST = Prev, PINCH_INDEX = Click
+# - FN(보조손 PINCH_INDEX 유지) 레이어:
+#     V_SIGN = Start(F5), FIST = End(ESC), OPEN_PALM = Black(B), PINCH_INDEX = White(W)
+# ============================================================
+PPT_STABLE_FRAMES = 3
+PPT_REPEAT_SEC = 0.18  # NEXT/PREV 연타 속도
+
+PPT_HOLD_SEC = {
+    "NEXT": 0.10,
+    "PREV": 0.10,
+    "CLICK": 0.10,
+    "START": 0.22,
+    "END": 0.22,
+    "BLACK": 0.18,
+    "WHITE": 0.18,
+}
+
+PPT_COOLDOWN_SEC = {
+    "CLICK": 0.25,
+    "START": 0.60,
+    "END": 0.60,
+    "BLACK": 0.45,
+    "WHITE": 0.45,
+}
+
+_ppt_last_token = None
+_ppt_streak = 0
+_ppt_last_repeat_ts = 0.0
+_ppt_last_fire_map = {"CLICK": 0.0, "START": 0.0, "END": 0.0, "BLACK": 0.0, "WHITE": 0.0}
+_ppt_token_start_ts = 0.0
+_ppt_armed = True
+
 # VKEY mode (OSK 클릭 타이핑) - Multi-finger AirTap
 # ============================================================
 VKEY_TIPS = [8, 12, 16, 20, 4]  # 우선순위: 검지 > 중지 > 약지 > 새끼 > 엄지
@@ -639,7 +723,7 @@ def pick_lr_by_screen_x(hands_list):
 def is_v_sign_switch(lm):
     if not is_two_finger(lm):
         return False
-    return dist(lm[8], lm[12]) > 0.045
+    return dist_xy(lm[8], lm[12]) > 0.045
 
 
 # ============================================================
@@ -671,8 +755,13 @@ def _fire_token(token):
 # Mode apply (WS/gesture 공통)
 # ============================================================
 def apply_set_mode(new_mode: str):
+    """
+    모드 전환을 한 곳에서 처리.
+    - WS 명령(SET_MODE)과 로컬 키 입력 모두 이 함수를 사용.
+    """
     global mode, locked
     global _dragging, _pinch_start_ts, _pending_single_click
+    global _ema_x, _ema_y
 
     nm = str(new_mode).upper()
     if nm == "PPT":
@@ -680,15 +769,20 @@ def apply_set_mode(new_mode: str):
     if nm == "PAINT":
         nm = "DRAW"
 
-    if nm not in ("MOUSE", "KEYBOARD", "PRESENTATION", "DRAW"):
+    allowed = {"MOUSE", "KEYBOARD", "PRESENTATION", "DRAW", "RUSH", "VKEY"}
+    if nm not in allowed:
         print("[PY] apply_set_mode ignored:", new_mode)
         return
 
-    # leaving DRAW: release draw drag
+    # 공통: 커서 EMA 초기화
+    _ema_x = None
+    _ema_y = None
+
+    # leaving DRAW: draw drag 해제
     if str(mode).upper() == "DRAW" and nm != "DRAW":
         _draw_reset()
 
-    # leaving mouse: release drag/click state
+    # leaving MOUSE: 드래그/클릭 상태 해제
     if nm != "MOUSE":
         if _dragging:
             try:
@@ -699,26 +793,18 @@ def apply_set_mode(new_mode: str):
         _pinch_start_ts = None
         _pending_single_click = False
 
-    # mode-specific resets
-    if nm == "KEYBOARD":
+    # entering: 모드별 기본 잠금 정책
+    if nm in ("KEYBOARD", "PRESENTATION", "DRAW", "RUSH", "VKEY"):
         locked = False
-        _kb_reset()
-        _ppt_reset()
-        _draw_reset()
-    elif nm == "PRESENTATION":
-        locked = False
-        _kb_reset()
-        _ppt_reset()
-        _draw_reset()
-    elif nm == "DRAW":
-        locked = False
-        _kb_reset()
-        _ppt_reset()
-        _draw_reset()
-    else:  # MOUSE
-        _kb_reset()
-        _ppt_reset()
-        _draw_reset()
+
+    # 모드별 상태 리셋
+    _kb_reset()
+    _ppt_reset()
+    _draw_reset()
+    _reset_vkey_states()
+
+    if nm == "VKEY":
+        open_windows_osk()
 
     mode = nm
     print("[PY] apply_set_mode ->", mode)
@@ -1018,108 +1104,6 @@ def handle_scroll_other_hand(scroll_active, scroll_cy, can_inject):
         _scroll_anchor_y = scroll_cy
 
 
-# ============================================================
-# Keyboard mode
-# ============================================================
-def _kb_reset():
-    global _kb_last_token, _kb_streak, _kb_last_repeat_ts, _kb_token_start_ts, _kb_armed
-    global _mod_until
-    _kb_last_token = None
-    _kb_streak = 0
-    _kb_last_repeat_ts = 0.0
-    _kb_token_start_ts = 0.0
-    _kb_armed = True
-    _mod_until = 0.0
-    _kb_last_fire_map["SPACE"] = 0.0
-    _kb_last_fire_map["ENTER"] = 0.0
-    _kb_last_fire_map["ESC"] = 0.0
-
-def _fire_token(token):
-    # NO_INJECT면 실제 키 주입 금지
-    if NO_INJECT:
-        return
-
-    if token == "LEFT":
-        pyautogui.press("left")
-    elif token == "RIGHT":
-        pyautogui.press("right")
-    elif token == "UP":
-        pyautogui.press("up")
-    elif token == "DOWN":
-        pyautogui.press("down")
-    elif token == "BACKSPACE":
-        pyautogui.press("backspace")
-    elif token == "SPACE":
-        pyautogui.press("space")
-    elif token == "ENTER":
-        pyautogui.press("enter")
-    elif token == "ESC":
-        pyautogui.press("esc")
-
-    # END (Esc): both PINCH_INDEX hold (최우선)
-    end_combo = got_other and (cursor_gesture == "PINCH_INDEX") and (other_gesture == "PINCH_INDEX")
-    if end_combo:
-        if not _ppt_end_fired:
-            if _ppt_end_hold is None:
-                _ppt_end_hold = t
-            elif (t - _ppt_end_hold) >= PPT_END_HOLD_SEC and t >= _ppt_last_end_ts + PPT_END_COOLDOWN_SEC:
-                pyautogui.press("esc")
-                _ppt_last_end_ts = t
-                _ppt_end_fired = True
-        return
-    else:
-        _ppt_end_hold = None
-        _ppt_end_fired = False
-
-    # START (F5): both OPEN_PALM hold
-    start_combo = got_other and (cursor_gesture == "OPEN_PALM") and (other_gesture == "OPEN_PALM")
-    if start_combo:
-        if not _ppt_start_fired:
-            if _ppt_start_hold is None:
-                _ppt_start_hold = t
-            elif (t - _ppt_start_hold) >= PPT_START_HOLD_SEC and t >= _ppt_last_start_ts + PPT_START_COOLDOWN_SEC:
-                pyautogui.press("f5")
-                _ppt_last_start_ts = t
-                _ppt_start_fired = True
-        return
-    else:
-        _ppt_start_hold = None
-        _ppt_start_fired = False
-
-    # NEXT (Right): PINCH_INDEX hold
-    if cursor_gesture == "PINCH_INDEX":
-        if t < _ppt_last_next_ts + PPT_COOLDOWN_SEC:
-            _ppt_next_hold = None
-            _ppt_next_fired = False
-        else:
-            if not _ppt_next_fired:
-                if _ppt_next_hold is None:
-                    _ppt_next_hold = t
-                elif (t - _ppt_next_hold) >= PPT_NEXT_HOLD_SEC:
-                    pyautogui.press("right")
-                    _ppt_last_next_ts = t
-                    _ppt_next_fired = True
-    else:
-        _ppt_next_hold = None
-        _ppt_next_fired = False
-
-    # PREV (Left): V_SIGN hold
-    if cursor_gesture == "V_SIGN":
-        if t < _ppt_last_prev_ts + PPT_COOLDOWN_SEC:
-            _ppt_prev_hold = None
-            _ppt_prev_fired = False
-        else:
-            if not _ppt_prev_fired:
-                if _ppt_prev_hold is None:
-                    _ppt_prev_hold = t
-                elif (t - _ppt_prev_hold) >= PPT_PREV_HOLD_SEC:
-                    pyautogui.press("left")
-                    _ppt_last_prev_ts = t
-                    _ppt_prev_fired = True
-    else:
-        _ppt_prev_hold = None
-        _ppt_prev_fired = False
-
 
 # ============================================================
 # Keyboard mode
@@ -1213,6 +1197,119 @@ def handle_keyboard_mode(can_inject,
 # ============================================================
 # VKEY: Multi-finger AirTap
 # ============================================================
+
+# ============================================================
+# PRESENTATION mode
+# ============================================================
+def _ppt_fire_token(token: str):
+    if token == "NEXT":
+        pyautogui.press("right")
+    elif token == "PREV":
+        pyautogui.press("left")
+    elif token == "CLICK":
+        pyautogui.click()
+    elif token == "START":
+        pyautogui.press("f5")
+    elif token == "END":
+        pyautogui.press("esc")
+    elif token == "BLACK":
+        pyautogui.press("b")
+    elif token == "WHITE":
+        pyautogui.press("w")
+
+def handle_presentation_mode(can_inject,
+                             got_cursor, cursor_gesture,
+                             got_other, other_gesture):
+    """
+    PRESENTATION:
+    - V_SIGN  : Next (Right Arrow)
+    - FIST    : Prev (Left Arrow)
+    - PINCH   : Click (Laser/Hyperlink 등)
+    - FN(보조손 PINCH_INDEX 유지):
+        V_SIGN    : Start show (F5)
+        FIST      : End show (ESC)
+        OPEN_PALM : Black screen (B)
+        PINCH     : White screen (W)
+    """
+    global _ppt_last_token, _ppt_streak, _ppt_last_repeat_ts, _ppt_token_start_ts, _ppt_armed
+    global _mod_until
+
+    t = now()
+
+    if not can_inject:
+        _ppt_reset()
+        return
+
+    # modifier: other hand PINCH_INDEX 유지
+    if got_other and other_gesture == "PINCH_INDEX":
+        _mod_until = t + MOD_GRACE_SEC
+    mod_active = (t < _mod_until)
+
+    token = None
+
+    if got_cursor:
+        if mod_active:
+            if cursor_gesture == "V_SIGN":
+                token = "START"
+            elif cursor_gesture == "FIST":
+                token = "END"
+            elif cursor_gesture == "OPEN_PALM":
+                token = "BLACK"
+            elif cursor_gesture == "PINCH_INDEX":
+                token = "WHITE"
+        else:
+            if cursor_gesture == "V_SIGN":
+                token = "NEXT"
+            elif cursor_gesture == "FIST":
+                token = "PREV"
+            elif cursor_gesture == "PINCH_INDEX":
+                token = "CLICK"
+
+    if token is None:
+        _ppt_last_token = None
+        _ppt_streak = 0
+        _ppt_token_start_ts = 0.0
+        _ppt_armed = True
+        return
+
+    if token == _ppt_last_token:
+        _ppt_streak += 1
+    else:
+        _ppt_last_token = token
+        _ppt_streak = 1
+        _ppt_armed = True
+        _ppt_token_start_ts = t
+
+    if _ppt_streak < PPT_STABLE_FRAMES:
+        return
+
+    need_hold = PPT_HOLD_SEC.get(token, 0.15)
+    if (t - _ppt_token_start_ts) < need_hold:
+        return
+
+    repeat_tokens = {"NEXT", "PREV"}
+    one_shot_tokens = {"CLICK", "START", "END", "BLACK", "WHITE"}
+
+    if token in repeat_tokens:
+        if t >= _ppt_last_repeat_ts + PPT_REPEAT_SEC:
+            _ppt_fire_token(token)
+            _ppt_last_repeat_ts = t
+        return
+
+    if token in one_shot_tokens:
+        if not _ppt_armed:
+            return
+
+        cd = PPT_COOLDOWN_SEC.get(token, 0.35)
+        last_fire = _ppt_last_fire_map.get(token, 0.0)
+        if t < last_fire + cd:
+            return
+
+        _ppt_fire_token(token)
+        _ppt_last_fire_map[token] = t
+        _ppt_armed = False
+        return
+
 def _hand_scale(lm):
     return max(1e-6, dist_xy(lm[0], lm[9]))
 
@@ -1515,33 +1612,7 @@ def on_message(ws, msg):
 
     elif typ == "SET_MODE":
         new_mode = str(data.get("mode", "MOUSE")).upper()
-
-        _ema_x = None
-        _ema_y = None
-
-        if new_mode != "MOUSE":
-            if _dragging:
-                try:
-                    pyautogui.mouseUp()
-                except Exception:
-                    pass
-                _dragging = False
-            _pinch_start_ts = None
-            _pending_single_click = False
-
-        if new_mode in ("KEYBOARD", "RUSH", "VKEY"):
-            locked = False
-            _kb_reset()
-            _reset_vkey_states()
-
-        if new_mode != "KEYBOARD":
-            _kb_reset()
-
-        if new_mode == "VKEY":
-            open_windows_osk()
-
-        mode = new_mode
-        print("[PY] cmd SET_MODE ->", mode)
+        apply_set_mode(new_mode)
 
     elif typ == "SET_PREVIEW":
         PREVIEW = bool(data.get("enabled", True))
@@ -1556,6 +1627,7 @@ def main():
     global _last_seen_ts, _last_cursor_lm, _last_cursor_cxcy, _last_cursor_gesture
     global _dragging, _ws, _fist_start, _fist_anchor, _mod_until
     global _window_open
+    global enabled, mode, locked
 
     print("[PY] running file:", os.path.abspath(__file__))
     print("[PY] WS_URL:", WS_URL, "(disabled)" if NO_WS else "")
@@ -1712,55 +1784,118 @@ def main():
 
         mode_u = str(mode).upper()
 
+        # ============================================================
+        # UI Mode Menu (HUD) + NEXT_MODE (gesture-based cycle)
+        # ============================================================
+        # (A) HUD 메뉴: 양손 FIST 홀드 -> OPEN_MODE_MENU / NAV / CONFIRM / CLOSE 이벤트를 WS로 전송
+        ui_consuming = handle_ui_mode_menu(cursor_gesture, other_gesture, got_other)
+
+        # (B) NEXT_MODE: locked 상태에서 양손 OPEN_PALM 홀드 -> NEXT_MODE 이벤트 (서버에서 모드 사이클)
+        global _mode_hold_start, _last_mode_event_ts
+        if enabled and locked and got_other and (cursor_gesture == "OPEN_PALM") and (other_gesture == "OPEN_PALM"):
+            if _mode_hold_start is None:
+                _mode_hold_start = t
+            if (t - _mode_hold_start) >= MODE_HOLD_SEC and t >= (_last_mode_event_ts + MODE_COOLDOWN_SEC):
+                send_event(_ws, "NEXT_MODE")
+                _last_mode_event_ts = t
+                _mode_hold_start = None
+        else:
+            _mode_hold_start = None
+
+
         # LOCK only in MOUSE
         if mode_u == "MOUSE":
-            handle_lock(cursor_gesture, cursor_cx, cursor_cy, got_cursor)
+            handle_lock(cursor_gesture, cursor_cx, cursor_cy, got_cursor, got_other, False)
         else:
             _fist_start = None
             _fist_anchor = None
 
         # injection permissions
         can_mouse_inject = enabled and (mode_u == "MOUSE") and (t >= _reacquire_until) and (not locked) and (not NO_INJECT)
+        can_draw_inject  = enabled and (mode_u == "DRAW") and (t >= _reacquire_until) and (not locked) and (not NO_INJECT)
         can_keyboard_inject = enabled and (mode_u == "KEYBOARD") and (t >= _reacquire_until) and (not locked) and (not NO_INJECT)
-        can_vkey_inject = enabled and (mode_u == "VKEY") and (t >= _reacquire_until) and (not locked)
+        can_ppt_inject   = enabled and (mode_u == "PRESENTATION") and (t >= _reacquire_until) and (not locked) and (not NO_INJECT)
+        # VKEY는 NO_INJECT여도 "탭 감지/이벤트"는 동작 (실제 클릭만 NO_INJECT에서 차단)
+        can_vkey_inject  = enabled and (mode_u == "VKEY") and (t >= _reacquire_until) and (not locked)
 
         # RUSH disables OS inject
         if mode_u == "RUSH":
             can_mouse_inject = False
+            can_draw_inject = False
             can_keyboard_inject = False
+            can_ppt_inject = False
             can_vkey_inject = False
 
-        # VKEY only uses vkey (mouse/keyboard OFF)
+        # VKEY only uses vkey (mouse/keyboard/draw/ppt OFF)
         if mode_u == "VKEY":
             can_mouse_inject = False
+            can_draw_inject = False
             can_keyboard_inject = False
+            can_ppt_inject = False
 
-        # mouse move
-        if can_mouse_inject:
-            if cursor_gesture == "OPEN_PALM" or (_dragging and cursor_gesture == "PINCH_INDEX"):
+        # pointer move (MOUSE / DRAW / PRESENTATION)
+        can_pointer_inject = (can_mouse_inject or can_draw_inject or can_ppt_inject)
+
+        if can_pointer_inject:
+            do_move = False
+
+            if mode_u == "MOUSE":
+                # 마우스: OPEN_PALM 이동, 드래그 중 PINCH 이동
+                do_move = (cursor_gesture == "OPEN_PALM") or (_dragging and cursor_gesture == "PINCH_INDEX")
+
+            elif mode_u == "DRAW":
+                # 그리기: OPEN_PALM 이동, PINCH는 그리기(Down) + 이동
+                do_move = (cursor_gesture in ("OPEN_PALM", "PINCH_INDEX")) or _draw_down
+
+            elif mode_u == "PRESENTATION":
+                # 발표: 기본은 포인터만 이동 (OPEN_PALM)
+                do_move = (cursor_gesture == "OPEN_PALM")
+
+            if do_move:
                 ux, uy = map_control_to_screen(cursor_cx, cursor_cy)
                 ex, ey = apply_ema(ux, uy)
                 move_cursor(ex, ey)
 
-        # mouse actions
-        handle_index_pinch_click_drag(cursor_gesture, can_mouse_inject)
-        handle_right_click(cursor_gesture, can_mouse_inject)
 
-        # scroll
-        if can_mouse_inject and got_other:
-            handle_scroll_other_hand(other_gesture == "FIST", other_cy, True)
-            scroll_active = (other_gesture == "FIST")
+        # mouse actions (MOUSE only)
+        if mode_u == "MOUSE":
+            handle_index_pinch_click_drag(cursor_gesture, can_mouse_inject)
+            handle_right_click(cursor_gesture, can_mouse_inject)
         else:
             # not mouse => clear mouse side effects
             handle_index_pinch_click_drag(cursor_gesture, False)
             handle_right_click(cursor_gesture, False)
+
+        # DRAW (Paint/Whiteboard)
+        if mode_u == "DRAW":
+            handle_draw_mode(cursor_gesture, can_draw_inject)
+            handle_draw_selection_shortcuts(cursor_gesture, other_gesture, got_other, can_draw_inject)
+        else:
+            _draw_reset()
+
+        # PRESENTATION
+        if mode_u == "PRESENTATION":
+            handle_presentation_mode(
+                can_ppt_inject,
+                got_cursor, cursor_gesture,
+                got_other, other_gesture
+            )
+        else:
+            _ppt_reset()
+
+        # scroll (MOUSE only: other hand FIST + vertical move)
+        scroll_active = False
+        if can_mouse_inject and got_other:
+            handle_scroll_other_hand(other_gesture == "FIST", other_cy, True)
+            scroll_active = (other_gesture == "FIST")
+        else:
             handle_scroll_other_hand(False, 0.5, False)
 
         # keyboard
         handle_keyboard_mode(
             can_keyboard_inject,
-            got_cursor, cursor_gesture, (cursor_cx, cursor_cy),
-            got_other, other_gesture, (other_cx, other_cy)
+            got_cursor, cursor_gesture,
+            got_other, other_gesture
         )
 
         # VKEY
@@ -1772,8 +1907,8 @@ def main():
             _ws,
             fps,
             cursor_gesture,
-            can_mouse_inject,
-            can_keyboard_inject,
+            (can_mouse_inject or can_draw_inject or can_ppt_inject),
+            (can_keyboard_inject or can_ppt_inject),
             scroll_active,
             other_gesture,
             rush_left=rush_left,
@@ -1827,24 +1962,11 @@ def main():
                 elif key in (ord('m'), ord('M')):
                     apply_set_mode("MOUSE")
                 elif key in (ord('k'), ord('K')):
-                    mode = "KEYBOARD"
-                    locked = False
-                    _kb_reset()
-                    _reset_vkey_states()
-                    print("[KEY] mode=KEYBOARD (unlock)")
+                    apply_set_mode("KEYBOARD")
                 elif key in (ord('r'), ord('R')):
-                    mode = "RUSH"
-                    locked = False
-                    _kb_reset()
-                    _reset_vkey_states()
-                    print("[KEY] mode=RUSH (unlock)")
+                    apply_set_mode("RUSH")
                 elif key in (ord('v'), ord('V')):
-                    mode = "VKEY"
-                    locked = False
-                    _kb_reset()
-                    _reset_vkey_states()
-                    open_windows_osk()
-                    print("[KEY] mode=VKEY (unlock + open OSK)")
+                    apply_set_mode("VKEY")
                 elif key in (ord('o'), ord('O')):
                     open_windows_osk()
                     print("[KEY] open OSK")
