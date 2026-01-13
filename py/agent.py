@@ -1,21 +1,3 @@
-"""
-GestureOS Agent (Mouse + Keyboard + Presentation)
-- Two-hand MODE toggle (CURSOR PINCH_INDEX + OTHER V_SIGN hold)  [MOUSE/KEYBOARD only]
-- Two-hand NEXT_MODE event (both OPEN_PALM hold while locked)
-- LOCK center-box check bugfix (cy compare maxy)
-- LOCK only when enabled=True and other-hand not present
-
-PRESENTATION(PPT) mode 목표 동작(최소 기능):
-- 다음/이전: → / ←
-- 시작/종료: F5 / Esc
-
-제스처 매핑(요청 반영):
-- 다음(→): PINCH_INDEX
-- 이전(←): V_SIGN
-- 시작(F5): 양손 OPEN_PALM hold
-- 종료(Esc): 양손 PINCH_INDEX hold
-"""
-
 import json
 import time
 import threading
@@ -76,6 +58,27 @@ def send_event(ws, name, payload=None):
 
 
 # ============================================================
+# (A 방식) Web HUD Mode Menu
+# ============================================================
+UI_MENU_OPEN_HOLD_SEC = 0.60
+UI_MENU_CLOSE_HOLD_SEC = 0.30
+UI_MENU_CONFIRM_HOLD_SEC = 0.25
+UI_MENU_TIMEOUT_SEC = 5.0
+UI_MENU_OPEN_COOLDOWN_SEC = 1.0
+UI_MENU_NAV_COOLDOWN_SEC = 0.22
+
+_ui_menu_open_start = None
+_ui_menu_close_start = None
+_ui_menu_confirm_start = None
+_ui_menu_active = False
+_ui_menu_until = 0.0
+_ui_menu_last_open_ts = 0.0
+_ui_menu_last_nav_ts = 0.0
+_ui_menu_next_armed = True
+_ui_menu_prev_armed = True
+
+
+# ============================================================
 # Motion smoothing / jitter control
 # ============================================================
 EMA_ALPHA = 0.22
@@ -107,6 +110,134 @@ _dragging = False
 DOUBLECLICK_GAP_SEC = 0.35
 _pending_single_click = False
 _single_click_deadline = 0.0
+
+
+# ============================================================
+# DRAW mode (Paint / Whiteboard)
+# - PINCH_INDEX hold => mouseDown (draw)
+# - release          => mouseUp
+# ============================================================
+DRAW_DOWN_DEBOUNCE_SEC = 0.04  # 민감하면 0.06~0.08로 올려도 됨
+
+_draw_pinch_start_ts = None
+_draw_down = False
+
+
+# ============================================================
+# DRAW: Selection shortcuts (Paint)
+# - other hand PINCH_INDEX acts as modifier
+# - (mod) + cursor V_SIGN hold => Ctrl+C (copy)
+# - (mod) + cursor FIST  hold => Ctrl+X (cut)
+# ============================================================
+DRAW_SEL_HOLD_SEC = 0.28
+DRAW_SEL_COOLDOWN_SEC = 0.60
+
+_draw_copy_hold = None
+_draw_last_copy_ts = 0.0
+_draw_copy_fired = False
+
+_draw_cut_hold = None
+_draw_last_cut_ts = 0.0
+_draw_cut_fired = False
+
+
+def _draw_reset():
+    global _draw_pinch_start_ts, _draw_down
+    global _draw_copy_hold, _draw_last_copy_ts, _draw_copy_fired
+    global _draw_cut_hold, _draw_last_cut_ts, _draw_cut_fired
+
+    _draw_pinch_start_ts = None
+    if _draw_down:
+        try:
+            pyautogui.mouseUp()
+        except Exception:
+            pass
+    _draw_down = False
+
+    _draw_copy_hold = None
+    _draw_last_copy_ts = 0.0
+    _draw_copy_fired = False
+
+    _draw_cut_hold = None
+    _draw_last_cut_ts = 0.0
+    _draw_cut_fired = False
+
+
+def handle_draw_mode(cursor_gesture: str, can_inject: bool):
+    """DRAW 모드: PINCH_INDEX 유지하면 좌클릭 드래그로 그리기"""
+    global _draw_pinch_start_ts, _draw_down
+    t = now()
+
+    if not can_inject:
+        _draw_reset()
+        return
+
+    if cursor_gesture == "PINCH_INDEX":
+        if _draw_pinch_start_ts is None:
+            _draw_pinch_start_ts = t
+        if (not _draw_down) and ((t - _draw_pinch_start_ts) >= DRAW_DOWN_DEBOUNCE_SEC):
+            pyautogui.mouseDown()
+            _draw_down = True
+    else:
+        _draw_pinch_start_ts = None
+        if _draw_down:
+            pyautogui.mouseUp()
+            _draw_down = False
+
+
+def handle_draw_selection_shortcuts(cursor_gesture: str,
+                                   other_gesture: str,
+                                   got_other: bool,
+                                   can_inject: bool):
+    """DRAW 모드: 선택영역 복사/잘라내기 단축키 제스처"""
+    global _draw_copy_hold, _draw_last_copy_ts, _draw_copy_fired
+    global _draw_cut_hold, _draw_last_cut_ts, _draw_cut_fired
+
+    t = now()
+
+    if not can_inject:
+        _draw_copy_hold = None
+        _draw_copy_fired = False
+        _draw_cut_hold = None
+        _draw_cut_fired = False
+        return
+
+    # 모디파이어: 보조손 PINCH_INDEX 유지
+    mod = got_other and (other_gesture == "PINCH_INDEX")
+
+    # ---- COPY (Ctrl+C): mod + cursor V_SIGN hold
+    if mod and (cursor_gesture == "V_SIGN"):
+        if t < _draw_last_copy_ts + DRAW_SEL_COOLDOWN_SEC:
+            _draw_copy_hold = None
+            _draw_copy_fired = False
+        else:
+            if not _draw_copy_fired:
+                if _draw_copy_hold is None:
+                    _draw_copy_hold = t
+                elif (t - _draw_copy_hold) >= DRAW_SEL_HOLD_SEC:
+                    pyautogui.hotkey("ctrl", "c")
+                    _draw_last_copy_ts = t
+                    _draw_copy_fired = True
+    else:
+        _draw_copy_hold = None
+        _draw_copy_fired = False
+
+    # ---- CUT (Ctrl+X): mod + cursor FIST hold
+    if mod and (cursor_gesture == "FIST"):
+        if t < _draw_last_cut_ts + DRAW_SEL_COOLDOWN_SEC:
+            _draw_cut_hold = None
+            _draw_cut_fired = False
+        else:
+            if not _draw_cut_fired:
+                if _draw_cut_hold is None:
+                    _draw_cut_hold = t
+                elif (t - _draw_cut_hold) >= DRAW_SEL_HOLD_SEC:
+                    pyautogui.hotkey("ctrl", "x")
+                    _draw_last_cut_ts = t
+                    _draw_cut_fired = True
+    else:
+        _draw_cut_hold = None
+        _draw_cut_fired = False
 
 
 # ============================================================
@@ -218,22 +349,15 @@ _kb_armed = True
 # ============================================================
 # PRESENTATION mode (PPT) - minimal (4 keys)
 # ============================================================
-# NEXT/ PREV
-# - NEXT: Right Arrow (PINCH_INDEX hold)
-# - PREV: Left Arrow  (V_SIGN hold)
 PPT_NEXT_HOLD_SEC = 0.10
 PPT_PREV_HOLD_SEC = 0.15
 PPT_COOLDOWN_SEC = 0.30
 
-# START/END
-# - START(F5): both OPEN_PALM hold
-# - END(Esc): both PINCH_INDEX hold (priority)
 PPT_START_HOLD_SEC = 0.60
 PPT_START_COOLDOWN_SEC = 1.20
 PPT_END_HOLD_SEC = 0.60
 PPT_END_COOLDOWN_SEC = 0.80
 
-# 상태
 _ppt_next_hold = None
 _ppt_last_next_ts = 0.0
 _ppt_next_fired = False
@@ -273,6 +397,7 @@ def _ppt_reset():
     _ppt_last_end_ts = 0.0
     _ppt_end_fired = False
 
+
 # ============================================================
 # Utility
 # ============================================================
@@ -310,7 +435,7 @@ def apply_ema(nx, ny):
         _ema_y = EMA_ALPHA * ny + (1.0 - EMA_ALPHA) * _ema_y
     return _ema_x, _ema_y
 
-def move_cursor(norm_x, norm_y):
+def move_cursor(norm_x, norm_y, deadzone_px=DEADZONE_PX):
     global _last_move_ts
     t = now()
     if (t - _last_move_ts) < MOVE_INTERVAL_SEC:
@@ -322,7 +447,7 @@ def move_cursor(norm_x, norm_y):
     y = int(norm_y * sy)
 
     cur = pyautogui.position()
-    if abs(x - cur.x) < DEADZONE_PX and abs(y - cur.y) < DEADZONE_PX:
+    if abs(x - cur.x) < deadzone_px and abs(y - cur.y) < deadzone_px:
         return
 
     pyautogui.moveTo(x, y)
@@ -406,12 +531,18 @@ def apply_set_mode(new_mode: str):
     nm = str(new_mode).upper()
     if nm == "PPT":
         nm = "PRESENTATION"
+    if nm == "PAINT":
+        nm = "DRAW"
 
-    if nm not in ("MOUSE", "KEYBOARD", "PRESENTATION"):
+    if nm not in ("MOUSE", "KEYBOARD", "PRESENTATION", "DRAW"):
         print("[PY] apply_set_mode ignored:", new_mode)
         return
 
-    # leaving mouse: release drag
+    # leaving DRAW: release draw drag
+    if str(mode).upper() == "DRAW" and nm != "DRAW":
+        _draw_reset()
+
+    # leaving mouse: release drag/click state
     if nm != "MOUSE":
         if _dragging:
             try:
@@ -427,13 +558,21 @@ def apply_set_mode(new_mode: str):
         locked = False
         _kb_reset()
         _ppt_reset()
+        _draw_reset()
     elif nm == "PRESENTATION":
         locked = False
         _kb_reset()
         _ppt_reset()
+        _draw_reset()
+    elif nm == "DRAW":
+        locked = False
+        _kb_reset()
+        _ppt_reset()
+        _draw_reset()
     else:  # MOUSE
         _kb_reset()
         _ppt_reset()
+        _draw_reset()
 
     mode = nm
     print("[PY] apply_set_mode ->", mode)
@@ -446,9 +585,114 @@ def ws_send_set_mode(new_mode: str, source="GESTURE"):
         m = str(new_mode).upper()
         if m == "PPT":
             m = "PRESENTATION"
+        if m == "PAINT":
+            m = "DRAW"
         _ws.send(json.dumps({"type": "SET_MODE", "mode": m, "source": source}))
     except Exception as e:
         print("[PY] ws_send_set_mode error:", e)
+
+
+# ============================================================
+# (A 방식) Web HUD Mode Menu handler
+# ============================================================
+def handle_ui_mode_menu(cursor_gesture: str, other_gesture: str, got_other_hand: bool) -> bool:
+    global _ui_menu_open_start, _ui_menu_close_start, _ui_menu_confirm_start
+    global _ui_menu_active, _ui_menu_until, _ui_menu_last_open_ts, _ui_menu_last_nav_ts
+    global _ui_menu_next_armed, _ui_menu_prev_armed
+
+    t = now()
+
+    # enabled 꺼지면 강제 종료
+    if not enabled:
+        if _ui_menu_active:
+            _ui_menu_active = False
+            send_event(_ws, "MODE_MENU_CLOSE")
+        _ui_menu_open_start = None
+        _ui_menu_close_start = None
+        _ui_menu_confirm_start = None
+        return False
+
+    # -------- 메뉴 닫힘 상태: 열기 감지 --------
+    if not _ui_menu_active:
+        both_fist = got_other_hand and (cursor_gesture == "FIST") and (other_gesture == "FIST")
+        if both_fist:
+            if _ui_menu_open_start is None:
+                _ui_menu_open_start = t
+            if (t - _ui_menu_open_start) >= UI_MENU_OPEN_HOLD_SEC and t >= (_ui_menu_last_open_ts + UI_MENU_OPEN_COOLDOWN_SEC):
+                _ui_menu_active = True
+                _ui_menu_until = t + UI_MENU_TIMEOUT_SEC
+                _ui_menu_last_open_ts = t
+                _ui_menu_open_start = None
+                _ui_menu_close_start = None
+                _ui_menu_confirm_start = None
+                _ui_menu_last_nav_ts = 0.0
+                _ui_menu_next_armed = True
+                _ui_menu_prev_armed = True
+                send_event(_ws, "OPEN_MODE_MENU", {"mode": str(mode).upper()})
+                return True
+        else:
+            _ui_menu_open_start = None
+        return False
+
+    # -------- 메뉴 열린 상태 --------
+    if t >= _ui_menu_until:
+        _ui_menu_active = False
+        send_event(_ws, "MODE_MENU_CLOSE")
+        _ui_menu_close_start = None
+        _ui_menu_confirm_start = None
+        return False
+
+    consume = True
+
+    # CLOSE: both FIST hold
+    both_fist = got_other_hand and (cursor_gesture == "FIST") and (other_gesture == "FIST")
+    if both_fist:
+        if _ui_menu_close_start is None:
+            _ui_menu_close_start = t
+        if (t - _ui_menu_close_start) >= UI_MENU_CLOSE_HOLD_SEC:
+            _ui_menu_active = False
+            send_event(_ws, "MODE_MENU_CLOSE")
+            _ui_menu_close_start = None
+            _ui_menu_confirm_start = None
+            return True
+    else:
+        _ui_menu_close_start = None
+
+    # CONFIRM: both OPEN_PALM hold
+    both_open = got_other_hand and (cursor_gesture == "OPEN_PALM") and (other_gesture == "OPEN_PALM")
+    if both_open:
+        if _ui_menu_confirm_start is None:
+            _ui_menu_confirm_start = t
+        if (t - _ui_menu_confirm_start) >= UI_MENU_CONFIRM_HOLD_SEC:
+            _ui_menu_active = False
+            send_event(_ws, "MODE_MENU_CONFIRM")
+            _ui_menu_confirm_start = None
+            _ui_menu_close_start = None
+            return True
+    else:
+        _ui_menu_confirm_start = None
+
+    # NAV: PINCH_INDEX -> NEXT, V_SIGN -> PREV (edge + cooldown)
+    if cursor_gesture != "PINCH_INDEX":
+        _ui_menu_next_armed = True
+    if cursor_gesture != "V_SIGN":
+        _ui_menu_prev_armed = True
+
+    if cursor_gesture == "PINCH_INDEX" and _ui_menu_next_armed and t >= (_ui_menu_last_nav_ts + UI_MENU_NAV_COOLDOWN_SEC):
+        send_event(_ws, "MODE_MENU_NEXT")
+        _ui_menu_last_nav_ts = t
+        _ui_menu_next_armed = False
+        _ui_menu_until = t + UI_MENU_TIMEOUT_SEC
+        return True
+
+    if cursor_gesture == "V_SIGN" and _ui_menu_prev_armed and t >= (_ui_menu_last_nav_ts + UI_MENU_NAV_COOLDOWN_SEC):
+        send_event(_ws, "MODE_MENU_PREV")
+        _ui_menu_last_nav_ts = t
+        _ui_menu_prev_armed = False
+        _ui_menu_until = t + UI_MENU_TIMEOUT_SEC
+        return True
+
+    return consume
 
 
 # ============================================================
@@ -699,8 +943,6 @@ def handle_presentation_mode(cursor_gesture, cursor_cxcy, other_gesture, other_c
       - PREV (Left): V_SIGN hold
       - START (F5): both OPEN_PALM hold
       - END (Esc): both PINCH_INDEX hold (priority)
-
-    NOTE: PPT 모드에서는 마우스/커서 이동/클릭/스크롤 등은 주입하지 않도록 설계.
     """
     global _ppt_next_hold, _ppt_last_next_ts, _ppt_next_fired
     global _ppt_prev_hold, _ppt_last_prev_ts, _ppt_prev_fired
@@ -713,7 +955,7 @@ def handle_presentation_mode(cursor_gesture, cursor_cxcy, other_gesture, other_c
         _ppt_reset()
         return
 
-    # ---- END (Esc): both PINCH_INDEX hold (최우선, 다른 동작 차단)
+    # END (Esc): both PINCH_INDEX hold (최우선)
     end_combo = got_other and (cursor_gesture == "PINCH_INDEX") and (other_gesture == "PINCH_INDEX")
     if end_combo:
         if not _ppt_end_fired:
@@ -728,7 +970,7 @@ def handle_presentation_mode(cursor_gesture, cursor_cxcy, other_gesture, other_c
         _ppt_end_hold = None
         _ppt_end_fired = False
 
-    # ---- START (F5): both OPEN_PALM hold (START 중에는 NEXT/PREV 차단)
+    # START (F5): both OPEN_PALM hold
     start_combo = got_other and (cursor_gesture == "OPEN_PALM") and (other_gesture == "OPEN_PALM")
     if start_combo:
         if not _ppt_start_fired:
@@ -743,9 +985,8 @@ def handle_presentation_mode(cursor_gesture, cursor_cxcy, other_gesture, other_c
         _ppt_start_hold = None
         _ppt_start_fired = False
 
-    # ---- NEXT (Right): PINCH_INDEX hold
+    # NEXT (Right): PINCH_INDEX hold
     if cursor_gesture == "PINCH_INDEX":
-        # cooldown 동안은 hold를 리셋해서 반복 입력 방지
         if t < _ppt_last_next_ts + PPT_COOLDOWN_SEC:
             _ppt_next_hold = None
             _ppt_next_fired = False
@@ -761,7 +1002,7 @@ def handle_presentation_mode(cursor_gesture, cursor_cxcy, other_gesture, other_c
         _ppt_next_hold = None
         _ppt_next_fired = False
 
-    # ---- PREV (Left): V_SIGN hold
+    # PREV (Left): V_SIGN hold
     if cursor_gesture == "V_SIGN":
         if t < _ppt_last_prev_ts + PPT_COOLDOWN_SEC:
             _ppt_prev_hold = None
@@ -868,7 +1109,9 @@ def handle_keyboard_mode(can_inject,
 # ============================================================
 # WS callbacks
 # ============================================================
-def send_status(ws, fps, cursor_gesture, other_gesture, can_mouse_inject, can_key_inject, can_ppt_inject, scroll_active, mode_switch_block):
+def send_status(ws, fps, cursor_gesture, other_gesture,
+                can_mouse_inject, can_key_inject, can_ppt_inject, can_draw_inject,
+                scroll_active, mode_switch_block):
     if ws is None or (not _ws_connected):
         return
     payload = {
@@ -878,13 +1121,18 @@ def send_status(ws, fps, cursor_gesture, other_gesture, can_mouse_inject, can_ke
         "locked": bool(locked),
         "gesture": str(cursor_gesture),
         "fps": float(fps),
-        # (최소 기능 PPT) 발표모드에서는 커서 이동을 하지 않으므로 canMove는 mouse만 반영
+
+        # 기존 대시보드용 필드 (그대로 유지)
         "canMove": bool((can_mouse_inject) and (cursor_gesture == "OPEN_PALM")),
         "canClick": bool(can_mouse_inject and (cursor_gesture in ("PINCH_INDEX", "V_SIGN"))),
         "scrollActive": bool(scroll_active),
         "canKey": bool(can_key_inject),
         "otherGesture": str(other_gesture),
         "modeSwitchHold": bool(mode_switch_block),
+
+        # 추가(있어도 서버가 보통 무시/표시 가능)
+        "canDraw": bool(can_draw_inject),
+        "drawDown": bool(_draw_down),
     }
     try:
         ws.send(json.dumps(payload))
@@ -933,12 +1181,15 @@ def on_message(ws, msg):
         _pending_single_click = False
         _kb_reset()
         _ppt_reset()
+        _draw_reset()
         print("[PY] cmd DISABLE -> enabled=False")
 
     elif typ == "SET_MODE":
         new_mode = str(data.get("mode", "MOUSE")).upper()
         if new_mode == "PPT":
             new_mode = "PRESENTATION"
+        if new_mode == "PAINT":
+            new_mode = "DRAW"
         apply_set_mode(new_mode)
 
     elif typ == "SET_PREVIEW":
@@ -1073,6 +1324,10 @@ def main():
                     except Exception:
                         pass
                     _dragging = False
+
+                # ✅ DRAW도 안전 해제
+                _draw_reset()
+
                 if _last_cursor_lm is None or (t - _last_seen_ts) >= HARD_LOSS_SEC:
                     _reacquire_until = t + REACQUIRE_BLOCK_SEC
 
@@ -1095,21 +1350,27 @@ def main():
 
         mode_u = str(mode).upper()
 
-        # mode switch gesture (MOUSE/KEYBOARD only)
-        mode_switch_block = handle_mode_switch_two_hand(
-            cursor_lm, (cursor_cx, cursor_cy), got_cursor,
-            other_lm, (other_cx, other_cy), got_other
-        )
+        # (A 방식) Web HUD Mode Menu
+        ui_menu_consume = handle_ui_mode_menu(cursor_gesture, other_gesture, got_other)
 
-        # lock only in mouse
-        if mode_u == "MOUSE":
+        # mode switch gesture (MOUSE/KEYBOARD only)
+        if not ui_menu_consume:
+            mode_switch_block = handle_mode_switch_two_hand(
+                cursor_lm, (cursor_cx, cursor_cy), got_cursor,
+                other_lm, (other_cx, other_cy), got_other
+            )
+        else:
+            mode_switch_block = True
+
+        # lock only in mouse (단, UI 메뉴가 열려있으면 lock 금지)
+        if mode_u == "MOUSE" and (not ui_menu_consume):
             handle_lock(cursor_gesture, cursor_cx, cursor_cy, got_cursor, got_other, mode_switch_block)
         else:
             _fist_start = None
             _fist_anchor = None
 
         # NEXT_MODE event (both OPEN_PALM while locked)
-        if enabled and locked and (cursor_gesture == "OPEN_PALM") and (other_gesture == "OPEN_PALM"):
+        if (not ui_menu_consume) and enabled and locked and (cursor_gesture == "OPEN_PALM") and (other_gesture == "OPEN_PALM"):
             if _mode_hold_start is None:
                 _mode_hold_start = t
             if (t - _mode_hold_start) >= MODE_HOLD_SEC and t >= _last_mode_event_ts + MODE_COOLDOWN_SEC:
@@ -1119,20 +1380,33 @@ def main():
         else:
             _mode_hold_start = None
 
-        can_mouse_inject = enabled and (mode_u == "MOUSE") and (t >= _reacquire_until) and (not locked) and (not mode_switch_block)
-        can_key_inject   = enabled and (mode_u == "KEYBOARD") and (t >= _reacquire_until) and (not locked) and (not mode_switch_block)
-        can_ppt_inject   = enabled and (mode_u == "PRESENTATION") and (t >= _reacquire_until) and (not locked) and (not mode_switch_block)
+        can_mouse_inject = enabled and (mode_u == "MOUSE") and (t >= _reacquire_until) and (not locked) and (not mode_switch_block) and (not ui_menu_consume)
+        can_key_inject   = enabled and (mode_u == "KEYBOARD") and (t >= _reacquire_until) and (not locked) and (not mode_switch_block) and (not ui_menu_consume)
+        can_ppt_inject   = enabled and (mode_u == "PRESENTATION") and (t >= _reacquire_until) and (not locked) and (not mode_switch_block) and (not ui_menu_consume)
+        can_draw_inject  = enabled and (mode_u == "DRAW") and (t >= _reacquire_until) and (not locked) and (not mode_switch_block) and (not ui_menu_consume)
 
-        # (최소 기능 PPT) 발표모드에서는 커서 이동을 하지 않음
-        # cursor move (MOUSE only): OPEN_PALM only
-        if can_mouse_inject:
-            if cursor_gesture == "OPEN_PALM":
-                ux, uy = map_control_to_screen(cursor_cx, cursor_cy)
-                ex, ey = apply_ema(ux, uy)
-                move_cursor(ex, ey)
+        # ------------------------------------------------------------
+        # cursor move
+        # - MOUSE: OPEN_PALM only
+        # - DRAW : OPEN_PALM or PINCH_INDEX (drawing)
+        # ------------------------------------------------------------
+        if can_mouse_inject and cursor_gesture == "OPEN_PALM":
+            ux, uy = map_control_to_screen(cursor_cx, cursor_cy)
+            ex, ey = apply_ema(ux, uy)
+            move_cursor(ex, ey)
+
+        if can_draw_inject and cursor_gesture in ("OPEN_PALM", "PINCH_INDEX"):
+            ux, uy = map_control_to_screen(cursor_cx, cursor_cy)
+            ex, ey = apply_ema(ux, uy)
+            # 그리는 중엔 deadzone을 줄여 선이 덜 끊기게
+            dz = 4 if _draw_down else 8
+            move_cursor(ex, ey, deadzone_px=dz)
 
         scroll_active = False
 
+        # ------------------------------------------------------------
+        # MOUSE injections
+        # ------------------------------------------------------------
         if can_mouse_inject:
             handle_index_pinch_click_drag(cursor_gesture, True)
             handle_right_click(cursor_gesture, True)
@@ -1142,19 +1416,24 @@ def main():
                 scroll_active = (other_gesture == "FIST")
             else:
                 handle_scroll_other_hand(False, 0.5, False)
-
         else:
             # not mouse => clear mouse side effects
             handle_index_pinch_click_drag(cursor_gesture, False)
             handle_right_click(cursor_gesture, False)
             handle_scroll_other_hand(False, 0.5, False)
 
+        # ------------------------------------------------------------
+        # KEYBOARD injections
+        # ------------------------------------------------------------
         if can_key_inject:
             handle_keyboard_mode(can_key_inject, got_cursor, cursor_gesture, got_other, other_gesture)
         else:
             if mode_u != "KEYBOARD":
                 _kb_reset()
 
+        # ------------------------------------------------------------
+        # PPT injections
+        # ------------------------------------------------------------
         if can_ppt_inject:
             handle_presentation_mode(
                 cursor_gesture, (cursor_cx, cursor_cy),
@@ -1165,8 +1444,24 @@ def main():
             if mode_u != "PRESENTATION":
                 _ppt_reset()
 
+        # ------------------------------------------------------------
+        # DRAW injections
+        # ------------------------------------------------------------
+        if can_draw_inject:
+            # 먼저 단축키(복사/잘라내기) 처리하고,
+            # 그 다음 드로잉(핀치 드래그) 처리
+            handle_draw_selection_shortcuts(cursor_gesture, other_gesture, got_other, True)
+            handle_draw_mode(cursor_gesture, True)
+        else:
+            if mode_u != "DRAW":
+                _draw_reset()
+
         # status
-        send_status(_ws, fps, cursor_gesture, other_gesture, can_mouse_inject, can_key_inject, can_ppt_inject, scroll_active, mode_switch_block)
+        send_status(
+            _ws, fps, cursor_gesture, other_gesture,
+            can_mouse_inject, can_key_inject, can_ppt_inject, can_draw_inject,
+            scroll_active, mode_switch_block
+        )
 
         # preview window
         if not HEADLESS:
@@ -1178,7 +1473,7 @@ def main():
                 fn_on = (t < _mod_until)
                 cv2.putText(
                     frame,
-                    f"mode={mode_u} enabled={enabled} locked={locked} cur={cursor_gesture} oth={other_gesture} FN={fn_on} SW={mode_switch_block}",
+                    f"mode={mode_u} enabled={enabled} locked={locked} cur={cursor_gesture} oth={other_gesture} FN={fn_on} SW={mode_switch_block} UI={ui_menu_consume}",
                     (10, 25),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.55,
@@ -1202,6 +1497,8 @@ def main():
                     apply_set_mode("KEYBOARD")
                 elif key in (ord('p'), ord('P')):
                     apply_set_mode("PRESENTATION")
+                elif key in (ord('d'), ord('D')):
+                    apply_set_mode("DRAW")
                 elif key in (ord('c'), ord('C')):
                     cx, cy = _last_cursor_cxcy if _last_cursor_cxcy is not None else (0.5, 0.5)
                     minx = clamp01(cx - CONTROL_HALF_W)

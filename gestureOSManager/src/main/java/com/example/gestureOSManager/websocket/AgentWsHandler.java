@@ -19,11 +19,13 @@ import lombok.extern.slf4j.Slf4j;
 @Component
 public class AgentWsHandler extends TextWebSocketHandler {
 
-	 private final ObjectMapper om = new ObjectMapper()
-		      .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+  private final ObjectMapper om = new ObjectMapper()
+      .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+
   private final AgentSessionRegistry sessions;
   private final StatusService statusService;
   private final ControlService controlService;
+  private final HudWsHandler hudWsHandler;
 
   private static final List<ModeType> CYCLE =
       List.of(ModeType.MOUSE, ModeType.PRESENTATION, ModeType.DRAW);
@@ -34,10 +36,16 @@ public class AgentWsHandler extends TextWebSocketHandler {
     return CYCLE.get((i + 1) % CYCLE.size());
   }
 
-  public AgentWsHandler(AgentSessionRegistry sessions, StatusService statusService, ControlService controlService) {
+  public AgentWsHandler(
+      AgentSessionRegistry sessions,
+      StatusService statusService,
+      ControlService controlService,
+      HudWsHandler hudWsHandler
+  ) {
     this.sessions = sessions;
     this.statusService = statusService;
     this.controlService = controlService;
+    this.hudWsHandler = hudWsHandler;
   }
 
   @Override
@@ -63,6 +71,22 @@ public class AgentWsHandler extends TextWebSocketHandler {
 
       if ("EVENT".equals(type)) {
         String name = node.path("name").asText("");
+
+        // ============================================================
+        // (A 방식) UI 메뉴 이벤트를 HUD(/ws/hud)로 중계
+        // Agent -> /ws/agent (EVENT)  ==>  Server -> /ws/hud (UI_EVENT)
+        // ============================================================
+        if ("OPEN_MODE_MENU".equals(name)
+            || "MODE_MENU_NEXT".equals(name)
+            || "MODE_MENU_PREV".equals(name)
+            || "MODE_MENU_CONFIRM".equals(name)
+            || "MODE_MENU_CLOSE".equals(name)) {
+
+          String out = String.format("{\"type\":\"UI_EVENT\",\"name\":\"%s\"}", name);
+          hudWsHandler.broadcastJson(out);
+        }
+
+        // 기존 NEXT_MODE 로직 유지
         if ("NEXT_MODE".equals(name)) {
 
           AgentStatus st = statusService.get();
@@ -74,6 +98,7 @@ public class AgentWsHandler extends TextWebSocketHandler {
 
           controlService.setMode(next); // 시그니처가 String이면 setMode(next.name()) 로 변경
         }
+
         return;
       }
 
