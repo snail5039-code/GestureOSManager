@@ -101,15 +101,30 @@ user32.CallWindowProcW.argtypes = [
 
 WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
 
+# ---- Reticle image assets (mode -> png) ----
+ASSET_DIR = os.path.join(os.path.dirname(__file__), "assets", "reticle")
+RETICLE_PNG = {
+    "MOUSE": "cursor.png",
+    "DRAW": "carrot01.png",
+    "PRESENTATION": "cat03.png",
+    "KEYBOARD": "mouse.png",
+    "RUSH": "cat.png",
+    "VKEY": "cat02.png",
+    "DEFAULT": "cursor.png",
+}
+
+# ---- Theme per mode (HUD colors) ----
 THEME = {
     "MOUSE":        {"accent": "#22c55e"},
-    "DRAW":         {"accent": "#a855f7"},
-    "PRESENTATION": {"accent": "#ef4444"},
-    "KEYBOARD":     {"accent": "#38bdf8"},
-    "RUSH":         {"accent": "#f59e0b"},
-    "VKEY":         {"accent": "#60a5fa"},
-    "DEFAULT":      {"accent": "#94a3b8"},
+    "DRAW":         {"accent": "#f59e0b"},
+    "PRESENTATION": {"accent": "#60a5fa"},
+    "KEYBOARD":     {"accent": "#a78bfa"},
+    "RUSH":         {"accent": "#f472b6"},
+    "VKEY":         {"accent": "#34d399"},
+    "DEFAULT":      {"accent": "#22c55e"},
 }
+
+HUD_DEBUG = False
 
 TRANSPARENT = "#ff00ff"  # colorkey magenta
 
@@ -153,6 +168,24 @@ def _hex_dim(color_hex, a):
     r = int(r * a); g = int(g * a); b = int(b * a)
     return f"#{r:02x}{g:02x}{b:02x}"
 
+# ---- OS cursor fallback (for immediate reticle show) ----
+class _POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+def _get_os_cursor_norm01(vx, vy, vw, vh):
+    """Return OS cursor position normalized to virtual screen (0~1)."""
+    try:
+        pt = _POINT()
+        if not user32.GetCursorPos(ctypes.byref(pt)):
+            return (None, None)
+        x01 = (pt.x - vx) / max(1, vw)
+        y01 = (pt.y - vy) / max(1, vh)
+        x01 = max(0.0, min(1.0, float(x01)))
+        y01 = max(0.0, min(1.0, float(y01)))
+        return (x01, y01)
+    except Exception:
+        return (None, None)
+
 class OverlayHUD:
     """
     Two-window HUD:
@@ -169,6 +202,11 @@ class OverlayHUD:
         self._latest = {}
         self._phase = 0.0
         self._ct_tick = 0
+        # pointer grace (prevent reticle hide flicker / start delay)
+        self._last_ptr01 = (0.5, 0.5)
+        self._last_ptr_ts = 0.0
+        self.PTR_GRACE_SEC = 1.5  # 끊겨도 1.5초는 마지막 위치 유지
+
 
         # virtual screen (multi-monitor)
         self.vx = user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
@@ -184,12 +222,44 @@ class OverlayHUD:
         self._ret_canvas = None
 
         self.HUD_W, self.HUD_H = 320, 118
-        self.RET_S = 80
+        self.RET_S = 48
 
         # wndproc hooks (keep refs to prevent GC)
         self._old_wndproc = {}     # hwnd_int -> old_proc_ptr
         self._new_wndproc_ref = {} # hwnd_int -> WNDPROC callable
+        self._ret_imgs = {}
+        self._ret_img_item = None
+        self._ret_img_mode = None
 
+        # anti-flicker
+        self._last_track_ts = 0.0
+        self._last_xy01 = None   # (x01,y01)
+        self._grace_sec = 0.25   # 0.2~0.35 추천
+        self._ret_visible = False
+
+    def _load_reticle_images(self):
+        self._ret_imgs = {}
+        if HUD_DEBUG:
+            print("[HUD] ASSET_DIR =", ASSET_DIR, "RET_S =", self.RET_S, flush=True)
+
+        for mode, fn in RETICLE_PNG.items():
+            path = os.path.join(ASSET_DIR, fn)
+
+            if not os.path.exists(path):
+                if HUD_DEBUG:
+                    print("[HUD] missing:", mode, path, flush=True)
+                    continue
+
+            try:
+                img = tk.PhotoImage(file=path)
+                self._ret_imgs[mode] = img
+                if HUD_DEBUG:
+                    print("[HUD] loaded", mode, path, img.width(), img.height(), flush=True)
+            except Exception as e:
+                if HUD_DEBUG:
+                    print("[HUD] reticle load failed:", mode, path, e, flush=True)
+
+              
     def start(self):
         if not self.enable:
             return
@@ -327,6 +397,7 @@ class OverlayHUD:
 
     # -------- tk thread --------
     def _run_tk(self):
+        print("[HUD] _run_tk entered", flush=True)
         root = tk.Tk()
         self._root = root
         root.withdraw()
@@ -368,6 +439,20 @@ class OverlayHUD:
         )
         ret_canvas.pack(fill="both", expand=True)
         self._ret_canvas = ret_canvas
+        self._load_reticle_images()
+        
+        # ✅ PNG를 "미리" 하나 만들어두면, 첫 deiconify 때 바로 그려진다
+        img0 = self._ret_imgs.get("DEFAULT")
+        if img0 is None and self._ret_imgs:
+            # DEFAULT가 없으면 아무거나 1개
+            img0 = next(iter(self._ret_imgs.values()), None)
+
+        if img0 is not None:
+            self._ret_img_item = ret_canvas.create_image(
+                self.RET_S // 2, self.RET_S // 2,
+                image=img0, anchor="center"
+            )
+            self._ret_img_mode = "DEFAULT"
 
         # 추가 안전장치: Tk 레벨에서 input 자체 disable
         # (WS_EX_TRANSPARENT가 환경 따라 완벽하지 않을 때도 이게 거의 해결)
@@ -493,21 +578,47 @@ class OverlayHUD:
         if self._ret_win is None or self._ret_canvas is None:
             return
 
-        if not tracking:
-            try: self._ret_win.withdraw()
-            except Exception: pass
-            return
+        nowt = time.time()
 
+        # 1) status pointer로 시도
         x01, y01 = _normalize_pointer(st.get("pointerX"), st.get("pointerY"), self.vw, self.vh)
-        if x01 is None or y01 is None:
-            try: self._ret_win.withdraw()
-            except Exception: pass
-            return
 
+        # 2) 없으면 OS 커서로 fallback (시작 즉시 표시되게)
+        if x01 is None or y01 is None:
+            ox, oy = _get_os_cursor_norm01(self.vx, self.vy, self.vw, self.vh)
+            if ox is not None and oy is not None:
+                x01, y01 = ox, oy
+
+        # 3) 그래도 없으면 마지막 값 grace로 유지
+        if x01 is None or y01 is None:
+            if (nowt - self._last_ptr_ts) <= self.PTR_GRACE_SEC:
+                x01, y01 = self._last_ptr01
+            else:
+                try: self._ret_win.withdraw()
+                except Exception: pass
+                return
+        else:
+            self._last_ptr01 = (x01, y01)
+            self._last_ptr_ts = nowt
+
+        # 여기부터는 무조건 표시
         try: self._ret_win.deiconify()
         except Exception:
             pass
 
+
+
+        try: self._ret_win.deiconify()
+        except Exception:
+            pass
+        # 처음 다시 보이는 프레임이면 아이템 재생성
+        if not self._ret_visible:
+            self._ret_visible = True
+            self._ret_img_item = None
+            try:
+                self._ret_canvas.delete("all")
+            except Exception:
+                pass
         px = int(x01 * self.vw)
         py = int(y01 * self.vh)
         gx = self.vx + px - self.RET_S // 2
@@ -518,6 +629,26 @@ class OverlayHUD:
             pass
 
         rc = self._ret_canvas
+
+        # --- PNG reticle (mode based) ---
+        key = mode if mode in self._ret_imgs else "DEFAULT"
+        img = self._ret_imgs.get(key) or self._ret_imgs.get("DEFAULT")
+
+        if img is not None:
+            # 매 프레임 delete하지 말고 item만 유지/교체
+            if self._ret_img_item is None:
+                rc.delete("all")
+                self._ret_img_item = rc.create_image(
+                    self.RET_S // 2, self.RET_S // 2,
+                    image=img, anchor="center"
+                )
+                self._ret_img_mode = key
+            elif self._ret_img_mode != key:
+                rc.itemconfig(self._ret_img_item, image=img)
+                self._ret_img_mode = key
+            return
+
+        # --- fallback: 기존 도형 레티클 ---
         rc.delete("all")
 
         acc = _hex_dim(accent, 0.55 if locked else 1.0)
@@ -532,3 +663,4 @@ class OverlayHUD:
         rc.create_line(cx+10, cy, cx+28, cy, fill=acc, width=2)
         rc.create_line(cx, cy-28, cx, cy-10, fill=acc, width=2)
         rc.create_line(cx, cy+10, cx, cy+28, fill=acc, width=2)
+
