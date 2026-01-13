@@ -555,7 +555,7 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
         <div className={cn("absolute -top-40 -left-40 h-[520px] w-[520px] rounded-full blur-3xl", t.bgGlow1)} />
         <div className={cn("absolute -bottom-52 -right-48 h-[560px] w-[560px] rounded-full blur-3xl", t.bgGlow2)} />
         <div className={cn("absolute inset-0 bg-[size:60px_60px]", t.grid)} />
-      </div>
+      </div> 
 
       {/* Topbar */}
       <div className={cn("sticky top-0 z-20 border-b backdrop-blur", t.topbar)}>
