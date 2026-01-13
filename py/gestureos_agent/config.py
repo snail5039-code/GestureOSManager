@@ -24,14 +24,14 @@ class AgentConfig:
     ws_url: str = DEFAULT_WS_URL
 
     # control mapping (normalized 0~1)
-    control_box: tuple = (0.30, 0.35, 0.70, 0.92)
-    control_gain: float = 1.35
+    control_box: tuple = (0.22, 0.28, 0.78, 0.95)
+    control_gain: float = 1.10
     control_half_w: float = 0.20
     control_half_h: float = 0.28
 
     # smoothing / cursor
     ema_alpha: float = 0.22
-    deadzone_px: int = 3
+    deadzone_px: int = 10
     move_hz: float = 60.0
 
 def parse_cli(argv: Optional[Iterable[str]] = None) -> Tuple[str, AgentConfig]:
