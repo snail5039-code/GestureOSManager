@@ -2,6 +2,9 @@ server:
   port: 8080
 
 spring:
+  main:
+    headless: false
+
   jackson:
     serialization:
       indent_output: false

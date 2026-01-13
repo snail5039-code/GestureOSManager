@@ -1,5 +1,9 @@
 package com.example.gestureOSManager.controller;
 
+import java.awt.Dimension;
+import java.awt.MouseInfo;
+import java.awt.Point;
+import java.awt.Toolkit;
 import java.util.Map;
 
 import org.springframework.http.ResponseEntity;
@@ -21,45 +25,83 @@ import com.example.gestureOSManager.websocket.AgentSessionRegistry;
 @CrossOrigin(origins = "http://localhost:5173")
 public class ControlController {
 
-	private final ControlService controlService;
-	private final StatusService statusService;
-	private final AgentSessionRegistry registry;
+  private final ControlService controlService;
+  private final AgentSessionRegistry registry;
+  private final StatusService statusService;
 
-	public ControlController(ControlService controlService, StatusService statusService, AgentSessionRegistry registry) {
-		this.controlService = controlService;
-		this.statusService = statusService;
-		this.registry = registry;
-	}
+  public ControlController(ControlService controlService, AgentSessionRegistry registry, StatusService statusService) {
+    this.controlService = controlService;
+    this.registry = registry;
+    this.statusService = statusService;
+  }
 
-	@PostMapping("/start")
-	public ResponseEntity<?> start() {
-		boolean ok = controlService.start();
-		return ResponseEntity.ok(Map.of("ok", ok));
-	}
+  @GetMapping("/status")
+  public AgentStatus status() {
+    AgentStatus out = statusService.getSnapshot();
+    out.setConnected(registry.isConnected());
 
-	@PostMapping("/stop")
-	public ResponseEntity<?> stop() {
-		boolean ok = controlService.stop();
-		return ResponseEntity.ok(Map.of("ok", ok));
-	}
+    // MOUSE 모드에서만 pointerX/Y를 OS 커서로 덮어쓰기
+    // RUSH 모드에서는 left/right 포인터가 핵심이므로 절대 overwrite 금지
+    if (out.getMode() == ModeType.MOUSE) {
+      try {
+        Point p = MouseInfo.getPointerInfo().getLocation();
+        Dimension d = Toolkit.getDefaultToolkit().getScreenSize();
+        out.setPointerX(p.getX() / d.getWidth());
+        out.setPointerY(p.getY() / d.getHeight());
+        out.setTracking(Boolean.TRUE);
+      } catch (Exception ignore) {
+        // headless 등 예외 무시
+      }
+    }
 
-	@PostMapping("/mode")
-	public ResponseEntity<?> mode(@RequestParam String mode) {
-		ModeType mt = ModeType.valueOf(mode.trim().toUpperCase());
-		boolean ok = controlService.setMode(mt);
-		return ResponseEntity.ok(Map.of("ok", ok, "mode", mt.name()));
-	}
+    return out;
+  }
 
-	@GetMapping("/status")
-	public AgentStatus status() {
-	  AgentStatus s = statusService.get();
-	  s.setConnected(registry.isConnected());
-	  return s;
-	}
-	
-	@PostMapping("/preview")
-	public ResponseEntity<?> preview(@RequestParam boolean enabled) {
-	  boolean ok = controlService.setPreview(enabled);
-	  return ResponseEntity.ok(Map.of("ok", ok, "preview", enabled));
-	}
+  @PostMapping("/start")
+  public ResponseEntity<?> start() {
+    boolean ok = controlService.start();
+    if (ok) {
+      AgentStatus curr = statusService.getSnapshot();
+      statusService.update(curr.toBuilder().enabled(true).build());
+    }
+    return ResponseEntity.ok(Map.of("ok", ok));
+  }
+
+  @PostMapping("/stop")
+  public ResponseEntity<?> stop() {
+    boolean ok = controlService.stop();
+    if (ok) {
+      AgentStatus curr = statusService.getSnapshot();
+      statusService.update(curr.toBuilder().enabled(false).build());
+    }
+    return ResponseEntity.ok(Map.of("ok", ok));
+  }
+
+  @PostMapping("/mode")
+  public ResponseEntity<?> mode(@RequestParam String mode) {
+    ModeType m;
+    try {
+      m = ModeType.valueOf(mode.trim().toUpperCase());
+    } catch (Exception e) {
+      return ResponseEntity.badRequest().body(Map.of("ok", false, "error", "Unknown mode: " + mode));
+    }
+
+    boolean ok = controlService.setMode(m);
+    if (ok) {
+      AgentStatus curr = statusService.getSnapshot();
+      statusService.update(curr.toBuilder().mode(m).build());
+    }
+    return ResponseEntity.ok(Map.of("ok", ok, "mode", m.name()));
+  }
+
+  @PostMapping("/preview")
+  public ResponseEntity<?> preview(@RequestParam(name="enabled") boolean enabled) {
+	  System.out.println("[SPRING] /preview enabled=" + enabled);
+    boolean ok = controlService.setPreview(enabled);
+    if (ok) {
+      AgentStatus curr = statusService.getSnapshot();
+      statusService.update(curr.toBuilder().preview(enabled).build());
+    }
+    return ResponseEntity.ok(Map.of("ok", ok, "enabled", enabled));
+  }
 }

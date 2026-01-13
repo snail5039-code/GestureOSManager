@@ -1,9 +1,12 @@
+"""
+GestureOS Agent (Mouse + Keyboard + RUSH + VKEY/OSK) - SINGLE FILE (agent.py)
 import json
 import time
 import threading
 import math
 import os
 import sys
+import subprocess
 
 import cv2
 import mediapipe as mp
@@ -12,29 +15,45 @@ from websocket import WebSocketApp
 
 
 # ============================================================
-# WebSocket
+# CLI FLAGS
+# ============================================================
+ARGS = set(sys.argv[1:])
+
+HEADLESS = ("--headless" in ARGS)
+NO_WS = ("--no-ws" in ARGS)
+NO_INJECT = ("--no-inject" in ARGS)
+
+START_ENABLED = ("--start-enabled" in ARGS)
+START_VKEY = ("--start-vkey" in ARGS)
+START_RUSH = ("--start-rush" in ARGS)
+START_KEYBOARD = ("--start-keyboard" in ARGS)
+
+FORCE_CURSOR_LEFT = ("--cursor-left" in ARGS)
+
+# ============================================================
+# WebSocket (Spring Boot WS endpoint)
 # ============================================================
 WS_URL = "ws://127.0.0.1:8080/ws/agent"
-
-HEADLESS = ("--headless" in sys.argv)
-PREVIEW = not HEADLESS
-_window_open = False
-
-# 커서 제어 손(반대로 동작하면 "Left"로)
-CURSOR_HAND_LABEL = "Right"
-
 _ws = None
 _ws_connected = False
 
+# ============================================================
+# Preview Window
+# ============================================================
+PREVIEW = (not HEADLESS)
+_window_open = False
+
+# 커서 제어 손(반대로 동작하면 Left로)
+CURSOR_HAND_LABEL = "Left" if FORCE_CURSOR_LEFT else "Right"
 
 # ============================================================
 # Control box (normalized 0~1)
+# - 손 입력 영역(부분 박스)을 화면 전체(0~1)로 맵핑
 # ============================================================
 CONTROL_BOX = (0.30, 0.35, 0.70, 0.92)
 CONTROL_GAIN = 1.35
 CONTROL_HALF_W = 0.20
 CONTROL_HALF_H = 0.28
-
 
 # ============================================================
 # NEXT_MODE EVENT (both OPEN_PALM hold while locked)
@@ -82,7 +101,7 @@ _ui_menu_prev_armed = True
 # Motion smoothing / jitter control
 # ============================================================
 EMA_ALPHA = 0.22
-DEADZONE_PX = 12
+DEADZONE_PX = 3
 
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0
@@ -92,7 +111,6 @@ _last_move_ts = 0.0
 
 _ema_x = None
 _ema_y = None
-
 
 # ============================================================
 # PINCH / Click / Drag (mouse)
@@ -110,7 +128,6 @@ _dragging = False
 DOUBLECLICK_GAP_SEC = 0.35
 _pending_single_click = False
 _single_click_deadline = 0.0
-
 
 # ============================================================
 # DRAW mode (Paint / Whiteboard)
@@ -248,7 +265,6 @@ RIGHTCLICK_COOLDOWN_SEC = 0.60
 _last_rightclick_ts = 0.0
 _vsign_start = None
 
-
 # ============================================================
 # Scroll (mouse, other hand fist + y move)
 # ============================================================
@@ -258,9 +274,9 @@ SCROLL_INTERVAL_SEC = 0.05
 _last_scroll_ts = 0.0
 _scroll_anchor_y = None
 
-
 # ============================================================
 # LOCK (mouse only)
+# - 커서 손 FIST 2초 고정 => locked 토글
 # ============================================================
 LOCK_HOLD_SEC = 2.0
 LOCK_TOGGLE_COOLDOWN_SEC = 1.0
@@ -270,7 +286,6 @@ FIST_STILL_MAX_MOVE = 0.020
 _fist_start = None
 _fist_anchor = None
 _last_lock_toggle_ts = 0.0
-
 
 # ============================================================
 # MODE SWITCH by gesture (two-hand combo hold)
@@ -300,27 +315,33 @@ _last_cursor_cxcy = None
 _last_cursor_gesture = "NONE"
 _reacquire_until = 0.0
 
-
 # ============================================================
-# Runtime state from Spring
+# Runtime state
 # ============================================================
-enabled = False
+enabled = bool(START_ENABLED)
 mode = "MOUSE"
-locked = True
+if START_KEYBOARD:
+    mode = "KEYBOARD"
+elif START_RUSH:
+    mode = "RUSH"
+elif START_VKEY:
+    mode = "VKEY"
 
+locked = True
+if mode in ("KEYBOARD", "RUSH", "VKEY"):
+    locked = False  # 실사용 편의: 이 모드 진입 시 unlock
 
 # ============================================================
-# MediaPipe
+# MediaPipe Hands
 # ============================================================
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(
     static_image_mode=False,
     max_num_hands=2,
-    model_complexity=1,
+    model_complexity=0,  # FPS 우선
     min_detection_confidence=0.5,
     min_tracking_confidence=0.5
 )
-
 
 # ============================================================
 # KEYBOARD mode (FN layer)
@@ -336,7 +357,11 @@ KB_HOLD_SEC = {
     "BACKSPACE": 0.12, "SPACE": 0.16, "ENTER": 0.16, "ESC": 0.18,
 }
 
-KB_COOLDOWN_SEC = {"SPACE": 0.35, "ENTER": 0.35, "ESC": 0.45}
+KB_COOLDOWN_SEC = {
+    "SPACE": 0.35,
+    "ENTER": 0.35,
+    "ESC": 0.45,
+}
 
 _kb_last_token = None
 _kb_streak = 0
@@ -345,57 +370,38 @@ _kb_last_fire_map = {"SPACE": 0.0, "ENTER": 0.0, "ESC": 0.0}
 _kb_token_start_ts = 0.0
 _kb_armed = True
 
-
 # ============================================================
-# PRESENTATION mode (PPT) - minimal (4 keys)
+# VKEY mode (OSK 클릭 타이핑) - Multi-finger AirTap
 # ============================================================
-PPT_NEXT_HOLD_SEC = 0.10
-PPT_PREV_HOLD_SEC = 0.15
-PPT_COOLDOWN_SEC = 0.30
+VKEY_TIPS = [8, 12, 16, 20, 4]  # 우선순위: 검지 > 중지 > 약지 > 새끼 > 엄지
+VKEY_TIP_TO_PIP = {8: 6, 12: 10, 16: 14, 20: 18, 4: 3}  # 엄지는 IP(3)
 
-PPT_START_HOLD_SEC = 0.60
-PPT_START_COOLDOWN_SEC = 1.20
-PPT_END_HOLD_SEC = 0.60
-PPT_END_COOLDOWN_SEC = 0.80
+AIRTAP_PER_FINGER_COOLDOWN_SEC = 0.18
+AIRTAP_GLOBAL_COOLDOWN_SEC = 0.10
 
-_ppt_next_hold = None
-_ppt_last_next_ts = 0.0
-_ppt_next_fired = False
+AIRTAP_MIN_GAP_SEC = 0.06
+AIRTAP_MAX_GAP_SEC = 0.22
+AIRTAP_Z_VEL_THRESH = 0.012
+AIRTAP_XY_STILL_THRESH = 0.012
+AIRTAP_REQUIRE_EXTENDED = True
 
-_ppt_prev_hold = None
-_ppt_last_prev_ts = 0.0
-_ppt_prev_fired = False
+_air_by_tip = {
+    tip: {
+        "phase": "IDLE",
+        "t0": 0.0,
+        "xy0": (0.5, 0.5),
+        "fire_xy": None,       # 탭 시작 좌표 고정용
+        "last_fire": 0.0,
+        "prev_z": None,
+        "prev_t": 0.0
+    }
+    for tip in VKEY_TIPS
+}
+_vkey_last_global_fire = 0.0
 
-_ppt_start_hold = None
-_ppt_last_start_ts = 0.0
-_ppt_start_fired = False
-
-_ppt_end_hold = None
-_ppt_last_end_ts = 0.0
-_ppt_end_fired = False
-
-
-def _ppt_reset():
-    global _ppt_next_hold, _ppt_last_next_ts, _ppt_next_fired
-    global _ppt_prev_hold, _ppt_last_prev_ts, _ppt_prev_fired
-    global _ppt_start_hold, _ppt_last_start_ts, _ppt_start_fired
-    global _ppt_end_hold, _ppt_last_end_ts, _ppt_end_fired
-
-    _ppt_next_hold = None
-    _ppt_last_next_ts = 0.0
-    _ppt_next_fired = False
-
-    _ppt_prev_hold = None
-    _ppt_last_prev_ts = 0.0
-    _ppt_prev_fired = False
-
-    _ppt_start_hold = None
-    _ppt_last_start_ts = 0.0
-    _ppt_start_fired = False
-
-    _ppt_end_hold = None
-    _ppt_last_end_ts = 0.0
-    _ppt_end_fired = False
+# ===== AirTap event (프론트/Electron 소비용) =====
+TAP_SEQ = 0
+_last_tap = None  # {"seq":int,"x":float,"y":float,"finger":int,"ts":float}
 
 
 # ============================================================
@@ -404,10 +410,10 @@ def _ppt_reset():
 def now():
     return time.time()
 
-def clamp01(v):
+def clamp01(v: float) -> float:
     return max(0.0, min(1.0, v))
 
-def dist(a, b):
+def dist_xy(a, b) -> float:
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
 def palm_center(lm):
@@ -453,7 +459,21 @@ def move_cursor(norm_x, norm_y, deadzone_px=DEADZONE_PX):
     pyautogui.moveTo(x, y)
 
 def finger_extended(lm, tip, pip):
+    # tip y가 pip y보다 위면(작으면) 펴짐
     return lm[tip][1] < lm[pip][1]
+
+def open_windows_osk():
+    candidates = [
+        r"C:\Program Files\Common Files\microsoft shared\ink\TabTip.exe",
+        "osk.exe",
+    ]
+    for cmd in candidates:
+        try:
+            subprocess.Popen(cmd, shell=True)
+            return True
+        except Exception:
+            pass
+    return False
 
 
 # ============================================================
@@ -475,8 +495,23 @@ def is_open_palm(lm):
     pinky = finger_extended(lm, 20, 18)
     return idx and mid and ring and pinky
 
+def is_knife_hand(lm):
+    if lm is None:
+        return False
+    if not is_open_palm(lm):
+        return False
+    d1 = dist_xy(lm[8], lm[12])
+    d2 = dist_xy(lm[12], lm[16])
+    d3 = dist_xy(lm[16], lm[20])
+    avg = (d1 + d2 + d3) / 3.0
+    if avg > 0.055:
+        return False
+    if dist_xy(lm[4], lm[5]) > 0.095:
+        return False
+    return True
+
 def is_pinch_index(lm):
-    return dist(lm[4], lm[8]) < PINCH_THRESH_INDEX
+    return dist_xy(lm[4], lm[8]) < PINCH_THRESH_INDEX
 
 def is_two_finger(lm):
     idx = finger_extended(lm, 8, 6)
@@ -488,7 +523,118 @@ def is_two_finger(lm):
 def is_v_sign(lm):
     if not is_two_finger(lm):
         return False
-    return dist(lm[8], lm[12]) > 0.06
+    return dist_xy(lm[8], lm[12]) > 0.06
+
+def classify_gesture(lm):
+    if lm is None:
+        return "NONE"
+    if is_fist(lm):
+        return "FIST"
+    if is_pinch_index(lm):
+        return "PINCH_INDEX"
+    if is_v_sign(lm):
+        return "V_SIGN"
+    if is_knife_hand(lm):
+        return "KNIFE"
+    if is_open_palm(lm):
+        return "OPEN_PALM"
+    return "OTHER"
+
+
+# ============================================================
+# (RUSH 안정화) left/right 스왑 방지
+# ============================================================
+_lr_state = {"left": None, "right": None, "pending_swap": 0}
+LR_DEADBAND = 0.06
+LR_SWAP_FRAMES = 4
+LR_ONEHAND_KEEP_SEC = 0.25
+_last_lr_twohand_ts = 0.0
+
+def _pack_from_lm(lm):
+    cx, cy = palm_center(lm)
+    return {"cx": cx, "cy": cy, "gesture": classify_gesture(lm)}
+
+def _dist2(a, b):
+    if a is None or b is None:
+        return 1e9
+    dx = a["cx"] - b["cx"]
+    dy = a["cy"] - b["cy"]
+    return dx * dx + dy * dy
+
+def pick_lr_by_screen_x(hands_list):
+    global _lr_state, _last_lr_twohand_ts
+
+    if not hands_list:
+        _lr_state["left"] = None
+        _lr_state["right"] = None
+        _lr_state["pending_swap"] = 0
+        return None, None
+
+    packs = []
+    for label, lm in hands_list:
+        if lm is None:
+            continue
+        packs.append(_pack_from_lm(lm))
+
+    if not packs:
+        return None, None
+
+    if len(packs) == 1:
+        p = packs[0]
+        if now() - _last_lr_twohand_ts < LR_ONEHAND_KEEP_SEC:
+            dl = _dist2(p, _lr_state["left"])
+            dr = _dist2(p, _lr_state["right"])
+            if dl < dr:
+                _lr_state["left"] = p
+                return _lr_state["left"], _lr_state["right"]
+            else:
+                _lr_state["right"] = p
+                return _lr_state["left"], _lr_state["right"]
+
+        _lr_state["left"] = None
+        _lr_state["right"] = p
+        _lr_state["pending_swap"] = 0
+        return None, p
+
+    packs.sort(key=lambda p: p["cx"])
+    left_now = packs[0]
+    right_now = packs[-1]
+    _last_lr_twohand_ts = now()
+
+    if _lr_state["left"] is None and _lr_state["right"] is None:
+        _lr_state["left"] = left_now
+        _lr_state["right"] = right_now
+        _lr_state["pending_swap"] = 0
+        return _lr_state["left"], _lr_state["right"]
+
+    if abs(right_now["cx"] - left_now["cx"]) < LR_DEADBAND:
+        cost_keep = _dist2(left_now, _lr_state["left"]) + _dist2(right_now, _lr_state["right"])
+        cost_swap = _dist2(left_now, _lr_state["right"]) + _dist2(right_now, _lr_state["left"])
+        if cost_swap < cost_keep:
+            _lr_state["left"] = right_now
+            _lr_state["right"] = left_now
+        else:
+            _lr_state["left"] = left_now
+            _lr_state["right"] = right_now
+        _lr_state["pending_swap"] = 0
+        return _lr_state["left"], _lr_state["right"]
+
+    cost_keep = _dist2(left_now, _lr_state["left"]) + _dist2(right_now, _lr_state["right"])
+    cost_swap = _dist2(left_now, _lr_state["right"]) + _dist2(right_now, _lr_state["left"])
+    want_swap = cost_swap + 1e-9 < cost_keep
+
+    if want_swap:
+        _lr_state["pending_swap"] += 1
+        if _lr_state["pending_swap"] >= LR_SWAP_FRAMES:
+            _lr_state["left"] = right_now
+            _lr_state["right"] = left_now
+            _lr_state["pending_swap"] = 0
+    else:
+        _lr_state["pending_swap"] = 0
+        _lr_state["left"] = left_now
+        _lr_state["right"] = right_now
+
+    return _lr_state["left"], _lr_state["right"]
 
 def is_v_sign_switch(lm):
     if not is_two_finger(lm):
@@ -760,68 +906,6 @@ def handle_lock(cursor_gesture, cx, cy, got_cursor_hand, got_other_hand, mode_sw
 
 
 # ============================================================
-# MODE SWITCH handler (two-hand combo hold)
-# ============================================================
-def handle_mode_switch_two_hand(cursor_lm, cursor_cxcy, got_cursor,
-                                other_lm, other_cxcy, got_other):
-    """
-    CURSOR=PINCH_INDEX + OTHER=V_SIGN 를 중앙 박스에서 유지하면 MOUSE<->KEYBOARD 토글
-    ⚠️ IMPORTANT: PRESENTATION 등 다른 모드에서는 절대 개입하지 않음
-    return: True면(홀드 중) 입력 주입을 막아야 함
-    """
-    global mode, _ms_start, _ms_anchor_cur, _ms_anchor_oth, _last_mode_switch_ts, _reacquire_until
-
-    mu = str(mode).upper()
-    if mu not in ("MOUSE", "KEYBOARD"):
-        _ms_start = None
-        return False
-
-    t = now()
-
-    if t < _last_mode_switch_ts + MODE_SWITCH_COOLDOWN_SEC:
-        _ms_start = None
-        return False
-
-    if not (got_cursor and got_other and cursor_lm is not None and other_lm is not None):
-        _ms_start = None
-        return False
-
-    if not (is_pinch_index(cursor_lm) and is_v_sign_switch(other_lm)):
-        _ms_start = None
-        return False
-
-    minx, miny, maxx, maxy = MODE_SWITCH_BOX
-    cx, cy = cursor_cxcy
-    ox, oy = other_cxcy
-    if not (minx <= cx <= maxx and miny <= cy <= maxy and minx <= ox <= maxx and miny <= oy <= maxy):
-        _ms_start = None
-        return False
-
-    if _ms_start is None:
-        _ms_start = t
-        _ms_anchor_cur = cursor_cxcy
-        _ms_anchor_oth = other_cxcy
-        return True
-
-    if dist(cursor_cxcy, _ms_anchor_cur) > MODE_SWITCH_STILL_MAX_MOVE or dist(other_cxcy, _ms_anchor_oth) > MODE_SWITCH_STILL_MAX_MOVE:
-        _ms_start = t
-        _ms_anchor_cur = cursor_cxcy
-        _ms_anchor_oth = other_cxcy
-        return True
-
-    if (t - _ms_start) >= MODE_SWITCH_HOLD_SEC:
-        new_mode = "KEYBOARD" if mu == "MOUSE" else "MOUSE"
-        apply_set_mode(new_mode)
-        ws_send_set_mode(new_mode)
-        _last_mode_switch_ts = t
-        _ms_start = None
-        _reacquire_until = t + 0.25
-        return False
-
-    return True
-
-
-# ============================================================
 # Mouse: Click / Drag
 # ============================================================
 def handle_index_pinch_click_drag(cursor_gesture, can_inject):
@@ -841,6 +925,7 @@ def handle_index_pinch_click_drag(cursor_gesture, can_inject):
         _pending_single_click = False
         return
 
+    # 싱글클릭 지연 확정
     if _pending_single_click and t >= _single_click_deadline:
         if t >= _last_click_ts + CLICK_COOLDOWN_SEC:
             pyautogui.click()
@@ -934,26 +1019,42 @@ def handle_scroll_other_hand(scroll_active, scroll_cy, can_inject):
 
 
 # ============================================================
-# Presentation mode
+# Keyboard mode
 # ============================================================
-def handle_presentation_mode(cursor_gesture, cursor_cxcy, other_gesture, other_cxcy, got_other, can_inject):
-    """
-    PRESENTATION (PPT) - minimal 4 keys
-      - NEXT (Right): PINCH_INDEX hold
-      - PREV (Left): V_SIGN hold
-      - START (F5): both OPEN_PALM hold
-      - END (Esc): both PINCH_INDEX hold (priority)
-    """
-    global _ppt_next_hold, _ppt_last_next_ts, _ppt_next_fired
-    global _ppt_prev_hold, _ppt_last_prev_ts, _ppt_prev_fired
-    global _ppt_start_hold, _ppt_last_start_ts, _ppt_start_fired
-    global _ppt_end_hold, _ppt_last_end_ts, _ppt_end_fired
+def _kb_reset():
+    global _kb_last_token, _kb_streak, _kb_last_repeat_ts, _kb_token_start_ts, _kb_armed
+    global _mod_until
+    _kb_last_token = None
+    _kb_streak = 0
+    _kb_last_repeat_ts = 0.0
+    _kb_token_start_ts = 0.0
+    _kb_armed = True
+    _mod_until = 0.0
+    _kb_last_fire_map["SPACE"] = 0.0
+    _kb_last_fire_map["ENTER"] = 0.0
+    _kb_last_fire_map["ESC"] = 0.0
 
-    t = now()
-
-    if not can_inject:
-        _ppt_reset()
+def _fire_token(token):
+    # NO_INJECT면 실제 키 주입 금지
+    if NO_INJECT:
         return
+
+    if token == "LEFT":
+        pyautogui.press("left")
+    elif token == "RIGHT":
+        pyautogui.press("right")
+    elif token == "UP":
+        pyautogui.press("up")
+    elif token == "DOWN":
+        pyautogui.press("down")
+    elif token == "BACKSPACE":
+        pyautogui.press("backspace")
+    elif token == "SPACE":
+        pyautogui.press("space")
+    elif token == "ENTER":
+        pyautogui.press("enter")
+    elif token == "ESC":
+        pyautogui.press("esc")
 
     # END (Esc): both PINCH_INDEX hold (최우선)
     end_combo = got_other and (cursor_gesture == "PINCH_INDEX") and (other_gesture == "PINCH_INDEX")
@@ -1040,6 +1141,8 @@ def handle_keyboard_mode(can_inject,
     mod_active = (t < _mod_until)
 
     token = None
+
+    # FN layer
     if mod_active and got_cursor:
         if cursor_gesture == "FIST":
             token = "BACKSPACE"
@@ -1050,6 +1153,7 @@ def handle_keyboard_mode(can_inject,
         elif cursor_gesture == "V_SIGN":
             token = "ESC"
 
+    # base layer
     if token is None and got_cursor:
         if cursor_gesture == "FIST":
             token = "LEFT"
@@ -1107,33 +1211,252 @@ def handle_keyboard_mode(can_inject,
 
 
 # ============================================================
+# VKEY: Multi-finger AirTap
+# ============================================================
+def _hand_scale(lm):
+    return max(1e-6, dist_xy(lm[0], lm[9]))
+
+def _is_tip_extended(lm, tip):
+    pip = VKEY_TIP_TO_PIP.get(tip)
+    if pip is None:
+        return True
+
+    if tip in (8, 12, 16, 20):
+        return finger_extended(lm, tip, pip)
+
+    # 엄지는 y 비교가 약해서 거리 기반 (오탭 감소 목적)
+    return dist_xy(lm[tip], lm[pip]) > 0.020
+
+def _airtap_fired_for_tip(lm, tip):
+    st = _air_by_tip[tip]
+    t = now()
+
+    if lm is None:
+        st["phase"] = "IDLE"
+        st["prev_z"] = None
+        return False
+
+    if AIRTAP_REQUIRE_EXTENDED and (not _is_tip_extended(lm, tip)):
+        st["phase"] = "IDLE"
+        return False
+
+    if t < st["last_fire"] + AIRTAP_PER_FINGER_COOLDOWN_SEC:
+        return False
+
+    s = _hand_scale(lm)
+
+    # z 정규화: wrist(0) 대비 tip
+    z = (lm[tip][2] - lm[0][2]) / s
+    xy = (lm[tip][0], lm[tip][1])
+
+    if st["prev_z"] is None:
+        st["prev_z"] = z
+        st["prev_t"] = t
+        return False
+
+    dt = max(1e-6, t - st["prev_t"])
+    dz = (z - st["prev_z"]) / dt
+    st["prev_z"] = z
+    st["prev_t"] = t
+
+    # MediaPipe z: 카메라에 가까워질수록 더 "음수"인 경우가 많음
+    if st["phase"] == "IDLE":
+        if dz < -AIRTAP_Z_VEL_THRESH:
+            st["phase"] = "DOWNING"
+            st["t0"] = t
+            st["xy0"] = xy
+            st["fire_xy"] = None
+        return False
+
+    if st["phase"] == "DOWNING":
+        # 탭 중 XY 많이 움직이면 취소
+        if dist_xy(xy, st["xy0"]) > AIRTAP_XY_STILL_THRESH:
+            st["phase"] = "IDLE"
+            return False
+
+        # 너무 길면 취소
+        if (t - st["t0"]) > AIRTAP_MAX_GAP_SEC:
+            st["phase"] = "IDLE"
+            return False
+
+        # 복귀: dz가 큰 양수
+        if dz > AIRTAP_Z_VEL_THRESH:
+            gap = t - st["t0"]
+            st["phase"] = "IDLE"
+            if AIRTAP_MIN_GAP_SEC <= gap <= AIRTAP_MAX_GAP_SEC:
+                st["last_fire"] = t
+                st["fire_xy"] = st["xy0"]   # ✅ 탭 시작 좌표 고정
+                return True
+        return False
+
+    st["phase"] = "IDLE"
+    return False
+
+def _reset_vkey_states():
+    global _vkey_last_global_fire, TAP_SEQ, _last_tap
+    _vkey_last_global_fire = 0.0
+    TAP_SEQ = 0
+    _last_tap = None
+    for tip in VKEY_TIPS:
+        st = _air_by_tip[tip]
+        st["phase"] = "IDLE"
+        st["t0"] = 0.0
+        st["xy0"] = (0.5, 0.5)
+        st["fire_xy"] = None
+        st["last_fire"] = 0.0
+        st["prev_z"] = None
+        st["prev_t"] = 0.0
+
+def handle_vkey_mode(can_inject, cursor_lm):
+    """
+    VKEY(OSK)
+    - AirTap 감지 시 tap 이벤트 생성 (tapSeq/tapX/tapY/tapFinger)
+    - 기본: Python이 OS 클릭도 수행 (NO_INJECT면 클릭 안 함)
+    """
+    global _vkey_last_global_fire, TAP_SEQ, _last_tap
+
+    if (not can_inject) or cursor_lm is None:
+        for tip in VKEY_TIPS:
+            _air_by_tip[tip]["phase"] = "IDLE"
+        return
+
+    t = now()
+
+    if t < _vkey_last_global_fire + AIRTAP_GLOBAL_COOLDOWN_SEC:
+        return
+
+    fired_tip = None
+    for tip in VKEY_TIPS:
+        if _airtap_fired_for_tip(cursor_lm, tip):
+            fired_tip = tip
+            break
+
+    if fired_tip is None:
+        return
+
+    st = _air_by_tip[fired_tip]
+    if st.get("fire_xy") is not None:
+        px, py = st["fire_xy"]
+    else:
+        px, py = cursor_lm[fired_tip][0], cursor_lm[fired_tip][1]
+
+    ux, uy = map_control_to_screen(px, py)
+
+    TAP_SEQ += 1
+    _last_tap = {"seq": TAP_SEQ, "x": float(ux), "y": float(uy), "finger": int(fired_tip), "ts": float(t)}
+
+    # 실제 OS 클릭 (NO_INJECT면 수행 안 함)
+    if not NO_INJECT:
+        sx, sy = pyautogui.size()
+        x = int(ux * sx)
+        y = int(uy * sy)
+        try:
+            pyautogui.click(x=x, y=y)
+        except Exception:
+            pass
+
+    _vkey_last_global_fire = t
+
+
+# ============================================================
 # WS callbacks
 # ============================================================
-def send_status(ws, fps, cursor_gesture, other_gesture,
-                can_mouse_inject, can_key_inject, can_ppt_inject, can_draw_inject,
-                scroll_active, mode_switch_block):
+def _lm_to_payload(lm):
+    if lm is None:
+        return []
+    return [{"x": float(p[0]), "y": float(p[1]), "z": float(p[2])} for p in lm]
+
+def send_status(
+    ws,
+    fps,
+    cursor_gesture,
+    can_mouse_inject,
+    can_keyboard_inject,
+    scroll_active,
+    other_gesture,
+    rush_left=None,
+    rush_right=None,
+    cursor_lm=None,
+    other_lm=None,
+):
+    if NO_WS:
+        return
     if ws is None or (not _ws_connected):
         return
+
+    mode_u = str(mode).upper()
+
     payload = {
         "type": "STATUS",
         "enabled": bool(enabled),
         "mode": str(mode),
         "locked": bool(locked),
+        "preview": bool(PREVIEW),
+
         "gesture": str(cursor_gesture),
         "fps": float(fps),
 
-        # 기존 대시보드용 필드 (그대로 유지)
-        "canMove": bool((can_mouse_inject) and (cursor_gesture == "OPEN_PALM")),
-        "canClick": bool(can_mouse_inject and (cursor_gesture in ("PINCH_INDEX", "V_SIGN"))),
+        "canMove": bool(can_mouse_inject and (cursor_gesture in ("OPEN_PALM", "PINCH_INDEX"))),
+        "canClick": bool(
+            (can_mouse_inject and (cursor_gesture in ("PINCH_INDEX", "V_SIGN")))
+            or (enabled and mode_u == "VKEY")
+        ),
         "scrollActive": bool(scroll_active),
-        "canKey": bool(can_key_inject),
-        "otherGesture": str(other_gesture),
-        "modeSwitchHold": bool(mode_switch_block),
+        "canKey": bool(can_keyboard_inject),
 
-        # 추가(있어도 서버가 보통 무시/표시 가능)
-        "canDraw": bool(can_draw_inject),
-        "drawDown": bool(_draw_down),
+        "otherGesture": str(other_gesture),
+
+        "cursorLandmarks": _lm_to_payload(cursor_lm),
+        "otherLandmarks": _lm_to_payload(other_lm),
     }
+
+    # (선택) 디버그용: 커서손 검지끝
+    if cursor_lm is not None:
+        payload["cursorIndexTipX"] = float(cursor_lm[8][0])
+        payload["cursorIndexTipY"] = float(cursor_lm[8][1])
+        payload["cursorIndexTipZ"] = float(cursor_lm[8][2])
+
+    # ===== AirTap event =====
+    payload["tapSeq"] = int(TAP_SEQ)
+    if _last_tap is not None:
+        payload["tapX"] = float(_last_tap["x"])
+        payload["tapY"] = float(_last_tap["y"])
+        payload["tapFinger"] = int(_last_tap["finger"])
+        payload["tapTs"] = float(_last_tap["ts"])
+
+    # ===== RUSH: 양손 포인터 =====
+    if rush_left is not None:
+        payload["leftPointerX"] = float(rush_left["cx"])
+        payload["leftPointerY"] = float(rush_left["cy"])
+        payload["leftTracking"] = True
+        payload["leftGesture"] = str(rush_left.get("gesture", "NONE"))
+    else:
+        payload["leftTracking"] = False
+
+    if rush_right is not None:
+        payload["rightPointerX"] = float(rush_right["cx"])
+        payload["rightPointerY"] = float(rush_right["cy"])
+        payload["rightTracking"] = True
+        payload["rightGesture"] = str(rush_right.get("gesture", "NONE"))
+    else:
+        payload["rightTracking"] = False
+
+    # ===== fallback pointer =====
+    if rush_right is not None:
+        payload["pointerX"] = float(rush_right["cx"])
+        payload["pointerY"] = float(rush_right["cy"])
+        payload["isTracking"] = True
+    elif rush_left is not None:
+        payload["pointerX"] = float(rush_left["cx"])
+        payload["pointerY"] = float(rush_left["cy"])
+        payload["isTracking"] = True
+    elif mode_u == "VKEY" and cursor_lm is not None:
+        payload["pointerX"] = float(cursor_lm[8][0])
+        payload["pointerY"] = float(cursor_lm[8][1])
+        payload["isTracking"] = True
+    else:
+        payload["isTracking"] = False
+
     try:
         ws.send(json.dumps(payload))
     except Exception as e:
@@ -1153,8 +1476,13 @@ def on_close(ws, status_code, msg):
     print("[PY] WS closed:", status_code, msg)
 
 def on_message(ws, msg):
-    global enabled, locked, PREVIEW
+    """
+    Spring -> Python CMD:
+    - ENABLE / DISABLE / SET_MODE / SET_PREVIEW
+    """
+    global enabled, mode, locked, PREVIEW
     global _dragging, _pinch_start_ts, _pending_single_click
+    global _ema_x, _ema_y
 
     try:
         data = json.loads(msg)
@@ -1171,26 +1499,49 @@ def on_message(ws, msg):
 
     elif typ == "DISABLE":
         enabled = False
+
         if _dragging:
             try:
                 pyautogui.mouseUp()
             except Exception:
                 pass
             _dragging = False
+
         _pinch_start_ts = None
         _pending_single_click = False
         _kb_reset()
-        _ppt_reset()
-        _draw_reset()
+        _reset_vkey_states()
         print("[PY] cmd DISABLE -> enabled=False")
 
     elif typ == "SET_MODE":
         new_mode = str(data.get("mode", "MOUSE")).upper()
-        if new_mode == "PPT":
-            new_mode = "PRESENTATION"
-        if new_mode == "PAINT":
-            new_mode = "DRAW"
-        apply_set_mode(new_mode)
+
+        _ema_x = None
+        _ema_y = None
+
+        if new_mode != "MOUSE":
+            if _dragging:
+                try:
+                    pyautogui.mouseUp()
+                except Exception:
+                    pass
+                _dragging = False
+            _pinch_start_ts = None
+            _pending_single_click = False
+
+        if new_mode in ("KEYBOARD", "RUSH", "VKEY"):
+            locked = False
+            _kb_reset()
+            _reset_vkey_states()
+
+        if new_mode != "KEYBOARD":
+            _kb_reset()
+
+        if new_mode == "VKEY":
+            open_windows_osk()
+
+        mode = new_mode
+        print("[PY] cmd SET_MODE ->", mode)
 
     elif typ == "SET_PREVIEW":
         PREVIEW = bool(data.get("enabled", True))
@@ -1203,14 +1554,15 @@ def on_message(ws, msg):
 def main():
     global PREVIEW, CONTROL_BOX, _ema_x, _ema_y, _reacquire_until
     global _last_seen_ts, _last_cursor_lm, _last_cursor_cxcy, _last_cursor_gesture
-    global _dragging, _ws, _window_open
-    global _last_mode_event_ts, _mode_hold_start
-    global _fist_start, _fist_anchor
+    global _dragging, _ws, _fist_start, _fist_anchor, _mod_until
+    global _window_open
 
     print("[PY] running file:", os.path.abspath(__file__))
-    print("[PY] WS_URL:", WS_URL)
+    print("[PY] WS_URL:", WS_URL, "(disabled)" if NO_WS else "")
     print("[PY] CURSOR_HAND_LABEL:", CURSOR_HAND_LABEL)
+    print("[PY] NO_INJECT:", NO_INJECT)
 
+    # webcam
     try:
         cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
     except Exception:
@@ -1223,24 +1575,26 @@ def main():
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-    def ws_loop():
-        global _ws
-        while True:
-            try:
-                ws = WebSocketApp(
-                    WS_URL,
-                    on_open=on_open,
-                    on_close=on_close,
-                    on_error=on_error,
-                    on_message=on_message
-                )
-                _ws = ws
-                ws.run_forever(ping_interval=20, ping_timeout=10)
-            except Exception as e:
-                print("[PY] ws_loop exception:", e)
-            time.sleep(1.0)
+    # WS thread
+    if not NO_WS:
+        def ws_loop():
+            global _ws
+            while True:
+                try:
+                    ws = WebSocketApp(
+                        WS_URL,
+                        on_open=on_open,
+                        on_close=on_close,
+                        on_error=on_error,
+                        on_message=on_message
+                    )
+                    _ws = ws
+                    ws.run_forever(ping_interval=20, ping_timeout=10)
+                except Exception as e:
+                    print("[PY] ws_loop exception:", e)
+                time.sleep(1.0)
 
-    threading.Thread(target=ws_loop, daemon=True).start()
+        threading.Thread(target=ws_loop, daemon=True).start()
 
     prev = now()
     fps = 0.0
@@ -1250,6 +1604,7 @@ def main():
         if not ok or frame is None:
             continue
 
+        # mirror
         frame = cv2.flip(frame, 1)
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
@@ -1258,6 +1613,7 @@ def main():
         prev = t
         fps = 0.9 * fps + 0.1 * (1.0 / dt)
 
+        # inference
         res = hands.process(rgb)
         got_any = (res.multi_hand_landmarks is not None and len(res.multi_hand_landmarks) > 0)
 
@@ -1274,10 +1630,14 @@ def main():
                 labels = [None] * len(res.multi_hand_landmarks)
 
             for i, lm_obj in enumerate(res.multi_hand_landmarks):
-                lm = [(p.x, p.y) for p in lm_obj.landmark]
+                lm = [(p.x, p.y, p.z) for p in lm_obj.landmark]
                 label = labels[i] if i < len(labels) else None
                 hands_list.append((label, lm))
 
+        # RUSH: screen-based left/right
+        rush_left, rush_right = pick_lr_by_screen_x(hands_list)
+
+        # cursor/other pick
         if hands_list:
             for label, lm in hands_list:
                 if label == CURSOR_HAND_LABEL:
@@ -1293,7 +1653,7 @@ def main():
                         break
 
         # cursor gesture (loss smoothing)
-        got_cursor = cursor_lm is not None
+        got_cursor = (cursor_lm is not None)
         if got_cursor:
             cursor_cx, cursor_cy = palm_center(cursor_lm)
             if is_fist(cursor_lm):
@@ -1311,13 +1671,17 @@ def main():
             _last_cursor_lm = cursor_lm
             _last_cursor_cxcy = (cursor_cx, cursor_cy)
             _last_cursor_gesture = cursor_gesture
+
         else:
             if _last_cursor_lm is not None and (t - _last_seen_ts) <= LOSS_GRACE_SEC:
                 cursor_cx, cursor_cy = _last_cursor_cxcy
                 cursor_gesture = _last_cursor_gesture
+                cursor_lm = _last_cursor_lm
+                got_cursor = True
             else:
                 cursor_gesture = "NONE"
                 cursor_cx, cursor_cy = (0.5, 0.5)
+
                 if _dragging:
                     try:
                         pyautogui.mouseUp()
@@ -1325,14 +1689,12 @@ def main():
                         pass
                     _dragging = False
 
-                # ✅ DRAW도 안전 해제
-                _draw_reset()
-
                 if _last_cursor_lm is None or (t - _last_seen_ts) >= HARD_LOSS_SEC:
                     _reacquire_until = t + REACQUIRE_BLOCK_SEC
 
-        # other hand gesture
-        got_other = other_lm is not None
+        # other hand
+        got_other = (other_lm is not None)
+        other_cx, other_cy = (0.5, 0.5)
         other_gesture = "NONE"
         other_cx, other_cy = (0.5, 0.5)
         if got_other:
@@ -1350,120 +1712,77 @@ def main():
 
         mode_u = str(mode).upper()
 
-        # (A 방식) Web HUD Mode Menu
-        ui_menu_consume = handle_ui_mode_menu(cursor_gesture, other_gesture, got_other)
-
-        # mode switch gesture (MOUSE/KEYBOARD only)
-        if not ui_menu_consume:
-            mode_switch_block = handle_mode_switch_two_hand(
-                cursor_lm, (cursor_cx, cursor_cy), got_cursor,
-                other_lm, (other_cx, other_cy), got_other
-            )
-        else:
-            mode_switch_block = True
-
-        # lock only in mouse (단, UI 메뉴가 열려있으면 lock 금지)
-        if mode_u == "MOUSE" and (not ui_menu_consume):
-            handle_lock(cursor_gesture, cursor_cx, cursor_cy, got_cursor, got_other, mode_switch_block)
+        # LOCK only in MOUSE
+        if mode_u == "MOUSE":
+            handle_lock(cursor_gesture, cursor_cx, cursor_cy, got_cursor)
         else:
             _fist_start = None
             _fist_anchor = None
 
-        # NEXT_MODE event (both OPEN_PALM while locked)
-        if (not ui_menu_consume) and enabled and locked and (cursor_gesture == "OPEN_PALM") and (other_gesture == "OPEN_PALM"):
-            if _mode_hold_start is None:
-                _mode_hold_start = t
-            if (t - _mode_hold_start) >= MODE_HOLD_SEC and t >= _last_mode_event_ts + MODE_COOLDOWN_SEC:
-                send_event(_ws, "NEXT_MODE")
-                _last_mode_event_ts = t
-                _mode_hold_start = None
-        else:
-            _mode_hold_start = None
+        # injection permissions
+        can_mouse_inject = enabled and (mode_u == "MOUSE") and (t >= _reacquire_until) and (not locked) and (not NO_INJECT)
+        can_keyboard_inject = enabled and (mode_u == "KEYBOARD") and (t >= _reacquire_until) and (not locked) and (not NO_INJECT)
+        can_vkey_inject = enabled and (mode_u == "VKEY") and (t >= _reacquire_until) and (not locked)
 
-        can_mouse_inject = enabled and (mode_u == "MOUSE") and (t >= _reacquire_until) and (not locked) and (not mode_switch_block) and (not ui_menu_consume)
-        can_key_inject   = enabled and (mode_u == "KEYBOARD") and (t >= _reacquire_until) and (not locked) and (not mode_switch_block) and (not ui_menu_consume)
-        can_ppt_inject   = enabled and (mode_u == "PRESENTATION") and (t >= _reacquire_until) and (not locked) and (not mode_switch_block) and (not ui_menu_consume)
-        can_draw_inject  = enabled and (mode_u == "DRAW") and (t >= _reacquire_until) and (not locked) and (not mode_switch_block) and (not ui_menu_consume)
+        # RUSH disables OS inject
+        if mode_u == "RUSH":
+            can_mouse_inject = False
+            can_keyboard_inject = False
+            can_vkey_inject = False
 
-        # ------------------------------------------------------------
-        # cursor move
-        # - MOUSE: OPEN_PALM only
-        # - DRAW : OPEN_PALM or PINCH_INDEX (drawing)
-        # ------------------------------------------------------------
-        if can_mouse_inject and cursor_gesture == "OPEN_PALM":
-            ux, uy = map_control_to_screen(cursor_cx, cursor_cy)
-            ex, ey = apply_ema(ux, uy)
-            move_cursor(ex, ey)
+        # VKEY only uses vkey (mouse/keyboard OFF)
+        if mode_u == "VKEY":
+            can_mouse_inject = False
+            can_keyboard_inject = False
 
-        if can_draw_inject and cursor_gesture in ("OPEN_PALM", "PINCH_INDEX"):
-            ux, uy = map_control_to_screen(cursor_cx, cursor_cy)
-            ex, ey = apply_ema(ux, uy)
-            # 그리는 중엔 deadzone을 줄여 선이 덜 끊기게
-            dz = 4 if _draw_down else 8
-            move_cursor(ex, ey, deadzone_px=dz)
-
-        scroll_active = False
-
-        # ------------------------------------------------------------
-        # MOUSE injections
-        # ------------------------------------------------------------
+        # mouse move
         if can_mouse_inject:
-            handle_index_pinch_click_drag(cursor_gesture, True)
-            handle_right_click(cursor_gesture, True)
+            if cursor_gesture == "OPEN_PALM" or (_dragging and cursor_gesture == "PINCH_INDEX"):
+                ux, uy = map_control_to_screen(cursor_cx, cursor_cy)
+                ex, ey = apply_ema(ux, uy)
+                move_cursor(ex, ey)
 
-            if got_other:
-                handle_scroll_other_hand(other_gesture == "FIST", other_cy, True)
-                scroll_active = (other_gesture == "FIST")
-            else:
-                handle_scroll_other_hand(False, 0.5, False)
+        # mouse actions
+        handle_index_pinch_click_drag(cursor_gesture, can_mouse_inject)
+        handle_right_click(cursor_gesture, can_mouse_inject)
+
+        # scroll
+        if can_mouse_inject and got_other:
+            handle_scroll_other_hand(other_gesture == "FIST", other_cy, True)
+            scroll_active = (other_gesture == "FIST")
         else:
             # not mouse => clear mouse side effects
             handle_index_pinch_click_drag(cursor_gesture, False)
             handle_right_click(cursor_gesture, False)
             handle_scroll_other_hand(False, 0.5, False)
 
-        # ------------------------------------------------------------
-        # KEYBOARD injections
-        # ------------------------------------------------------------
-        if can_key_inject:
-            handle_keyboard_mode(can_key_inject, got_cursor, cursor_gesture, got_other, other_gesture)
-        else:
-            if mode_u != "KEYBOARD":
-                _kb_reset()
+        # keyboard
+        handle_keyboard_mode(
+            can_keyboard_inject,
+            got_cursor, cursor_gesture, (cursor_cx, cursor_cy),
+            got_other, other_gesture, (other_cx, other_cy)
+        )
 
-        # ------------------------------------------------------------
-        # PPT injections
-        # ------------------------------------------------------------
-        if can_ppt_inject:
-            handle_presentation_mode(
-                cursor_gesture, (cursor_cx, cursor_cy),
-                other_gesture, (other_cx, other_cy),
-                got_other, True
-            )
-        else:
-            if mode_u != "PRESENTATION":
-                _ppt_reset()
-
-        # ------------------------------------------------------------
-        # DRAW injections
-        # ------------------------------------------------------------
-        if can_draw_inject:
-            # 먼저 단축키(복사/잘라내기) 처리하고,
-            # 그 다음 드로잉(핀치 드래그) 처리
-            handle_draw_selection_shortcuts(cursor_gesture, other_gesture, got_other, True)
-            handle_draw_mode(cursor_gesture, True)
-        else:
-            if mode_u != "DRAW":
-                _draw_reset()
+        # VKEY
+        if mode_u == "VKEY":
+            handle_vkey_mode(can_vkey_inject, cursor_lm)
 
         # status
         send_status(
-            _ws, fps, cursor_gesture, other_gesture,
-            can_mouse_inject, can_key_inject, can_ppt_inject, can_draw_inject,
-            scroll_active, mode_switch_block
+            _ws,
+            fps,
+            cursor_gesture,
+            can_mouse_inject,
+            can_keyboard_inject,
+            scroll_active,
+            other_gesture,
+            rush_left=rush_left,
+            rush_right=rush_right,
+            cursor_lm=cursor_lm,
+            other_lm=other_lm,
         )
 
-        # preview window
+        # preview / local keys
         if not HEADLESS:
             if PREVIEW:
                 if not _window_open:
@@ -1471,15 +1790,26 @@ def main():
                     _window_open = True
 
                 fn_on = (t < _mod_until)
-                cv2.putText(
-                    frame,
-                    f"mode={mode_u} enabled={enabled} locked={locked} cur={cursor_gesture} oth={other_gesture} FN={fn_on} SW={mode_switch_block} UI={ui_menu_consume}",
-                    (10, 25),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.55,
-                    (0, 255, 0),
-                    2,
-                )
+
+                # 상단 상태
+                line1 = f"mode={mode_u} enabled={enabled} locked={locked} cur={cursor_gesture} oth={other_gesture} FN={fn_on} noInject={NO_INJECT}"
+                cv2.putText(frame, line1, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
+
+                # VKEY 안내 + tapSeq
+                if mode_u == "VKEY":
+                    cv2.putText(frame, "VKEY: Multi-finger AirTap (4/8/12/16/20)", (10, 50),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 0), 2)
+                    cv2.putText(frame, f"tapSeq={TAP_SEQ}", (10, 75),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 0), 2)
+
+                # RUSH debug
+                if rush_left is not None:
+                    cv2.putText(frame, f"RUSH L: ({rush_left['cx']:.2f},{rush_left['cy']:.2f}) {rush_left['gesture']}",
+                                (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 0), 2)
+                if rush_right is not None:
+                    cv2.putText(frame, f"RUSH R: ({rush_right['cx']:.2f},{rush_right['cy']:.2f}) {rush_right['gesture']}",
+                                (10, 125), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 0, 255), 2)
+
                 cv2.imshow("GestureOS Agent", frame)
 
                 key = cv2.waitKey(1) & 0xFF
@@ -1491,14 +1821,33 @@ def main():
                 elif key in (ord('l'), ord('L')):
                     globals()["locked"] = not locked
                     print("[KEY] locked:", locked)
+                elif key in (ord('p'), ord('P')):
+                    PREVIEW = not PREVIEW
+                    print("[KEY] preview:", PREVIEW)
                 elif key in (ord('m'), ord('M')):
                     apply_set_mode("MOUSE")
                 elif key in (ord('k'), ord('K')):
-                    apply_set_mode("KEYBOARD")
-                elif key in (ord('p'), ord('P')):
-                    apply_set_mode("PRESENTATION")
-                elif key in (ord('d'), ord('D')):
-                    apply_set_mode("DRAW")
+                    mode = "KEYBOARD"
+                    locked = False
+                    _kb_reset()
+                    _reset_vkey_states()
+                    print("[KEY] mode=KEYBOARD (unlock)")
+                elif key in (ord('r'), ord('R')):
+                    mode = "RUSH"
+                    locked = False
+                    _kb_reset()
+                    _reset_vkey_states()
+                    print("[KEY] mode=RUSH (unlock)")
+                elif key in (ord('v'), ord('V')):
+                    mode = "VKEY"
+                    locked = False
+                    _kb_reset()
+                    _reset_vkey_states()
+                    open_windows_osk()
+                    print("[KEY] mode=VKEY (unlock + open OSK)")
+                elif key in (ord('o'), ord('O')):
+                    open_windows_osk()
+                    print("[KEY] open OSK")
                 elif key in (ord('c'), ord('C')):
                     cx, cy = _last_cursor_cxcy if _last_cursor_cxcy is not None else (0.5, 0.5)
                     minx = clamp01(cx - CONTROL_HALF_W)
