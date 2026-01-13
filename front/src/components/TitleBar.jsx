@@ -1,3 +1,5 @@
+// src/components/TitleBar.jsx
+
 function cn(...xs) {
   return xs.filter(Boolean).join(" ");
 }
@@ -7,15 +9,20 @@ export default function TitleBar({
   onToggleHud,
   screen,
   onChangeScreen,
+  theme,
+  setTheme,
 }) {
   const onMin = () => window.managerWin?.minimize?.();
   const onMax = () => window.managerWin?.toggleMaximize?.();
   const onClose = () => window.managerWin?.close?.();
 
+  // ✅ return(JSX) 밖에서만 선언해야 함
+  const THEME_PRESETS = ["dark", "light", "acid", "valentine"];
+
   return (
     <div
-      className="h-11 flex items-center justify-between px-3 select-none border-b border-white/10 bg-gradient-to-b from-[#0b1020] to-[#070b14]"
-      style={{ WebkitAppRegion: "drag" }}
+      className="navbar bg-base-200 h-11 flex items-center justify-between px-3 select-none border-b border-white/10 bg-gradient-to-b from-[#0b1020] to-[#070b14]"
+      style={{ WebkitAppRegion: "no-drag" }}
       onDoubleClick={onMax}
     >
       {/* LEFT: Logo + Title + Screen Tabs */}
@@ -25,7 +32,7 @@ export default function TitleBar({
         </div>
         <span className="font-semibold text-sm">Gesture Agent Manager</span>
 
-        {/* ✅ 화면 전환 탭 (드래그 영역에서 제외) */}
+        {/* 화면 전환 탭 */}
         <div
           className="ml-2 flex items-center gap-1 bg-white/5 p-1 rounded-lg"
           style={{ WebkitAppRegion: "no-drag" }}
@@ -55,6 +62,7 @@ export default function TitleBar({
           >
             Rush
           </button>
+
           <button
             type="button"
             onClick={() => onChangeScreen?.("vkey")}
@@ -69,7 +77,7 @@ export default function TitleBar({
           </button>
         </div>
 
-        {/* ✅ HUD 토글 (원하면 TitleBar에도 둠) */}
+        {/* HUD 토글 */}
         <button
           type="button"
           onClick={() => onToggleHud?.()}
@@ -86,7 +94,33 @@ export default function TitleBar({
         </button>
       </div>
 
-      {/* RIGHT: Window Controls (no-drag) */}
+      {/* THEME BUTTONS */}
+      <div
+        className="ml-2 inline-flex items-center rounded-full ring-1 ring-white/10 bg-slate-900/35 p-1"
+        style={{ WebkitAppRegion: "no-drag" }}
+      >
+        {THEME_PRESETS.map((th) => {
+          const active = theme === th;
+
+          return (
+            <button
+              key={th}
+              type="button"
+              onClick={() => setTheme?.(th)}
+              className={cn(
+                "btn btn-sm rounded-full",
+                active
+                  ? "btn-primary" : "btn-ghost"
+              )}
+              title={`테마: ${th}`}
+            >
+              {th}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* RIGHT: Window Controls */}
       <div
         className="flex items-center gap-2"
         style={{ WebkitAppRegion: "no-drag" }}

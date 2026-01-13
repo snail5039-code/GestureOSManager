@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+@plugin "daisyui" {
+  themes: dark --default, light, cupcake, bumblebee, acid, valentine;
+}
 /* 스크롤은 유지하되 덜 튀게 */
 main::-webkit-scrollbar {
   width: 10px;

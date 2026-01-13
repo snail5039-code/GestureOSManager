@@ -6,6 +6,7 @@ import Rush3DPage from "./pages/Rush3DPage"; // ✅ 파일 위치에 맞게 조�
 import VKeyPage from "./pages/VKeyPage";
 
 export default function App() {
+
   // HUD ON/OFF 상태 (기본 ON, 저장)
   const [hudOn, setHudOn] = useState(() => {
     const v = localStorage.getItem("hudOn");
@@ -27,14 +28,26 @@ export default function App() {
   // ✅ Dashboard의 액션(함수들)을 ref에 저장
   const hudActionsRef = useRef({});
 
+  // ✅ 테마 state
+  const [theme, setTheme] = useState(() => localStorage.getItem("theme") || "dark");
+
+  // ✅ DaisyUI 테마 적용
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    console.log("data-theme =", theme);
+  }, [theme]);
+
+
   return (
-    <div className="h-screen flex flex-col overflow-hidden bg-[#0b1020]">
+    <div data-theme={theme} className="h-screen flex flex-col overflow-hidden">
       {/* ✅ 타이틀바에서 HUD 토글 + 화면 전환 */}
       <TitleBar
         hudOn={hudOn}
         onToggleHud={toggleHud}
         screen={screen}
         onChangeScreen={setScreen}
+        theme={theme}
+        setTheme={setTheme}
       />
 
       {/* ✅ 화면에 따라 스크롤 동작 변경 */}
@@ -55,6 +68,7 @@ export default function App() {
             onHudActions={(actions) => {
               hudActionsRef.current = actions || {};
             }}
+            theme={theme}
           />
         </div>
 

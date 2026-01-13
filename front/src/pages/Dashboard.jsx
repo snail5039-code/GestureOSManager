@@ -1,5 +1,6 @@
 import axios from "axios";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { THEME } from "../theme/themeTokens";
 
 const POLL_MS = 500;
 
@@ -34,7 +35,7 @@ function Badge({ children, tone = "slate" }) {
   const map = {
     slate: "bg-slate-800/65 text-slate-200 ring-white/10",
     blue: "bg-sky-500/16 text-sky-200 ring-sky-400/25",
-    green: "bg-emerald-500/16 text-emerald-200 ring-emerald-400/25",
+    green: "bg-sky-500/16 text-sky-200 ring-sky-400/25",
     yellow: "bg-amber-500/16 text-amber-200 ring-amber-400/25",
     red: "bg-rose-500/16 text-rose-200 ring-rose-400/25",
   };
@@ -314,12 +315,15 @@ function PointerMiniMap({ x, y }) {
   );
 }
 
-export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions } = {}) {
+export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions, theme = "dark" } = {}) {
   const [status, setStatus] = useState(null);
   const [mode, setMode] = useState("MOUSE");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  // 테마
+  const t = THEME[theme] || THEME.dark;
 
   const [preview, setPreview] = useState(false);
   const previewRef = useRef(false);
@@ -545,16 +549,16 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
   const canStop = !busy && !!derived.enabled;
 
   return (
-    <div className="min-h-screen relative overflow-hidden bg-[#070c16] text-slate-100">
+    <div className="min-h-screen ... bg-base-100 text-base-content">
       {/* background: subtle glow + grid */}
       <div className="pointer-events-none absolute inset-0">
-        <div className="absolute -top-40 -left-40 h-[520px] w-[520px] rounded-full bg-sky-500/10 blur-3xl" />
-        <div className="absolute -bottom-52 -right-48 h-[560px] w-[560px] rounded-full bg-emerald-500/8 blur-3xl" />
-        <div className="absolute inset-0 opacity-[0.08] bg-[linear-gradient(to_right,rgba(255,255,255,.10)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,.10)_1px,transparent_1px)] bg-[size:60px_60px]" />
+        <div className={cn("absolute -top-40 -left-40 h-[520px] w-[520px] rounded-full blur-3xl", t.bgGlow1)} />
+        <div className={cn("absolute -bottom-52 -right-48 h-[560px] w-[560px] rounded-full blur-3xl", t.bgGlow2)} />
+        <div className={cn("absolute inset-0 bg-[size:60px_60px]", t.grid)} />
       </div>
 
       {/* Topbar */}
-      <div className="sticky top-0 z-20 border-b border-white/10 bg-gradient-to-r from-[#0b4aa2]/22 via-[#0b1220]/85 to-[#0b1220]/85 backdrop-blur">
+      <div className={cn("sticky top-0 z-20 border-b backdrop-blur", t.topbar)}>
         <div className="mx-auto max-w-[1200px] px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="h-9 w-9 rounded-2xl bg-gradient-to-b from-sky-400/20 to-sky-400/0 ring-1 ring-sky-400/20 grid place-items-center shadow-[0_0_24px_rgba(56,189,248,0.15)]">
