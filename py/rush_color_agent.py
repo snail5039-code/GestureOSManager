@@ -1,11 +1,9 @@
 """
-rush_color_agent.py (STICK COLOR VERSION - ROBUST)
-- OpenCV HSV 기반 "봉 바디 색" 트래킹 (RED / BLUE)
-- 빠른 상하 이동에서 검출 끊김 개선:
-  1) 카메라 MJPG/FPS/노출(가능 시) 고정
-  2) 검출 실패해도 grace 동안 "속도 기반 예측"으로 좌표 계속 내보냄 (슬래시 끊김 방지)
-  3) 이전 bbox 주변 ROI에서는 느슨한 임계치+완화된 모양필터로 재탐색(재획득 강화)
-  4) 트래킹 중에는 MIN_AREA/ASPECT 조건을 완화
+rush_color_agent_robust.py
+- OpenCV HSV 기반 "봉 색" 트래킹 (RED / BLUE)
+- contour의 top-most point(끝점) 기반으로 좌표 산출 (빠른 상하 움직임에 유리)
+- 스무딩 약화 + 트래킹 드랍 grace + 레인 고정(BLUE=Left, RED=Right)
+- WebSocket(Spring)으로 STATUS 전송 (RUSH용)
 
 Keys (preview window focus):
   ESC : quit
@@ -46,7 +44,6 @@ STATE = {
 # =========================
 FRAME_W = 640
 FRAME_H = 480
-TARGET_FPS = 60  # 가능하면 60, 안 되면 드라이버가 무시할 수 있음
 FLIP_MIRROR = True
 
 CAP_BACKENDS = [
@@ -57,100 +54,68 @@ CAP_BACKENDS = [
 CAM_INDEX_CANDIDATES = [0, 1, 2]
 
 # =========================
-# Tracking params (tune here)
+# Tracking params
 # =========================
-# "처음 재획득(전체 프레임)"에서는 좀 엄격
-MIN_AREA_RED_STRICT = 3500
-MIN_AREA_BLUE_STRICT = 3500
+# 너무 빡세면 빠르게 움직일 때 끊김. 일단 실사용 안정적으로.
+MIN_AREA_RED  = 1800
+MIN_AREA_BLUE = 1800
+MAX_AREA = 160000
 
-# "트래킹 유지/ROI"에서는 완화 (빠르게 움직일 때 끊기는 주범 해결)
-MIN_AREA_RED_RELAX = 1400
-MIN_AREA_BLUE_RELAX = 1400
+# 끊겨도 잠깐 유지
+LOSS_GRACE_SEC = 0.22
 
-MAX_AREA = 150000
-
-# 봉 모양 필터(회전사각형 긴변/짧은변 비율)
-ASPECT_MIN_STRICT = 2.2
-ASPECT_MIN_RELAX = 1.55  # 빠르게 움직이면 블러로 두께가 퍼져서 비율이 내려감
-
-# 검출 잠깐 끊겨도 유지하는 시간 (그리고 이 동안은 예측 좌표 내보냄)
-LOSS_GRACE_SEC = 0.25
-
-# 위치 EMA (0~1). 클수록 즉각 반응(덜 부드러움, 더 빠름)
-# 슬래시를 살리려면 너무 낮게(0.35 같은) 잡지 말 것
+# EMA: alpha가 클수록 "현재 값"을 더 믿음(=빠르게 따라감)
 SMOOTH_ALPHA = 0.75
 
-# ROI 확장 비율 (이전 bbox 주변을 얼마나 넓게 재탐색할지)
-ROI_EXPAND = 1.8
+# 봉 모양 필터(회전 사각형 기준 긴변/짧은변)
+ASPECT_MIN_STRICT = 2.0
+ASPECT_MIN_RELAX  = 1.45
 
-# ROI에서 임계치를 느슨하게 할 때 S/V를 얼마나 낮출지
-LOOSEN_S = 40
-LOOSEN_V = 60
-
-# Morphology kernel (마스크 끊김 연결)
+# morphology
 KERNEL = np.ones((5, 5), np.uint8)
+
+# 약한 블러(모션블러 상황에서 마스크 파편 줄이는 목적)
+BLUR_K = 3
 
 # =========================
 # HSV ranges (initial)
 # OpenCV HSV: H(0~179), S(0~255), V(0~255)
 # =========================
-BLUE_LO = np.array([95,  60,  40], dtype=np.uint8)
+BLUE_LO = np.array([95,  70,  60], dtype=np.uint8)
 BLUE_HI = np.array([140, 255, 255], dtype=np.uint8)
 
-# RED: wrap(170..179 U 0..10)
-RED_LO = np.array([170, 110, 70], dtype=np.uint8)
+# RED는 Hue wrap(170..179 U 0..10)
+RED_LO = np.array([170, 120, 80], dtype=np.uint8)
 RED_HI = np.array([10,  255, 255], dtype=np.uint8)
-
 
 def now():
     return time.time()
 
-
 def clamp01(v):
     return max(0.0, min(1.0, float(v)))
-
 
 def ema(prev, cur, a):
     if prev is None:
         return cur
     return (1 - a) * prev + a * cur
 
-
 def open_camera():
-    """
-    - MJPG + FPS + (가능하면) 오토노출 끄기
-    - 이게 되면 "내려갈 때 어두워져서 색이 죽는 문제"가 확 줄어듦
-    """
     for idx in CAM_INDEX_CANDIDATES:
         for be in CAP_BACKENDS:
             cap = cv2.VideoCapture(idx, be) if isinstance(be, int) else cv2.VideoCapture(idx)
             if not cap or not cap.isOpened():
                 try:
                     cap.release()
-                except Exception:
+                except:
                     pass
                 continue
 
-            # 버퍼 최소
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-
-            # MJPG: 지연/프레임 안정화에 도움 (가능하면)
-            try:
-                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-            except Exception:
-                pass
-
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_W)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_H)
-            cap.set(cv2.CAP_PROP_FPS, TARGET_FPS)
 
-            # 오토노출 끄기/노출 고정 (드라이버에 따라 무시될 수 있음)
-            # DSHOW 계열: AUTO_EXPOSURE 0.25가 "manual"로 동작하는 경우가 많음
-            try:
-                cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
-                cap.set(cv2.CAP_PROP_EXPOSURE, -6)  # -4~-8 사이로 튜닝 가능
-            except Exception:
-                pass
+            # 가능하면 FPS 올려보기(카메라마다 무시될 수 있음)
+            cap.set(cv2.CAP_PROP_FPS, 60)
 
             ok, frame = cap.read()
             if ok and frame is not None:
@@ -159,11 +124,10 @@ def open_camera():
 
             try:
                 cap.release()
-            except Exception:
+            except:
                 pass
 
     raise RuntimeError("webcam open failed. 카메라 점유 앱 종료/권한/인덱스 확인 필요")
-
 
 def build_mask(hsv, lo, hi):
     """
@@ -181,51 +145,32 @@ def build_mask(hsv, lo, hi):
             np.array([hiH, hiS, hiV], np.uint8),
         )
 
-    # wrap
     m1 = cv2.inRange(hsv, np.array([loH, loS, loV], np.uint8), np.array([179, hiS, hiV], np.uint8))
     m2 = cv2.inRange(hsv, np.array([0,   loS, loV], np.uint8), np.array([hiH, hiS, hiV], np.uint8))
     return cv2.bitwise_or(m1, m2)
 
-
 def contour_aspect_ratio(c):
-    rect = cv2.minAreaRect(c)  # ((cx,cy),(w,h),angle)
+    rect = cv2.minAreaRect(c)
     (w, h) = rect[1]
-    w = float(w)
-    h = float(h)
+    w = float(w); h = float(h)
     short = max(1e-6, min(w, h))
     longv = max(w, h)
     return longv / short
 
-
-def loosen_lo(lo, dS=40, dV=60):
+def contour_topmost_point(c):
     """
-    ROI 재탐색에서만 S/V 문턱을 낮춰서
-    어두워지거나 모션블러로 색이 약해져도 잡히게 한다.
+    contour 점들 중 y가 가장 작은 점(최상단) -> 봉 끝점 추정에 유리
+    반환: (x, y)
     """
-    loH, loS, loV = int(lo[0]), int(lo[1]), int(lo[2])
-    return np.array([loH, max(0, loS - dS), max(0, loV - dV)], dtype=np.uint8)
+    pts = c.reshape(-1, 2)
+    i = np.argmin(pts[:, 1])
+    return float(pts[i, 0]), float(pts[i, 1])
 
-
-def find_marker_center(hsv_full, lo, hi, min_area, aspect_min, roi=None):
-    """
-    roi: (x0,y0,x1,y1) in full-frame coords. None이면 전체 프레임.
-    반환:
-      picked = (tipx, tipy, area, bbox(x,y,w,h), ar)
-      mask (roi 기준 마스크) -> 디버그용
-    """
-    if roi is not None:
-        x0, y0, x1, y1 = roi
-        hsv = hsv_full[y0:y1, x0:x1]
-    else:
-        x0, y0 = 0, 0
-        hsv = hsv_full
-
+def find_marker_tip(hsv, lo, hi, min_area, aspect_min):
     mask = build_mask(hsv, lo, hi)
 
-    # 마스크 끊김을 연결(빠른 모션 블러 대응)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, KERNEL, iterations=1)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, KERNEL, iterations=2)
-    mask = cv2.dilate(mask, KERNEL, iterations=1)
 
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
@@ -233,7 +178,6 @@ def find_marker_center(hsv_full, lo, hi, min_area, aspect_min, roi=None):
 
     contours = sorted(contours, key=cv2.contourArea, reverse=True)
 
-    picked = None
     for c in contours[:10]:
         area = float(cv2.contourArea(c))
         if area < float(min_area):
@@ -245,76 +189,14 @@ def find_marker_center(hsv_full, lo, hi, min_area, aspect_min, roi=None):
         if ar < float(aspect_min):
             continue
 
-        M = cv2.moments(c)
-        if M["m00"] <= 1e-6:
-            continue
+        x, y, w, h = cv2.boundingRect(c)
 
-        # bbox (roi 좌표)
-        rx, ry, rw, rh = cv2.boundingRect(c)
+        # 끝점(top-most) 사용
+        tipx, tipy = contour_topmost_point(c)
 
-        # 봉 "윗끝" 근처를 tip으로 사용(너 코드 그대로 유지)
-        tipx = rx + rw * 0.5
-        tipy = ry + rh * 0.15
+        return (tipx, tipy, area, (x, y, w, h), ar), mask
 
-        # full-frame 좌표로 환산
-        fx = float(tipx + x0)
-        fy = float(tipy + y0)
-        bx = int(rx + x0)
-        by = int(ry + y0)
-
-        picked = (fx, fy, area, (bx, by, int(rw), int(rh)), float(ar))
-        break
-
-    return picked, mask
-
-
-class TrackState:
-    """
-    - detect 성공: pos 갱신 + 속도 추정
-    - detect 실패: grace 동안 predict()로 좌표를 계속 만들어낸다 (슬래시 끊김 방지 핵심)
-    """
-    def __init__(self):
-        self.pos = None        # (nx, ny)
-        self.vel = (0.0, 0.0)  # (vnx, vny) per second
-        self.last_t = None
-        self.seen_t = 0.0
-        self.bbox = None
-        self.predicted = False
-
-    def update_detect(self, nx, ny, bbox, t):
-        self.predicted = False
-
-        if self.pos is not None and self.last_t is not None:
-            dt = max(1e-4, t - self.last_t)
-            vx = (nx - self.pos[0]) / dt
-            vy = (ny - self.pos[1]) / dt
-            # 폭주 방지 (grace 예측용)
-            vx = float(np.clip(vx, -3.0, 3.0))
-            vy = float(np.clip(vy, -3.0, 3.0))
-            self.vel = (vx, vy)
-
-        self.pos = (nx, ny)
-        self.bbox = bbox
-        self.last_t = t
-        self.seen_t = t
-
-    def predict(self, t):
-        if self.pos is None or self.last_t is None:
-            return None
-        dt = max(0.0, t - self.last_t)
-        px = self.pos[0] + self.vel[0] * dt
-        py = self.pos[1] + self.vel[1] * dt
-        px = clamp01(px)
-        py = clamp01(py)
-
-        self.pos = (px, py)
-        self.last_t = t
-        self.predicted = True
-        return (px, py)
-
-    def is_alive(self, t, grace_sec):
-        return self.pos is not None and (t - self.seen_t) <= grace_sec
-
+    return None, mask
 
 # =========================
 # WS client
@@ -322,22 +204,18 @@ class TrackState:
 _ws = None
 _ws_connected = False
 
-
 def on_open(ws):
     global _ws_connected
     _ws_connected = True
     print("[PY] WS connected")
 
-
 def on_error(ws, err):
     print("[PY] WS error:", err)
-
 
 def on_close(ws, status_code, msg):
     global _ws_connected
     _ws_connected = False
     print("[PY] WS closed:", status_code, msg)
-
 
 def on_message(ws, msg):
     try:
@@ -365,7 +243,6 @@ def on_message(ws, msg):
         STATE["PREVIEW"] = bool(data.get("enabled", True))
         print("[PY] cmd SET_PREVIEW ->", STATE["PREVIEW"])
 
-
 def send_status(ws, payload: dict):
     if ws is None or (not _ws_connected):
         return
@@ -374,15 +251,12 @@ def send_status(ws, payload: dict):
     except Exception as e:
         print("[PY] send_status error:", e)
 
-
 # =========================
 # HSV tuner
 # =========================
 def ensure_tuner_window():
     cv2.namedWindow("HSV Tuner", cv2.WINDOW_NORMAL)
-
-    def nothing(_):
-        pass
+    def nothing(_): pass
 
     # RED
     cv2.createTrackbar("R_H_lo", "HSV Tuner", int(RED_LO[0]), 179, nothing)
@@ -400,24 +274,17 @@ def ensure_tuner_window():
     cv2.createTrackbar("B_S_hi", "HSV Tuner", int(BLUE_HI[1]), 255, nothing)
     cv2.createTrackbar("B_V_hi", "HSV Tuner", int(BLUE_HI[2]), 255, nothing)
 
-
 def read_tuner_values():
     global RED_LO, RED_HI, BLUE_LO, BLUE_HI
-
     def g(name):
         return cv2.getTrackbarPos(name, "HSV Tuner")
 
-    RED_LO = np.array([g("R_H_lo"), g("R_S_lo"), g("R_V_lo")], dtype=np.uint8)
-    RED_HI = np.array([g("R_H_hi"), g("R_S_hi"), g("R_V_hi")], dtype=np.uint8)
+    RED_LO  = np.array([g("R_H_lo"), g("R_S_lo"), g("R_V_lo")], dtype=np.uint8)
+    RED_HI  = np.array([g("R_H_hi"), g("R_S_hi"), g("R_V_hi")], dtype=np.uint8)
     BLUE_LO = np.array([g("B_H_lo"), g("B_S_lo"), g("B_V_lo")], dtype=np.uint8)
     BLUE_HI = np.array([g("B_H_hi"), g("B_S_hi"), g("B_V_hi")], dtype=np.uint8)
 
-
 def calibrate_from_center_roi(frame_bgr, target="RED"):
-    """
-    화면 중앙 ROI(60x60)의 HSV 중앙값 기반으로 lo/hi 자동 세팅.
-    - RED는 wrap 가능
-    """
     global RED_LO, RED_HI, BLUE_LO, BLUE_HI
 
     h, w = frame_bgr.shape[:2]
@@ -456,28 +323,6 @@ def calibrate_from_center_roi(frame_bgr, target="RED"):
         BLUE_LO, BLUE_HI = lo, hi
         print("[CAL] BLUE ->", BLUE_LO.tolist(), BLUE_HI.tolist(), "(wrap if lo>hi)")
 
-
-def bbox_to_roi(bbox, W, H, expand=1.8):
-    """
-    bbox: (x,y,w,h) in full frame
-    expand: 얼마나 확장할지
-    """
-    if not bbox:
-        return None
-    x, y, w, h = bbox
-    cx = x + w * 0.5
-    cy = y + h * 0.5
-    nw = w * expand
-    nh = h * expand
-    x0 = int(max(0, cx - nw * 0.5))
-    y0 = int(max(0, cy - nh * 0.5))
-    x1 = int(min(W, cx + nw * 0.5))
-    y1 = int(min(H, cy + nh * 0.5))
-    if x1 - x0 < 10 or y1 - y0 < 10:
-        return None
-    return (x0, y0, x1, y1)
-
-
 def main():
     global _ws
 
@@ -503,8 +348,11 @@ def main():
 
     threading.Thread(target=ws_loop, daemon=True).start()
 
-    redS = TrackState()
-    blueS = TrackState()
+    # state for smoothing + grace
+    red_last = None
+    blue_last = None
+    red_seen = 0.0
+    blue_seen = 0.0
 
     fps = 0.0
     prev_t = now()
@@ -513,24 +361,24 @@ def main():
     window_open = False
     tuner_open = False
 
-    # 디버그용 마스크(필요하면 켜서 확인)
-    show_masks = False
-
     while True:
         ok, frame = cap.read()
         if not ok or frame is None:
-            time.sleep(0.005)
+            time.sleep(0.01)
             continue
 
         if FLIP_MIRROR:
             frame = cv2.flip(frame, 1)
+
+        # 약한 블러로 마스크 파편/점노이즈 줄임
+        if BLUR_K and BLUR_K >= 3:
+            frame = cv2.GaussianBlur(frame, (BLUR_K, BLUR_K), 0)
 
         t = now()
         dt = max(1e-6, t - prev_t)
         prev_t = t
         fps = fps * 0.9 + (1.0 / dt) * 0.1
 
-        Hh, Ww = frame.shape[:2]
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
         # tuner
@@ -543,115 +391,70 @@ def main():
             if tuner_open:
                 try:
                     cv2.destroyWindow("HSV Tuner")
-                except Exception:
+                except:
                     pass
                 tuner_open = False
 
-        # =========
-        # Detect helper: ROI -> relaxed -> strict fallback
-        # =========
-        def detect_color(track: TrackState, lo, hi, min_strict, min_relax):
-            # 1) ROI 주변 (트래킹 중이면) : 느슨한 lo + 완화 조건
-            roi = bbox_to_roi(track.bbox, Ww, Hh, expand=ROI_EXPAND) if track.bbox else None
+        # 1차: strict
+        red_info,  red_mask  = find_marker_tip(hsv, RED_LO,  RED_HI,  MIN_AREA_RED,  ASPECT_MIN_STRICT)
+        blue_info, blue_mask = find_marker_tip(hsv, BLUE_LO, BLUE_HI, MIN_AREA_BLUE, ASPECT_MIN_STRICT)
 
-            picked = None
-            mask_used = None
+        # 2차: relax(빠른 움직임/기울기에서 strict가 실패하는 경우 보완)
+        if red_info is None:
+            red_info, red_mask = find_marker_tip(hsv, RED_LO, RED_HI, int(MIN_AREA_RED * 0.6), ASPECT_MIN_RELAX)
+        if blue_info is None:
+            blue_info, blue_mask = find_marker_tip(hsv, BLUE_LO, BLUE_HI, int(MIN_AREA_BLUE * 0.6), ASPECT_MIN_RELAX)
 
-            if roi is not None:
-                lo2 = loosen_lo(lo, dS=LOOSEN_S, dV=LOOSEN_V)
-                picked, mask_used = find_marker_center(
-                    hsv, lo2, hi,
-                    min_area=min_relax,
-                    aspect_min=ASPECT_MIN_RELAX,
-                    roi=roi
-                )
+        Hh, Ww = frame.shape[:2]
 
-            # 2) ROI에서 못 찾으면 전체 프레임: (트래킹 중이면 조건 조금 완화, 아니면 엄격)
-            if picked is None:
-                alive = track.is_alive(t, LOSS_GRACE_SEC)
-                min_area = min_relax if alive else min_strict
-                aspect_min = ASPECT_MIN_RELAX if alive else ASPECT_MIN_STRICT
-                picked, mask_used = find_marker_center(
-                    hsv, lo, hi,
-                    min_area=min_area,
-                    aspect_min=aspect_min,
-                    roi=None
-                )
+        # normalize + smoothing + grace
+        red = None
+        blue = None
 
-            return picked, mask_used
-
-        red_info, red_mask = detect_color(
-            redS, RED_LO, RED_HI, MIN_AREA_RED_STRICT, MIN_AREA_RED_RELAX
-        )
-        blue_info, blue_mask = detect_color(
-            blueS, BLUE_LO, BLUE_HI, MIN_AREA_BLUE_STRICT, MIN_AREA_BLUE_RELAX
-        )
-
-        # =========
-        # Update tracks (detect / predict)
-        # =========
-        def apply_track(track: TrackState, info):
-            if info is not None:
-                tipx, tipy, area, bbox, ar = info
-                nx = clamp01(tipx / Ww)
-                ny = clamp01(tipy / Hh)
-
-                # EMA (너무 부드럽게 하면 속도가 죽어서 슬래시가 안 나옴)
-                if track.pos is not None:
-                    nx = ema(track.pos[0], nx, SMOOTH_ALPHA)
-                    ny = ema(track.pos[1], ny, SMOOTH_ALPHA)
-
-                track.update_detect(nx, ny, bbox, t)
-                return True
+        if red_info:
+            tx, ty, area, bbox, ar = red_info
+            nx, ny = clamp01(tx / Ww), clamp01(ty / Hh)
+            red_seen = t
+            red_last = (
+                ema(red_last[0], nx, SMOOTH_ALPHA) if red_last else nx,
+                ema(red_last[1], ny, SMOOTH_ALPHA) if red_last else ny,
+            )
+            red = {"nx": red_last[0], "ny": red_last[1], "bbox": bbox}
+        else:
+            if red_last and (t - red_seen) <= LOSS_GRACE_SEC:
+                red = {"nx": red_last[0], "ny": red_last[1], "bbox": None}
             else:
-                # detect 실패면 grace 동안 예측 좌표를 계속 갱신
-                if track.is_alive(t, LOSS_GRACE_SEC):
-                    track.predict(t)
-                    track.bbox = None  # ROI 근거 bbox가 없으니 제거
-                    return True
-                else:
-                    # 완전 소실
-                    track.pos = None
-                    track.bbox = None
-                    track.last_t = None
-                    track.seen_t = 0.0
-                    track.vel = (0.0, 0.0)
-                    track.predicted = False
-                    return False
+                red_last = None
 
-        red_alive = apply_track(redS, red_info)
-        blue_alive = apply_track(blueS, blue_info)
+        if blue_info:
+            tx, ty, area, bbox, ar = blue_info
+            nx, ny = clamp01(tx / Ww), clamp01(ty / Hh)
+            blue_seen = t
+            blue_last = (
+                ema(blue_last[0], nx, SMOOTH_ALPHA) if blue_last else nx,
+                ema(blue_last[1], ny, SMOOTH_ALPHA) if blue_last else ny,
+            )
+            blue = {"nx": blue_last[0], "ny": blue_last[1], "bbox": bbox}
+        else:
+            if blue_last and (t - blue_seen) <= LOSS_GRACE_SEC:
+                blue = {"nx": blue_last[0], "ny": blue_last[1], "bbox": None}
+            else:
+                blue_last = None
 
-        # =========
-        # left/right assignment (x 기준) + payload 구성
-        # =========
-        # 여기서는 "RED/BLUE"를 gesture로 넣고,
-        # 프론트에서는 BLUE->left, RED->right로 고정하려는 로직이 있었지.
-        # 다만 막대가 서로 위치 바뀌면 혼란이 생길 수 있으니,
-        # 지금은 "x 기준 left/right"로 유지하되, 각 막대의 gesture는 유지한다.
+        mode_u = str(STATE["mode"]).upper()
+        rush_ok = bool(STATE["enabled"] and mode_u == "RUSH")
+
+        # =========================
+        # 레인 고정: BLUE=Left, RED=Right
+        # (프론트 RushScene이 BLUE->left로 찾는 로직이 있으니 맞춰줌)
+        # =========================
         left_pack = None
         right_pack = None
 
-        if redS.pos is not None and blueS.pos is not None:
-            pairs = [("RED", redS.pos[0], redS.pos[1]), ("BLUE", blueS.pos[0], blueS.pos[1])]
-            pairs.sort(key=lambda x: x[1])
-            left_pack = {"gesture": pairs[0][0], "nx": pairs[0][1], "ny": pairs[0][2]}
-            right_pack = {"gesture": pairs[1][0], "nx": pairs[1][1], "ny": pairs[1][2]}
-        else:
-            single = None
-            if redS.pos is not None:
-                single = {"gesture": "RED", "nx": redS.pos[0], "ny": redS.pos[1]}
-            elif blueS.pos is not None:
-                single = {"gesture": "BLUE", "nx": blueS.pos[0], "ny": blueS.pos[1]}
-
-            if single:
-                if single["nx"] < 0.5:
-                    left_pack = single
-                else:
-                    right_pack = single
-
-        mode_u = str(STATE["mode"]).upper()
-        enabled = bool(STATE["enabled"]) and (mode_u == "RUSH")
+        if blue:
+            left_pack = {"gesture": "BLUE", "nx": blue["nx"], "ny": blue["ny"]}
+        if red:
+            right_pack = {"gesture": "RED", "nx": red["nx"], "ny": red["ny"]}
 
         payload = {
             "type": "STATUS",
@@ -660,8 +463,8 @@ def main():
             "locked": bool(STATE["locked"]),
             "fps": float(fps),
             "gesture": "COLOR_STICK",
-            "leftTracking": bool(enabled and left_pack is not None),
-            "rightTracking": bool(enabled and right_pack is not None),
+            "leftTracking": bool(rush_ok and left_pack is not None),
+            "rightTracking": bool(rush_ok and right_pack is not None),
         }
 
         if left_pack:
@@ -673,7 +476,7 @@ def main():
             payload["rightPointerY"] = float(right_pack["ny"])
             payload["rightGesture"] = right_pack["gesture"]
 
-        # fallback pointer: 하나만 있어도 pointerX/Y는 유지
+        # fallback pointer(혹시 다른 UI에서 pointerX/Y만 쓰는 경우 대비)
         if right_pack:
             payload["pointerX"] = float(right_pack["nx"])
             payload["pointerY"] = float(right_pack["ny"])
@@ -685,23 +488,22 @@ def main():
             payload["isTracking"] = True
             payload["pointerGesture"] = left_pack["gesture"]
         else:
+            payload["pointerX"] = None
+            payload["pointerY"] = None
             payload["isTracking"] = False
             payload["pointerGesture"] = "NONE"
 
         send_status(_ws, payload)
 
-        # =========
-        # PREVIEW UI
-        # =========
+        # PREVIEW
         if STATE["PREVIEW"]:
             if not window_open:
                 cv2.namedWindow(preview_name, cv2.WINDOW_NORMAL)
                 window_open = True
 
-            # 상태 텍스트
             cv2.putText(
                 frame,
-                f"mode={mode_u} enabled={STATE['enabled']} fps={fps:.1f}  RED={redS.pos is not None}  BLUE={blueS.pos is not None}",
+                f"mode={mode_u} enabled={STATE['enabled']} fps={fps:.1f}  RED={red is not None}  BLUE={blue is not None}",
                 (10, 24),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
@@ -710,36 +512,28 @@ def main():
             )
             cv2.putText(
                 frame,
-                f"ASPECT strict={ASPECT_MIN_STRICT:.2f}/relax={ASPECT_MIN_RELAX:.2f}  AREA strict={MIN_AREA_RED_STRICT}/{MIN_AREA_RED_RELAX}",
+                f"ASPECT strict={ASPECT_MIN_STRICT:.2f}/relax={ASPECT_MIN_RELAX:.2f}  AREA={MIN_AREA_RED}/{MIN_AREA_BLUE}  alpha={SMOOTH_ALPHA:.2f}",
                 (10, 48),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
+                0.52,
                 (0, 255, 0),
                 2,
             )
 
-            # bbox 그리기 (detect 성공시에만 bbox가 있음)
             if red_info and red_info[3]:
                 x, y, bw, bh = red_info[3]
                 cv2.rectangle(frame, (x, y), (x + bw, y + bh), (0, 0, 255), 2)
                 cv2.putText(frame, "RED", (x, y - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                # tip point
+                cv2.circle(frame, (int(red_info[0]), int(red_info[1])), 6, (0,0,255), -1)
 
             if blue_info and blue_info[3]:
                 x, y, bw, bh = blue_info[3]
                 cv2.rectangle(frame, (x, y), (x + bw, y + bh), (255, 0, 0), 2)
                 cv2.putText(frame, "BLUE", (x, y - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
-
-            # 예측 중이면 표시
-            if redS.predicted:
-                cv2.putText(frame, "RED PRED", (10, 72), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 255), 2)
-            if blueS.predicted:
-                cv2.putText(frame, "BLUE PRED", (120, 72), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 0, 0), 2)
+                cv2.circle(frame, (int(blue_info[0]), int(blue_info[1])), 6, (255,0,0), -1)
 
             cv2.imshow(preview_name, frame)
-
-            if show_masks:
-                cv2.imshow("mask_red", red_mask)
-                cv2.imshow("mask_blue", blue_mask)
 
             key = cv2.waitKey(1) & 0xFF
             if key == 27:
@@ -760,27 +554,24 @@ def main():
                 calibrate_from_center_roi(frame, "RED")
             elif key == ord("2"):
                 calibrate_from_center_roi(frame, "BLUE")
-            elif key in (ord("m"), ord("M")):
-                show_masks = not show_masks
-                print("[KEY] show_masks:", show_masks)
+
         else:
             if window_open:
                 try:
                     cv2.destroyWindow(preview_name)
-                except Exception:
+                except:
                     pass
                 window_open = False
-            time.sleep(0.003)
+            time.sleep(0.005)
 
     try:
         cap.release()
-    except Exception:
+    except:
         pass
     try:
         cv2.destroyAllWindows()
-    except Exception:
+    except:
         pass
-
 
 if __name__ == "__main__":
     main()
