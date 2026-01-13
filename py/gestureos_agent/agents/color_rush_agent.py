@@ -384,9 +384,22 @@ class ColorRushAgent:
                 payload["pointerY"] = None
                 payload["isTracking"] = False
                 payload["pointerGesture"] = "NONE"
+                
+            # ---- HUD overlay push (local) ----
+            hud = getattr(self.cfg, "hud", None)
+            if hud:
+                # HUD가 읽는 키들(connected/tracking 등)도 같이 채워줌
+                hud_payload = dict(payload)
+                hud_payload["connected"] = bool(self.ws.connected)
+                hud_payload["tracking"] = bool(payload.get("isTracking", False))  # HUD 호환용
+                hud_payload["canMove"] = True
+                hud_payload["canClick"] = True
+                hud_payload["canKey"] = None
+                hud.push(hud_payload)
 
             self.ws.send_dict(payload)
-
+            
+            
             if self.cfg.headless:
                 time.sleep(0.001)
                 continue

@@ -1,6 +1,7 @@
 import json
 import os
 import time
+os.environ.setdefault("GLOG_minloglevel", "2")
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 
@@ -47,6 +48,7 @@ class HandsAgent:
             self.mode = "RUSH"
         elif cfg.start_vkey:
             self.mode = "VKEY"
+            
 
         # lock policy: start locked unless enabled, but most modes unlock for usability
         self.locked = True
@@ -109,8 +111,7 @@ class HandsAgent:
 
     # ---------- WS helpers ----------
     def send_event(self, name: str, payload: Optional[dict]):
-        if self.cfg.no_ws:
-            return
+
         msg = {"type": "EVENT", "name": name}
         if payload is not None:
             msg["payload"] = payload
@@ -422,6 +423,9 @@ class HandsAgent:
                 rush_right=rush_right,
                 cursor_lm=cursor_lm,
                 other_lm=other_lm,
+                cursor_cx=cursor_cx,
+                cursor_cy=cursor_cy,
+                got_cursor=got_cursor,
             )
 
             # preview keys
@@ -477,8 +481,13 @@ class HandsAgent:
                     self.apply_set_mode("VKEY")
                 elif key in (ord('o'), ord('O')):
                     self.vkey.open_windows_osk()
+                elif key in (ord('d'), ord('D')):
+                    self.apply_set_mode("DRAW")
+                elif key in (ord('t'), ord('T')):
+                    self.apply_set_mode("PRESENTATION")    
                     print("[KEY] open OSK")
                 elif key in (ord('c'), ord('C')):
+
                     # calibrate control box around current cursor center
                     cx, cy = self.last_cursor_cxcy if self.last_cursor_cxcy is not None else (0.5, 0.5)
                     from ..mathutil import clamp01
@@ -499,8 +508,10 @@ class HandsAgent:
         cv2.destroyAllWindows()
 
     def _send_status(self, fps: float, cursor_gesture: str, other_gesture: str,
-                     scroll_active: bool, can_mouse: bool, can_key: bool,
-                     rush_left, rush_right, cursor_lm, other_lm):
+                 scroll_active: bool, can_mouse: bool, can_key: bool,
+                 rush_left, rush_right, cursor_lm, other_lm,
+                 cursor_cx: float, cursor_cy: float, got_cursor: bool):
+
         if self.cfg.no_ws:
             return
 
@@ -529,6 +540,19 @@ class HandsAgent:
             "tapSeq": int(self.vkey.tap_seq),
         }
 
+        # ✅ HUD/Overlay용 pointer (MOUSE/DRAW/PPT에서도 항상 제공)
+        payload["connected"] = bool(self.ws.connected)
+        payload["tracking"] = bool(got_cursor)
+
+        if got_cursor:
+            payload["pointerX"] = float(cursor_cx)
+            payload["pointerY"] = float(cursor_cy)
+            payload["isTracking"] = True
+        else:
+            payload["pointerX"] = None
+            payload["pointerY"] = None
+            payload["isTracking"] = False
+
         if self.vkey.last_tap is not None:
             payload["tapX"] = float(self.vkey.last_tap["x"])
             payload["tapY"] = float(self.vkey.last_tap["y"])
@@ -552,20 +576,65 @@ class HandsAgent:
         else:
             payload["rightTracking"] = False
 
-        # fallback pointer
+        # fallback pointer  (HUD/매니저 공통)
         if rush_right is not None:
             payload["pointerX"] = float(rush_right["cx"])
             payload["pointerY"] = float(rush_right["cy"])
             payload["isTracking"] = True
+
         elif rush_left is not None:
             payload["pointerX"] = float(rush_left["cx"])
             payload["pointerY"] = float(rush_left["cy"])
             payload["isTracking"] = True
+
         elif mode_u == "VKEY" and cursor_lm is not None:
             payload["pointerX"] = float(cursor_lm[8][0])
             payload["pointerY"] = float(cursor_lm[8][1])
             payload["isTracking"] = True
+
+        # ✅ RUSH/VKEY 아니어도 손이 잡히면 HUD 포인터 뜨게 (MOUSE/DRAW/PPT도 커서 보임)
+        elif cursor_lm is not None:
+            cx, cy = palm_center(cursor_lm)
+            payload["pointerX"] = float(cx)
+            payload["pointerY"] = float(cy)
+            payload["isTracking"] = True
+
         else:
+            payload["pointerX"] = None
+            payload["pointerY"] = None
             payload["isTracking"] = False
 
-        self.ws.send_dict(payload)
+        # ---- HUD overlay push (local) ----
+        hud = getattr(self.cfg, "hud", None)
+        if hud:
+            hud_payload = dict(payload)
+            hud_payload["connected"] = bool(self.ws.connected)
+            hud_payload["tracking"] = bool(payload.get("isTracking", False))  # HUD 호환
+            hud.push(hud_payload)
+
+        # ---- HUD overlay push (local) ----
+        hud = getattr(self.cfg, "hud", None)
+        if hud:
+            hud.push({
+                "mode": str(self.mode).upper(),
+                "gesture": str(cursor_gesture),
+                "locked": bool(self.locked),
+                "fps": float(fps),
+                "connected": bool(self.ws.connected),
+                "tracking": bool(got_cursor),
+                "pointerX": float(cursor_cx) if got_cursor else None,
+                "pointerY": float(cursor_cy) if got_cursor else None,
+            })
+
+        # ---- WS send (server) ----
+        if not self.cfg.no_ws:
+            self.ws.send_dict(payload)
+
+        hud = getattr(self.cfg, "hud", None)
+        if hud:
+            hud_payload = dict(payload)
+            hud_payload["connected"] = bool(self.ws.connected)
+            hud_payload["tracking"] = bool(payload.get("isTracking", False))
+            hud.push(hud_payload)
+
+
