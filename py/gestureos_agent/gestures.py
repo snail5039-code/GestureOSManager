@@ -39,20 +39,6 @@ def is_v_sign(lm: LM) -> bool:
         return False
     return dist_xy((lm[8][0], lm[8][1]), (lm[12][0], lm[12][1])) > 0.06
 
-def is_knife_hand(lm: LM) -> bool:
-    # open palm + fingers close together
-    if not is_open_palm(lm):
-        return False
-    d1 = dist_xy((lm[8][0], lm[8][1]), (lm[12][0], lm[12][1]))
-    d2 = dist_xy((lm[12][0], lm[12][1]), (lm[16][0], lm[16][1]))
-    d3 = dist_xy((lm[16][0], lm[16][1]), (lm[20][0], lm[20][1]))
-    avg = (d1 + d2 + d3) / 3.0
-    if avg > 0.055:
-        return False
-    if dist_xy((lm[4][0], lm[4][1]), (lm[5][0], lm[5][1])) > 0.095:
-        return False
-    return True
-
 def classify_gesture(lm: Optional[LM], pinch_thresh: float = 0.06) -> str:
     if lm is None:
         return "NONE"
@@ -62,8 +48,6 @@ def classify_gesture(lm: Optional[LM], pinch_thresh: float = 0.06) -> str:
         return "PINCH_INDEX"
     if is_v_sign(lm):
         return "V_SIGN"
-    if is_knife_hand(lm):
-        return "KNIFE"
     if is_open_palm(lm):
         return "OPEN_PALM"
     return "OTHER"
