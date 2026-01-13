@@ -1,6 +1,8 @@
 # gestureos_agent/hud_overlay.py
 # Windows only: Always-on-top transparent HUD overlay (click-through)
-# - Two small windows: HUD (top-left) + Reticle (follows pointer)
+# - HUD (top-left) + Reticle (follows pointer) + Tip bubble (follows pointer)
+# - Tip bubble: ALL modes EXCEPT RUSH (RUSH = no bubble)
+# - Bubble text style: "MODE • action"
 # - Apply click-through to: widget hwnd + parent hwnd + root/ancestor hwnd + all descendants
 # - Hard fix: WM_NCHITTEST -> HTTRANSPARENT (subclass WndProc)
 # - Extra safety: Tk '-disabled' attribute (very effective on Win10/11)
@@ -25,8 +27,8 @@ WS_EX_NOACTIVATE  = 0x08000000
 
 LWA_COLORKEY = 0x00000001
 
-WM_NCHITTEST = 0x0084
-HTTRANSPARENT = -1
+WM_NCHITTEST   = 0x0084
+HTTRANSPARENT  = -1
 
 GA_ROOT = 2
 
@@ -146,19 +148,18 @@ def _normalize_pointer(x, y, screen_w, screen_h):
     return (None, None)
 
 def _hex_dim(color_hex, a):
-    color_hex = color_hex.lstrip("#")
+    color_hex = str(color_hex).lstrip("#")
     r = int(color_hex[0:2], 16)
     g = int(color_hex[2:4], 16)
     b = int(color_hex[4:6], 16)
     r = int(r * a); g = int(g * a); b = int(b * a)
     return f"#{r:02x}{g:02x}{b:02x}"
 
+
 class OverlayHUD:
     """
-    Two-window HUD:
-      1) HUD panel (top-left)
-      2) Reticle window that follows pointer
-    Both are click-through.
+    HUD + Reticle + Tip bubble (ALL modes except RUSH)
+    All windows are click-through.
     """
     def __init__(self, enable=True):
         self.enable = bool(enable) and (os.name == "nt")
@@ -180,11 +181,17 @@ class OverlayHUD:
         self._root = None
         self._hud_win = None
         self._ret_win = None
+        self._tip_win = None
         self._hud_canvas = None
         self._ret_canvas = None
+        self._tip_canvas = None
 
         self.HUD_W, self.HUD_H = 320, 118
         self.RET_S = 80
+
+        # Tip bubble
+        self.TIP_W, self.TIP_H = 230, 46
+        self.TIP_OX, self.TIP_OY = 26, -66  # pointer 기준 offset
 
         # wndproc hooks (keep refs to prevent GC)
         self._old_wndproc = {}     # hwnd_int -> old_proc_ptr
@@ -218,6 +225,15 @@ class OverlayHUD:
             pass
 
     # -------- internal helpers --------
+    def _clamp_screen_xy(self, x, y, w, h):
+        min_x = self.vx
+        min_y = self.vy
+        max_x = self.vx + self.vw - w
+        max_y = self.vy + self.vh - h
+        x = max(min_x, min(int(x), int(max_x)))
+        y = max(min_y, min(int(y), int(max_y)))
+        return x, y
+
     def _iter_related_hwnds(self, hwnd_int: int):
         """yield hwnd + parent + root ancestor (dedup)"""
         seen = set()
@@ -245,9 +261,7 @@ class OverlayHUD:
             pass
 
     def _install_httransparent_wndproc(self, hwnd_int: int):
-        """
-        WM_NCHITTEST -> HTTRANSPARENT 강제.
-        """
+        """WM_NCHITTEST -> HTTRANSPARENT 강제."""
         hwnd_int = _hwnd_int(hwnd_int)
         if not hwnd_int:
             return
@@ -276,7 +290,6 @@ class OverlayHUD:
             print("[HUD] _install_httransparent_wndproc failed:", e)
 
     def _apply_click_through_hwnd(self, hwnd_int: int):
-        # IMPORTANT: apply to hwnd + parent + root
         for hid in self._iter_related_hwnds(hwnd_int):
             try:
                 hwnd = wintypes.HWND(hid)
@@ -285,25 +298,21 @@ class OverlayHUD:
                 ex |= (WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)
                 _set_window_long_ptr(hwnd, GWL_EXSTYLE, ex)
 
-                # magenta (#ff00ff) COLORREF=0x00BBGGRR -> 0x00FF00FF
-                colorkey = wintypes.COLORREF(0x00FF00FF)
+                colorkey = wintypes.COLORREF(0x00FF00FF)  # magenta
                 user32.SetLayeredWindowAttributes(hwnd, colorkey, 0, LWA_COLORKEY)
 
-                # force refresh
                 user32.SetWindowPos(
                     hwnd, wintypes.HWND(0),
                     0, 0, 0, 0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE
                 )
 
-                # force hit-test transparent
                 self._install_httransparent_wndproc(hid)
 
             except Exception as e:
                 print("[HUD] apply_click_through_hwnd failed:", e)
 
     def _walk_widgets(self, w):
-        """recursive widget traversal (Tk가 중간에 더 만들 수 있어서)"""
         yield w
         try:
             for ch in w.winfo_children():
@@ -312,7 +321,6 @@ class OverlayHUD:
             return
 
     def _apply_click_through(self, win: tk.Toplevel):
-        """Toplevel + all descendants hwnds에 적용"""
         try:
             win.update_idletasks()
             win.update()
@@ -324,6 +332,155 @@ class OverlayHUD:
                 self._apply_click_through_hwnd(w.winfo_id())
             except Exception:
                 pass
+
+    # -------- bubble text helpers --------
+    @staticmethod
+    def _pick_first_str(st: dict, keys):
+        for k in keys:
+            v = st.get(k, None)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+        return None
+
+    def _common_state_label(self, st: dict, locked: bool) -> str | None:
+        # enabled 키가 없으면 True로 취급
+        enabled = bool(st.get("enabled", True))
+        if not enabled:
+            return "비활성"
+        if locked:
+            return "잠김"
+        return None
+
+    def _action_mouse(self, st: dict, locked: bool) -> str:
+        common = self._common_state_label(st, locked)
+        if common:
+            return common
+
+        # 스크롤 최우선(다른 손으로 스크롤 중)
+        if bool(st.get("scrollActive", False)):
+            return "스크롤"
+
+        g = str(st.get("gesture", "NONE") or "NONE").upper()
+        if g == "OPEN_PALM":
+            return "이동"
+        if g == "PINCH_INDEX":
+            return "클릭/드래그"
+        if g == "V_SIGN":
+            return "우클릭"
+        if g == "FIST":
+            return "잠금(홀드)"
+        return "대기"
+
+    def _action_draw(self, st: dict, locked: bool) -> str:
+        common = self._common_state_label(st, locked)
+        if common:
+            return common
+
+        # 혹시 툴/브러시 같은 정보가 내려오면 우선 반영
+        tool = self._pick_first_str(st, ["tool", "drawTool", "brush", "pen", "eraser"])
+        if tool:
+            return f"{tool}"
+
+        g = str(st.get("gesture", "NONE") or "NONE").upper()
+        if g == "PINCH_INDEX":
+            return "그리기"
+        if g == "OPEN_PALM":
+            return "이동"
+        if g == "V_SIGN":
+            return "도구변경"
+        if g == "FIST":
+            return "지우기(홀드)"
+        return "대기"
+
+    def _action_presentation(self, st: dict, locked: bool) -> str:
+        common = self._common_state_label(st, locked)
+        if common:
+            return common
+
+        act = self._pick_first_str(st, ["pptAction", "presentationAction", "slideAction", "action"])
+        if act:
+            return act
+
+        g = str(st.get("gesture", "NONE") or "NONE").upper()
+        if g == "V_SIGN":
+            return "다음"
+        if g == "FIST":
+            return "이전"
+        if g == "PINCH_INDEX":
+            return "클릭"
+        if g == "OPEN_PALM":
+            return "포인터"
+        return "대기"
+
+    def _action_keyboard(self, st: dict, locked: bool) -> str:
+        common = self._common_state_label(st, locked)
+        if common:
+            return common
+
+        sel = self._pick_first_str(st, ["selectedKey", "key", "keyName", "char"])
+        g = str(st.get("gesture", "NONE") or "NONE").upper()
+
+        if g == "PINCH_INDEX":
+            return f"입력({sel})" if sel else "입력"
+        if g == "OPEN_PALM":
+            return "선택"
+        if sel:
+            return f"선택({sel})"
+        return "대기"
+
+    def _action_vkey(self, st: dict, locked: bool) -> str:
+        common = self._common_state_label(st, locked)
+        if common:
+            return common
+
+        sel = self._pick_first_str(st, ["vk", "vkey", "selectedKey", "key", "keyName", "char"])
+        g = str(st.get("gesture", "NONE") or "NONE").upper()
+
+        if g == "PINCH_INDEX":
+            return f"입력({sel})" if sel else "입력"
+        if g == "OPEN_PALM":
+            return "선택"
+        if sel:
+            return f"선택({sel})"
+        return "대기"
+
+    def _action_default(self, st: dict, locked: bool) -> str:
+        common = self._common_state_label(st, locked)
+        if common:
+            return common
+        g = str(st.get("gesture", "NONE") or "NONE").strip()
+        if g and g.upper() != "NONE":
+            return g
+        return "대기"
+
+    def _bubble_text(self, st: dict, mode: str, locked: bool) -> str:
+        mode_u = str(mode).upper()
+
+        # RUSH 모드: 말풍선 아예 제거
+        if mode_u == "RUSH":
+            return ""
+
+        # 1) 외부에서 내려준 커스텀 텍스트 있으면 우선
+        bubble = st.get("cursorBubble", None)
+        if bubble is not None:
+            return str(bubble).strip()
+
+        # 2) 모드별 action 라벨
+        if mode_u == "MOUSE":
+            action = self._action_mouse(st, locked)
+        elif mode_u == "DRAW":
+            action = self._action_draw(st, locked)
+        elif mode_u == "PRESENTATION":
+            action = self._action_presentation(st, locked)
+        elif mode_u == "KEYBOARD":
+            action = self._action_keyboard(st, locked)
+        elif mode_u == "VKEY":
+            action = self._action_vkey(st, locked)
+        else:
+            action = self._action_default(st, locked)
+
+        action = str(action).strip() if action is not None else ""
+        return f"{mode_u} • {action}" if action else mode_u
 
     # -------- tk thread --------
     def _run_tk(self):
@@ -369,20 +526,36 @@ class OverlayHUD:
         ret_canvas.pack(fill="both", expand=True)
         self._ret_canvas = ret_canvas
 
-        # 추가 안전장치: Tk 레벨에서 input 자체 disable
-        # (WS_EX_TRANSPARENT가 환경 따라 완벽하지 않을 때도 이게 거의 해결)
+        # Tip window
+        tip = tk.Toplevel(root)
+        self._tip_win = tip
+        tip.overrideredirect(True)
+        tip.attributes("-topmost", True)
+        tip.configure(bg=TRANSPARENT)
         try:
-            hud.attributes("-disabled", True)
+            tip.wm_attributes("-transparentcolor", TRANSPARENT)
         except Exception:
             pass
-        try:
-            ret.attributes("-disabled", True)
-        except Exception:
-            pass
+        tip.geometry(f"{self.TIP_W}x{self.TIP_H}+{self.vx}+{self.vy}")
 
-        # IMPORTANT: apply to BOTH windows (and all descendants)
+        tip_canvas = tk.Canvas(
+            tip, width=self.TIP_W, height=self.TIP_H,
+            bd=0, highlightthickness=0, bg=TRANSPARENT
+        )
+        tip_canvas.pack(fill="both", expand=True)
+        self._tip_canvas = tip_canvas
+
+        # Tk 레벨 input disable
+        for w in (hud, ret, tip):
+            try:
+                w.attributes("-disabled", True)
+            except Exception:
+                pass
+
+        # click-through
         self._apply_click_through(hud)
         self._apply_click_through(ret)
+        self._apply_click_through(tip)
 
         last_t = time.time()
 
@@ -390,12 +563,11 @@ class OverlayHUD:
             nonlocal last_t
 
             if self._stop.is_set():
-                try: hud.destroy()
-                except Exception: pass
-                try: ret.destroy()
-                except Exception: pass
-                try: root.destroy()
-                except Exception: pass
+                for w in (hud, ret, tip, root):
+                    try:
+                        w.destroy()
+                    except Exception:
+                        pass
                 return
 
             latest = None
@@ -425,16 +597,15 @@ class OverlayHUD:
 
             self._render()
 
-            # 드물게 풀리는 케이스 대비해서 주기적으로 재적용
+            # 주기적 재적용(드물게 풀리는 환경 대비)
             self._ct_tick += 1
             if (self._ct_tick % 60) == 0:
-                self._apply_click_through(hud)
-                self._apply_click_through(ret)
-                try:
-                    hud.attributes("-disabled", True)
-                    ret.attributes("-disabled", True)
-                except Exception:
-                    pass
+                for w in (hud, ret, tip):
+                    self._apply_click_through(w)
+                    try:
+                        w.attributes("-disabled", True)
+                    except Exception:
+                        pass
 
             root.after(16, tick)
 
@@ -489,19 +660,28 @@ class OverlayHUD:
             y = base_y + math.sin(self._phase * 2.2 + i * 0.55) * amp
             c.create_line(x, base_y, x + 18, y, fill=_hex_dim(accent, 0.55), width=2)
 
-        # ---- Reticle ----
+        # ---- Reticle / Tip ----
         if self._ret_win is None or self._ret_canvas is None:
             return
+
+        tipw = self._tip_win
+        tipc = self._tip_canvas
 
         if not tracking:
             try: self._ret_win.withdraw()
             except Exception: pass
+            if tipw is not None:
+                try: tipw.withdraw()
+                except Exception: pass
             return
 
         x01, y01 = _normalize_pointer(st.get("pointerX"), st.get("pointerY"), self.vw, self.vh)
         if x01 is None or y01 is None:
             try: self._ret_win.withdraw()
             except Exception: pass
+            if tipw is not None:
+                try: tipw.withdraw()
+                except Exception: pass
             return
 
         try: self._ret_win.deiconify()
@@ -525,6 +705,7 @@ class OverlayHUD:
         cx = s // 2
         cy = s // 2
 
+        # crosshair (as-is)
         ring = 16 + int(2 * math.sin(self._phase * 3.0))
         rc.create_oval(cx-ring, cy-ring, cx+ring, cy+ring, outline=acc, width=2)
         rc.create_oval(cx-3, cy-3, cx+3, cy+3, outline="", fill=acc)
@@ -532,3 +713,53 @@ class OverlayHUD:
         rc.create_line(cx+10, cy, cx+28, cy, fill=acc, width=2)
         rc.create_line(cx, cy-28, cx, cy-10, fill=acc, width=2)
         rc.create_line(cx, cy+10, cx, cy+28, fill=acc, width=2)
+
+        # ---- Tip bubble ----
+        if tipw is None or tipc is None:
+            return
+
+        bubble = self._bubble_text(st, mode, locked).strip()
+        if not bubble:
+            try: tipw.withdraw()
+            except Exception: pass
+            return
+
+        try: tipw.deiconify()
+        except Exception:
+            pass
+
+        tx = self.vx + px + self.TIP_OX
+        ty = self.vy + py + self.TIP_OY
+        tx, ty = self._clamp_screen_xy(tx, ty, self.TIP_W, self.TIP_H)
+        try:
+            tipw.geometry(f"{self.TIP_W}x{self.TIP_H}+{tx}+{ty}")
+        except Exception:
+            pass
+
+        tipc.delete("all")
+        tip_bg = "#0b1222"
+        tip_border = _hex_dim(accent, 0.85)
+        tip_fg = "#E5E7EB"
+
+        pad = 8
+        tail_h = 8
+        x0, y0 = pad, pad
+        x1 = self.TIP_W - pad
+        y1 = self.TIP_H - pad - tail_h
+
+        # body
+        tipc.create_rectangle(x0, y0, x1, y1, fill=tip_bg, outline=tip_border, width=2)
+        # tail
+        tail_x = x0 + 18
+        tipc.create_polygon(
+            tail_x, y1,
+            tail_x + 12, y1,
+            tail_x + 6, y1 + tail_h,
+            fill=tip_bg, outline=tip_border, width=2
+        )
+        # text
+        tipc.create_text(
+            (x0 + x1) // 2, (y0 + y1) // 2,
+            fill=tip_fg, font=("Segoe UI", 10, "bold"),
+            text=bubble
+        )
