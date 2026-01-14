@@ -11,10 +11,16 @@
 //
 // NOTE: /sfx/slice.wav 파일이 public 폴더에 있어야 함 (예: public/sfx/slice.wav)
 // -----------------------------------------------------------------------------
+// ✅ 네온/로즈 테마가 Rush에도 적용되도록 수정 버전
+// - UI(daisyUI) : data-theme 기반으로 이미 bg-base-* 사용중
+// - 3D(THREE)   : 기존 하드코딩 색상들을 THEME[theme].colors 기반으로 치환
+// - 기능/로직(판정/스폰/폴링/스무딩) 절대 변경하지 않음
+// -----------------------------------------------------------------------------
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
+import { THEME } from "../theme/themeTokens";
 
 /* =============================================================================
    유틸
@@ -73,7 +79,6 @@ function segRectIntersectInfo(a, b, minX, maxX, minY, maxY) {
 
 /* =============================================================================
    status → 양손 읽기(스마트 정규화)
-   - 0~1 / NDC(-1~1) / 픽셀 좌표 모두 대응
 ============================================================================= */
 
 function readTwoHandsFromStatus(status) {
@@ -152,18 +157,13 @@ function readTwoHandsFromStatus(status) {
 
   if (!hasLeft && !hasRight && !hasSingle) return null;
 
-  // ✅ 스마트 정규화: 0~1 / -1~1(NDC) / 픽셀 모두 대응
   const norm = (v, axis) => {
     const n = Number(v);
     if (!Number.isFinite(n)) return null;
 
-    // 이미 0~1
     if (n >= 0 && n <= 1) return n;
-
-    // NDC(-1~1)로 들어오는 경우 → 0~1로 변환
     if (n >= -1.1 && n <= 1.1) return clamp((n + 1) * 0.5, 0, 1);
 
-    // 픽셀 좌표로 들어오는 경우 → 분모 추정
     const w =
       status.screenW ??
       status.width ??
@@ -199,36 +199,33 @@ function readTwoHandsFromStatus(status) {
 
   const left = hasLeft
     ? {
-      nx: norm(lx, "x"),
-      ny: norm(ly, "y"),
-      tracking: (lTracking == null ? true : !!lTracking) && enabled,
-      gesture: lg ?? "NONE",
-    }
+        nx: norm(lx, "x"),
+        ny: norm(ly, "y"),
+        tracking: (lTracking == null ? true : !!lTracking) && enabled,
+        gesture: lg ?? "NONE",
+      }
     : null;
 
   const right = hasRight
     ? {
-      nx: norm(rx, "x"),
-      ny: norm(ry, "y"),
-      tracking: (rTracking == null ? true : !!rTracking) && enabled,
-      gesture: rg ?? "NONE",
-    }
+        nx: norm(rx, "x"),
+        ny: norm(ry, "y"),
+        tracking: (rTracking == null ? true : !!rTracking) && enabled,
+        gesture: rg ?? "NONE",
+      }
     : null;
 
   const single = hasSingle
     ? {
-      nx: norm(sx, "x"),
-      ny: norm(sy, "y"),
-      tracking: (sTracking == null ? true : !!sTracking) && enabled,
-      gesture: "NONE",
-    }
+        nx: norm(sx, "x"),
+        ny: norm(sy, "y"),
+        tracking: (sTracking == null ? true : !!sTracking) && enabled,
+        gesture: "NONE",
+      }
     : null;
 
-  // 정규화 실패(null)면 해당 손 무효 처리
-  const safeLeft =
-    left && left.nx != null && left.ny != null ? left : null;
-  const safeRight =
-    right && right.nx != null && right.ny != null ? right : null;
+  const safeLeft = left && left.nx != null && left.ny != null ? left : null;
+  const safeRight = right && right.nx != null && right.ny != null ? right : null;
   const safeSingle =
     single && single.nx != null && single.ny != null ? single : null;
 
@@ -258,7 +255,6 @@ function ndcToTrackLocalOnZPlane_NoAlloc({
   raycaster.setFromCamera({ x: ndcX, y: ndcY }, camera);
 
   invWorldRef.copy(trackObj.matrixWorld).invert();
-
   originLRef.copy(raycaster.ray.origin).applyMatrix4(invWorldRef);
 
   normalMatRef.getNormalMatrix(invWorldRef);
@@ -275,20 +271,51 @@ function ndcToTrackLocalOnZPlane_NoAlloc({
 }
 
 /* =============================================================================
-   One Euro Filter (저지터 + 빠른 움직임 추종)
+   One Euro Filter
 ============================================================================= */
 
 function alphaFromCutoff(cutoff, dtSec) {
   const tau = 1 / (2 * Math.PI * cutoff);
   return 1 / (1 + tau / Math.max(dtSec, 1e-4));
 }
-
 function lowpass(prev, next, a) {
   return a * next + (1 - a) * prev;
 }
 
 /* =============================================================================
-   RushScene (비트 기반 스폰 + 히트 FX + SFX)
+   ✅ 현재 daisyUI theme(data-theme) 구독 훅
+   - Rush는 Dashboard처럼 props로 theme을 안 받는 구조일 수 있어서
+   - html[data-theme] 변경을 감지해서 3D 재질을 갱신하게 함
+============================================================================= */
+
+function useDaisyThemeKey() {
+  const read = () =>
+    document?.documentElement?.getAttribute("data-theme") || "dark";
+
+  const [themeKey, setThemeKey] = useState(read);
+
+  useEffect(() => {
+    const el = document.documentElement;
+    const obs = new MutationObserver(() => setThemeKey(read()));
+    obs.observe(el, { attributes: true, attributeFilter: ["data-theme"] });
+
+    // 혹시 로컬스토리지 기반으로 바뀌는 경우도 대비(탭간 동기화)
+    const onStorage = (e) => {
+      if (e.key === "theme") setThemeKey(read());
+    };
+    window.addEventListener("storage", onStorage);
+
+    return () => {
+      obs.disconnect();
+      window.removeEventListener("storage", onStorage);
+    };
+  }, []);
+
+  return themeKey;
+}
+
+/* =============================================================================
+   RushScene
 ============================================================================= */
 
 function RushScene({
@@ -302,7 +329,9 @@ function RushScene({
   playing = false,
   resetNonce = 0,
   onSliceSfx,
-  allowMouseFallback = false, // ✅ 손 모션 전용이면 false 고정 추천
+  allowMouseFallback = false,
+  // ✅ 테마 색상 주입
+  themeColors,
 }) {
   const { camera, pointer } = useThree();
 
@@ -361,17 +390,15 @@ function RushScene({
   const tmpAxisX = useRef(new THREE.Vector3(1, 0, 0));
   const tmpAxisY = useRef(new THREE.Vector3(0, 1, 0));
 
-  // ✅ 비트 스폰 인덱스(0.5박 단위 = 8분박)
   const nextStepIdx = useRef(0);
   const lastSongTime = useRef(0);
   const lastLaneRef = useRef(0);
 
-  // ✅ 새 status 샘플 감지용
   const lastStatusTs = useRef(0);
   const lastSingleLaneRef = useRef(1);
 
   // -----------------------------
-  // 커서(예측용 속도 포함)
+  // 커서
   // -----------------------------
   const cursorL = useRef({
     x: 0,
@@ -381,25 +408,20 @@ function RushScene({
     tracking: false,
     gesture: "NONE",
 
-    // vx/vy: "로컬 단위 / ms"
     vx: 0,
     vy: 0,
 
-    // 속도 추정용 마지막 샘플
     _lastT: null,
     _lastTx: 0,
     _lastTy: 0,
 
-    // tracking grace용
     _lastTrackMs: 0,
 
-    // 샘플 기반 슬래시 판정용 (이번 샘플이 갱신됐는지 구분)
     _sampleUpdated: false,
     _sampleT: 0,
     _sampleX: 0,
     _sampleY: 0,
 
-    // One Euro filter state
     _euroInited: false,
     _euroLastT: 0,
     _euroLastX: 0,
@@ -445,7 +467,6 @@ function RushScene({
   const cursorMeshL = useRef(null);
   const cursorMeshR = useRef(null);
 
-  // 슬래시 판정용 이전 샘플 점
   const prevL = useRef({ x: 0, y: 0, tMs: 0, has: false });
   const prevR = useRef({ x: 0, y: 0, tMs: 0, has: false });
 
@@ -457,13 +478,13 @@ function RushScene({
   const scoreRef = useRef(0);
 
   // -----------------------------
-  // 판정 통계(결과창)
+  // 판정 통계
   // -----------------------------
   const statRef = useRef({
     perfect: 0,
     good: 0,
-    miss: 0, // 노트가 지나간 MISS(자동)
-    swingMiss: 0, // 헛스윙 MISS
+    miss: 0,
+    swingMiss: 0,
   });
 
   // -----------------------------
@@ -512,29 +533,35 @@ function RushScene({
   const hudRef = useRef({ lastT: 0 });
 
   // -----------------------------
-  // 색/재질
+  // ✅ 테마 색상(THREE) - 여기만 바뀜
   // -----------------------------
-  const colLeft = useMemo(() => new THREE.Color("#7dd3fc"), []);
-  const colRight = useMemo(() => new THREE.Color("#ff4fd8"), []);
+  const colLeft = useMemo(
+    () => new THREE.Color(themeColors?.left || "#7dd3fc"),
+    [themeColors?.left]
+  );
+  const colRight = useMemo(
+    () => new THREE.Color(themeColors?.right || "#ff4fd8"),
+    [themeColors?.right]
+  );
 
   const matLane = useMemo(
     () =>
       new THREE.MeshStandardMaterial({
-        color: new THREE.Color("#0a0f1f"),
+        color: new THREE.Color(themeColors?.lane || "#0a0f1f"),
         roughness: 0.3,
         metalness: 0.7,
       }),
-    []
+    [themeColors?.lane]
   );
 
   const matRail = useMemo(
     () =>
       new THREE.MeshBasicMaterial({
-        color: new THREE.Color("#9be7ff"),
+        color: new THREE.Color(themeColors?.rail || "#9be7ff"),
         transparent: true,
         opacity: 0.9,
       }),
-    []
+    [themeColors?.rail]
   );
 
   const matNote = useMemo(
@@ -543,21 +570,21 @@ function RushScene({
         vertexColors: true,
         roughness: 0.15,
         metalness: 0.9,
-        emissive: new THREE.Color("#2bbcff"),
+        emissive: new THREE.Color(themeColors?.rail || "#2bbcff"),
         emissiveIntensity: 0.25,
       }),
-    []
+    [themeColors?.rail]
   );
 
   const matGlow = useMemo(
     () =>
       new THREE.MeshBasicMaterial({
-        color: new THREE.Color("#7dd3fc"),
+        color: new THREE.Color(themeColors?.left || "#7dd3fc"),
         transparent: true,
         opacity: 0.18,
         depthWrite: false,
       }),
-    []
+    [themeColors?.left]
   );
 
   const matShard = useMemo(
@@ -566,33 +593,33 @@ function RushScene({
         vertexColors: true,
         roughness: 0.22,
         metalness: 0.85,
-        emissive: new THREE.Color("#2bbcff"),
+        emissive: new THREE.Color(themeColors?.rail || "#2bbcff"),
         emissiveIntensity: 0.2,
         transparent: true,
         opacity: 1,
       }),
-    []
+    [themeColors?.rail]
   );
 
   const matHitCore = useMemo(
     () =>
       new THREE.MeshBasicMaterial({
-        color: new THREE.Color("#c7f3ff"),
+        color: new THREE.Color(themeColors?.hitCore || "#c7f3ff"),
         transparent: true,
         opacity: 0.9,
       }),
-    []
+    [themeColors?.hitCore]
   );
 
   const matHitGlow = useMemo(
     () =>
       new THREE.MeshBasicMaterial({
-        color: new THREE.Color("#7dd3fc"),
+        color: new THREE.Color(themeColors?.left || "#7dd3fc"),
         transparent: true,
         opacity: 0.18,
         depthWrite: false,
       }),
-    []
+    [themeColors?.left]
   );
 
   /* =========================
@@ -670,7 +697,6 @@ function RushScene({
     resetCursor(cursorL);
     resetCursor(cursorR);
 
-    // 인스턴스 숨김(할당 없이)
     if (notesMesh.current && glowMesh.current) {
       for (let i = 0; i < NOTE_COUNT; i++) {
         tmpMat.current.identity();
@@ -783,7 +809,7 @@ function RushScene({
   };
 
   /* =========================
-     split FX (가로/세로 베기 반영)
+     split FX
   ========================= */
   const spawnSplitFX = (lane, hitPos, sizeS, splitAxis, cutRatio) => {
     const laneColor = lane === 0 ? colLeft : colRight;
@@ -930,7 +956,6 @@ function RushScene({
 
       spawnSplitFX(lane, hitLocal.current, s, bestSplitAxis, bestCutRatio);
 
-      // ✅ 히트 성공 SFX
       onSliceSfx?.();
 
       best.judged = true;
@@ -940,15 +965,12 @@ function RushScene({
     applyJudge(text, lane, text === "MISS" ? "SWING" : "HIT");
   };
 
-  // ✅ 슬래시 판정: "샘플 기반"으로만 (스무딩 x,y가 아니라 tx,ty를 기준으로)
   const stepSlashBySamples = (curRef, prevRef, lane) => {
-    // tracking이 꺼져 있으면 이전 점 버려서 "재등장시 갑툭튀 슬래시" 방지
     if (!curRef.current.tracking) {
       prevRef.current.has = false;
       return false;
     }
 
-    // 이번 프레임에 샘플이 갱신되지 않았으면, 슬래시 평가 X
     if (!curRef.current._sampleUpdated) return false;
 
     const cx = curRef.current._sampleX;
@@ -992,7 +1014,6 @@ function RushScene({
     return didSlash;
   };
 
-  // ✅ One Euro filter 적용 (샘플 기반)
   const applyOneEuro = (curRef, tNowMs, rawX, rawY) => {
     const minCutoff = 1.15;
     const beta = 0.03;
@@ -1046,7 +1067,6 @@ function RushScene({
     const st = statusRef.current;
     const hand = readTwoHandsFromStatus(st);
 
-    // status 샘플 타임스탬프(폴링에서 주입)
     const stTs = st?.__ts ?? 0;
     const isNewSample = !!stTs && stTs !== lastStatusTs.current;
     if (isNewSample) lastStatusTs.current = stTs;
@@ -1057,7 +1077,6 @@ function RushScene({
     let leftNdc = null;
     let rightNdc = null;
 
-    // NDC 변환 헬퍼 + gesture 포함
     const toNdc = (h) => ({
       x: h.nx * 2 - 1,
       y: (1 - h.ny) * 2 - 1,
@@ -1066,15 +1085,11 @@ function RushScene({
     });
 
     if (hand) {
-      // 1) 후보 수집(gesture 포함)
       const cands = [];
       if (hand.left) cands.push(toNdc(hand.left));
       if (hand.right) cands.push(toNdc(hand.right));
-
-      // single도 후보로(파이썬에서 pointerX/Y만 오는 경우)
       if (cands.length === 0 && hand.single) cands.push(toNdc(hand.single));
 
-      // 2) gesture로 레인 고정 매핑 (BLUE->left, RED->right)
       const normG = (g) => String(g || "").toUpperCase();
       const blueIdx = cands.findIndex((c) => normG(c.gesture) === "BLUE");
       const redIdx = cands.findIndex((c) => normG(c.gesture) === "RED");
@@ -1085,7 +1100,6 @@ function RushScene({
       if (blue) leftNdc = blue;
       if (red) rightNdc = red;
 
-      // ✅ 한쪽만 잡힌 경우: 남은 후보를 반대 레인에 강제 할당(흔들림 방지)
       if (leftNdc && !rightNdc && cands.length >= 2) {
         const other = cands.find((c, i) => i !== blueIdx);
         if (other) rightNdc = other;
@@ -1095,7 +1109,6 @@ function RushScene({
         if (other) leftNdc = other;
       }
 
-      // 3) 둘 다 못 찾았으면 fallback(x정렬)
       if (!leftNdc && !rightNdc) {
         if (cands.length >= 2) {
           cands.sort((a, b) => a.x - b.x);
@@ -1113,32 +1126,30 @@ function RushScene({
         }
       }
 
-      // 4) 하나만 잡힐 때도, 색이면 그 레인에 고정
       if (leftNdc && !rightNdc) lastSingleLaneRef.current = 0;
       if (rightNdc && !leftNdc) lastSingleLaneRef.current = 1;
     }
 
-    // ✅ 손 모션 전용: 기본은 마우스 fallback 금지
     const usingMouseFallback = allowMouseFallback && !leftNdc && !rightNdc;
     if (usingMouseFallback) {
       leftNdc = { x: mouseNdcX, y: mouseNdcY, tracking: true, gesture: "MOUSE" };
-      rightNdc = { x: mouseNdcX, y: mouseNdcY, tracking: true, gesture: "MOUSE" };
+      rightNdc = {
+        x: mouseNdcX,
+        y: mouseNdcY,
+        tracking: true,
+        gesture: "MOUSE",
+      };
     }
 
-    // 손도 없고 fallback도 없으면: tracking만 grace로 유지/정리
     const trackObj = trackRef.current;
     const raycaster = raycasterRef.current;
 
-    // 커서 타겟 업데이트 + 속도 추정
-    // - "새 샘플일 때만" tx/ty 갱신
     const updateCursorFromNdc = (ndc, curRef, shouldUpdateTarget, tNowMs) => {
       const nowMs = performance.now();
       const grace = 120;
 
-      // 기본적으로 이번 프레임 샘플 갱신 없음
       curRef.current._sampleUpdated = false;
 
-      // ndc 자체가 없을 때도 grace로 깜빡임 완화
       if (!ndc) {
         const tracking =
           !!curRef.current._lastTrackMs &&
@@ -1152,7 +1163,8 @@ function RushScene({
 
       const tracking =
         !!ndc.tracking ||
-        (!!curRef.current._lastTrackMs && nowMs - curRef.current._lastTrackMs < grace);
+        (!!curRef.current._lastTrackMs &&
+          nowMs - curRef.current._lastTrackMs < grace);
 
       curRef.current.tracking = tracking;
       curRef.current.gesture = ndc.gesture ?? "NONE";
@@ -1178,10 +1190,8 @@ function RushScene({
       const rawX = hitLocal.current.x;
       const rawY = hitLocal.current.y;
 
-      // 샘플 지터 제거(One Euro) → 필터된 좌표를 target로 사용
       const { fx, fy } = applyOneEuro(curRef, tNowMs, rawX, rawY);
 
-      // 속도 추정(샘플 기반)
       if (curRef.current._lastT != null) {
         const dms = Math.max(1, tNowMs - curRef.current._lastT);
         const ivx = (fx - curRef.current._lastTx) / dms;
@@ -1196,33 +1206,30 @@ function RushScene({
       curRef.current.tx = fx;
       curRef.current.ty = fy;
 
-      // ✅ 슬래시 판정용 샘플 갱신 정보
       curRef.current._sampleUpdated = true;
       curRef.current._sampleT = tNowMs;
-      curRef.current._sampleX = rawX;  // ← fx 말고 rawX
-      curRef.current._sampleY = rawY;  // ← fy 말고 rawY
+      curRef.current._sampleX = rawX;
+      curRef.current._sampleY = rawY;
 
       return true;
     };
 
-    // tNow: 손 샘플은 stTs, 마우스는 performance.now()
     const tNowHands = stTs || performance.now();
     const tNowMouse = performance.now();
 
-    const updatedL = updateCursorFromNdc(
+    updateCursorFromNdc(
       leftNdc,
       cursorL,
       usingMouseFallback ? true : isNewSample,
       usingMouseFallback ? tNowMouse : tNowHands
     );
-    const updatedR = updateCursorFromNdc(
+    updateCursorFromNdc(
       rightNdc,
       cursorR,
       usingMouseFallback ? true : isNewSample,
       usingMouseFallback ? tNowMouse : tNowHands
     );
 
-    // 커서 스무딩(+예측) — "보이는 커서"만 부드럽게
     {
       const predMs = 70;
 
@@ -1264,7 +1271,6 @@ function RushScene({
       smooth(cursorR);
     }
 
-    // ✅ 비트 스폰
     const songTime = songTimeRef?.current ?? 0;
 
     if (songTime < lastSongTime.current - 0.05) {
@@ -1310,7 +1316,6 @@ function RushScene({
       }
     }
 
-    // 노트 이동 + 인스턴스 업데이트(할당 0)
     if (notesMesh.current && glowMesh.current) {
       for (let i = 0; i < NOTE_COUNT; i++) {
         const n = notes.current[i];
@@ -1344,14 +1349,12 @@ function RushScene({
         const z = n.z;
         const s = n.baseSize * THREE.MathUtils.lerp(0.55, 1.25, progress);
 
-        // note
         tmpQuat.current.identity();
         tmpPos.current.set(x, y, z);
         tmpScale.current.set(s, s, s * 0.35);
         tmpMat.current.compose(tmpPos.current, tmpQuat.current, tmpScale.current);
         notesMesh.current.setMatrixAt(i, tmpMat.current);
 
-        // glow
         tmpPos.current.set(x, y, z - 0.08);
         tmpScale.current.set(s * 1.25, s * 1.25, s * 0.25);
         tmpMat.current.compose(tmpPos.current, tmpQuat.current, tmpScale.current);
@@ -1366,16 +1369,13 @@ function RushScene({
         notesMesh.current.instanceColor.needsUpdate = true;
     }
 
-    // ✅ 히트(양손): 샘플 갱신 시점에만 슬래시 평가
     let firedL = false;
     let firedR = false;
     if (playing) {
-      // cursorL/R의 _sampleUpdated는 updateCursorFromNdc에서 갱신됨
       firedL = stepSlashBySamples(cursorL, prevL, 0);
       firedR = stepSlashBySamples(cursorR, prevR, 1);
     }
 
-    // 커서 표시
     if (cursorMeshL.current) {
       cursorMeshL.current.visible = cursorL.current.tracking;
       cursorMeshL.current.position.set(cursorL.current.x, cursorL.current.y, CURSOR_Z);
@@ -1385,7 +1385,6 @@ function RushScene({
       cursorMeshR.current.position.set(cursorR.current.x, cursorR.current.y, CURSOR_Z);
     }
 
-    // 파편 업데이트(할당 0)
     if (shardMesh.current) {
       const g = -13.0;
 
@@ -1433,7 +1432,6 @@ function RushScene({
         shardMesh.current.instanceColor.needsUpdate = true;
     }
 
-    // 스파크 업데이트
     {
       const g = -12.0;
 
@@ -1469,7 +1467,6 @@ function RushScene({
       if (sparksMatRef.current) sparksMatRef.current.opacity = 0.9;
     }
 
-    // HUD(10fps)
     const now = performance.now();
     if (now - hudRef.current.lastT > 100) {
       hudRef.current.lastT = now;
@@ -1492,44 +1489,28 @@ function RushScene({
         swingMiss: statRef.current.swingMiss,
       });
     }
-
-    // 샘플 플래그는 프레임 끝에 유지해도 무방하지만,
-    // 다음 프레임에서 updateCursorFromNdc가 false로 초기화함.
-    void updatedL;
-    void updatedR;
   });
 
   return (
     <>
-      <color attach="background" args={["#050816"]} />
-      <fog attach="fog" args={["#070a14", 10, 44]} />
+      {/* ✅ 배경/안개도 테마 반영 */}
+      <color attach="background" args={[themeColors?.bg0 || "#060a14"]} />
+      <fog attach="fog" args={[themeColors?.fog || themeColors?.bg1 || "#070a14", 10, 44]} />
 
       <ambientLight intensity={0.55} />
       <directionalLight position={[6, 8, 6]} intensity={0.85} />
-      <pointLight position={[-6, 3, 2]} intensity={1.0} color={"#7dd3fc"} />
-      <pointLight position={[6, 3, -10]} intensity={0.9} color={"#ff4fd8"} />
+      <pointLight position={[-6, 3, 2]} intensity={1.0} color={themeColors?.left || "#7dd3fc"} />
+      <pointLight position={[6, 3, -10]} intensity={0.9} color={themeColors?.right || "#ff4fd8"} />
 
       <group ref={trackRef} position={[0, 0.8, 0]}>
-        <mesh
-          rotation={[-Math.PI / 2, 0, 0]}
-          position={[0, 0, -14]}
-          material={matLane}
-        >
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, -14]} material={matLane}>
           <planeGeometry args={[18, 46]} />
         </mesh>
 
-        <mesh
-          rotation={[-Math.PI / 2, 0, 0]}
-          position={[-2.1, 0.01, -14]}
-          material={matRail}
-        >
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[-2.1, 0.01, -14]} material={matRail}>
           <planeGeometry args={[0.03, 46]} />
         </mesh>
-        <mesh
-          rotation={[-Math.PI / 2, 0, 0]}
-          position={[2.1, 0.01, -14]}
-          material={matRail}
-        >
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[2.1, 0.01, -14]} material={matRail}>
           <planeGeometry args={[0.03, 46]} />
         </mesh>
 
@@ -1547,27 +1528,15 @@ function RushScene({
           <boxGeometry args={[HIT_W, 0.022, 0.022]} />
         </mesh>
 
-        <instancedMesh
-          ref={glowMesh}
-          args={[null, null, NOTE_COUNT]}
-          material={matGlow}
-        >
+        <instancedMesh ref={glowMesh} args={[null, null, NOTE_COUNT]} material={matGlow}>
           <boxGeometry args={[1, 1, 1]} />
         </instancedMesh>
 
-        <instancedMesh
-          ref={notesMesh}
-          args={[null, null, NOTE_COUNT]}
-          material={matNote}
-        >
+        <instancedMesh ref={notesMesh} args={[null, null, NOTE_COUNT]} material={matNote}>
           <boxGeometry args={[1, 1, 1]} />
         </instancedMesh>
 
-        <instancedMesh
-          ref={shardMesh}
-          args={[null, null, SHARD_COUNT]}
-          material={matShard}
-        >
+        <instancedMesh ref={shardMesh} args={[null, null, SHARD_COUNT]} material={matShard}>
           <boxGeometry args={[1, 1, 1]} />
         </instancedMesh>
 
@@ -1583,7 +1552,7 @@ function RushScene({
           <pointsMaterial
             ref={sparksMatRef}
             size={0.08}
-            color={"#ffffff"}
+            color={themeColors?.white || "#ffffff"}
             transparent
             opacity={0.9}
             depthWrite={false}
@@ -1592,11 +1561,11 @@ function RushScene({
 
         {/* 커서 RIGHT */}
         <group ref={cursorMeshR} rotation={[0, 0, -0.6]} renderOrder={999}>
-          <pointLight color={"#ff4fd8"} intensity={1.6} distance={7} decay={2} />
+          <pointLight color={themeColors?.right || "#ff4fd8"} intensity={1.6} distance={7} decay={2} />
           <mesh renderOrder={999}>
             <boxGeometry args={[0.10, 0.85, 0.05]} />
             <meshBasicMaterial
-              color={"#ff4fd8"}
+              color={themeColors?.right || "#ff4fd8"}
               transparent
               opacity={0.18}
               depthTest={false}
@@ -1606,10 +1575,10 @@ function RushScene({
           <mesh position={[0, 0.06, 0]} renderOrder={999}>
             <boxGeometry args={[0.05, 0.72, 0.02]} />
             <meshStandardMaterial
-              color={"#ffd1f3"}
+              color={themeColors?.hitCore || "#c7f3ff"}
               metalness={0.85}
               roughness={0.18}
-              emissive={"#ff4fd8"}
+              emissive={themeColors?.right || "#ff4fd8"}
               emissiveIntensity={0.35}
               transparent
               opacity={0.98}
@@ -1620,7 +1589,7 @@ function RushScene({
           <mesh position={[0, -0.34, 0]} renderOrder={999}>
             <cylinderGeometry args={[0.035, 0.035, 0.18, 12]} />
             <meshStandardMaterial
-              color={"#1a1f2e"}
+              color={themeColors?.bg1 || "#1a1f2e"}
               metalness={0.2}
               roughness={0.85}
               depthTest={false}
@@ -1631,11 +1600,11 @@ function RushScene({
 
         {/* 커서 LEFT */}
         <group ref={cursorMeshL} rotation={[0, 0, 0.6]} renderOrder={999}>
-          <pointLight color={"#7dd3fc"} intensity={1.6} distance={7} decay={2} />
+          <pointLight color={themeColors?.left || "#7dd3fc"} intensity={1.6} distance={7} decay={2} />
           <mesh renderOrder={999}>
             <boxGeometry args={[0.10, 0.85, 0.05]} />
             <meshBasicMaterial
-              color={"#7dd3fc"}
+              color={themeColors?.left || "#7dd3fc"}
               transparent
               opacity={0.18}
               depthTest={false}
@@ -1645,10 +1614,10 @@ function RushScene({
           <mesh position={[0, 0.06, 0]} renderOrder={999}>
             <boxGeometry args={[0.05, 0.72, 0.02]} />
             <meshStandardMaterial
-              color={"#d7f4ff"}
+              color={themeColors?.hitCore || "#c7f3ff"}
               metalness={0.85}
               roughness={0.18}
-              emissive={"#7dd3fc"}
+              emissive={themeColors?.left || "#7dd3fc"}
               emissiveIntensity={0.35}
               transparent
               opacity={0.98}
@@ -1659,7 +1628,7 @@ function RushScene({
           <mesh position={[0, -0.34, 0]} renderOrder={999}>
             <cylinderGeometry args={[0.035, 0.035, 0.18, 12]} />
             <meshStandardMaterial
-              color={"#1a1f2e"}
+              color={themeColors?.bg1 || "#1a1f2e"}
               metalness={0.2}
               roughness={0.85}
               depthTest={false}
@@ -1673,11 +1642,14 @@ function RushScene({
 }
 
 /* =============================================================================
-   Rush3DPage (곡 선택 + 오디오 + offset 조절 + SFX)
+   Rush3DPage
 ============================================================================= */
 
 export default function Rush3DPage({ status, connected = true }) {
-  // 최신 status는 ref로만 유지(리렌더 방지)
+  // ✅ 현재 theme 읽기(네온/로즈까지 반영)
+  const themeKey = useDaisyThemeKey();
+  const themeColors = THEME?.[themeKey]?.colors || THEME.dark.colors;
+
   const statusRef = useRef(null);
   useEffect(() => {
     if (status != null) {
@@ -1686,7 +1658,6 @@ export default function Rush3DPage({ status, connected = true }) {
     }
   }, [status]);
 
-  // ✅ 폴링: setInterval 금지 → 요청 완료 후 setTimeout 재예약
   useEffect(() => {
     let alive = true;
     let timer = null;
@@ -1709,7 +1680,7 @@ export default function Rush3DPage({ status, connected = true }) {
       } catch {
         // ignore
       } finally {
-        if (alive) timer = setTimeout(loop, 33); // ~30Hz
+        if (alive) timer = setTimeout(loop, 33);
       }
     };
 
@@ -1762,16 +1733,13 @@ export default function Rush3DPage({ status, connected = true }) {
 
   const selectedOffsetSec = offsets[selectedId] ?? selectedSong.offsetSec;
 
-  // 오디오 ref + songTime ref
   const audioRef = useRef(null);
   const songTimeRef = useRef(0);
 
-  // phase: LOBBY -> PLAYING -> RESULT
   const [phase, setPhase] = useState("LOBBY");
   const [playing, setPlaying] = useState(false);
   const [resetNonce, setResetNonce] = useState(0);
 
-  // HUD (RushScene에서 올라오는 값)
   const [hud, setHud] = useState({
     trackingL: false,
     trackingR: false,
@@ -1794,9 +1762,7 @@ export default function Rush3DPage({ status, connected = true }) {
   const [judge, setJudge] = useState(null);
   const [result, setResult] = useState(null);
 
-  // ---------------------------------------------------------------------------
-  // Slice SFX (WebAudio - 저지연)
-  // ---------------------------------------------------------------------------
+  // Slice SFX
   const sfxRef = useRef({ ctx: null, buf: null, ready: false });
 
   const ensureSfxReady = async () => {
@@ -1827,7 +1793,6 @@ export default function Rush3DPage({ status, connected = true }) {
     src.start(0);
   };
 
-  // 곡 변경 시: 로비로 복귀 + 오디오 리셋
   useEffect(() => {
     setPhase("LOBBY");
     setPlaying(false);
@@ -1842,7 +1807,6 @@ export default function Rush3DPage({ status, connected = true }) {
     audio.src = selectedSong.src;
   }, [selectedId, selectedSong.src]);
 
-  // songTimeRef 갱신 + 곡 종료 감지(RESULT로 전환)
   useEffect(() => {
     let raf = 0;
 
@@ -1886,7 +1850,7 @@ export default function Rush3DPage({ status, connected = true }) {
 
     try {
       await ensureSfxReady();
-    } catch { }
+    } catch {}
 
     setResult(null);
     setResetNonce((n) => n + 1);
@@ -1948,7 +1912,6 @@ export default function Rush3DPage({ status, connected = true }) {
     setResetNonce((n) => n + 1);
   };
 
-  // RESULT 랭크(간단)
   const resPerfect = result?.perfect ?? hud.perfect ?? 0;
   const resGood = result?.good ?? hud.good ?? 0;
   const resMiss = result?.miss ?? hud.miss ?? 0;
@@ -1957,24 +1920,20 @@ export default function Rush3DPage({ status, connected = true }) {
   const acc = totalNotes > 0 ? (resPerfect + resGood) / totalNotes : 0;
 
   const rank =
-    acc >= 0.95 ? "S" :
-      acc >= 0.90 ? "A" :
-        acc >= 0.80 ? "B" :
-          acc >= 0.65 ? "C" : "D";
+    acc >= 0.95 ? "S" : acc >= 0.9 ? "A" : acc >= 0.8 ? "B" : acc >= 0.65 ? "C" : "D";
 
-  // RUSH 모드 안내
   const modeU = String(statusRef.current?.mode || "").toUpperCase();
   const rushOk = connected && modeU === "RUSH" && !!statusRef.current?.enabled;
 
   const judgeColor =
-    judge?.lane === 0 ? "text-cyan-200" :
-      judge?.lane === 1 ? "text-fuchsia-200" : "text-white";
+    judge?.lane === 0
+      ? "text-info"
+      : judge?.lane === 1
+      ? "text-secondary"
+      : "text-base-content";
 
   return (
-    <div
-      className="w-full bg-slate-950 text-slate-100 relative overflow-hidden"
-      style={{ height: "100dvh" }}
-    >
+    <div className="w-full bg-base-100 text-base-content relative overflow-hidden" style={{ height: "100dvh" }}>
       <audio ref={audioRef} preload="metadata" />
 
       <Canvas
@@ -2001,25 +1960,23 @@ export default function Rush3DPage({ status, connected = true }) {
               setJudge({ text, lane, ts: performance.now() });
               setTimeout(() => setJudge(null), 420);
             }}
-            // ✅ 손 모션 전용: false 고정
             allowMouseFallback={false}
+            themeColors={themeColors}
           />
         </group>
       </Canvas>
 
-      {/* =========================
-          LOBBY UI
-      ========================= */}
+      {/* LOBBY UI */}
       {phase === "LOBBY" && (
         <div className="absolute inset-0 z-20 pointer-events-auto">
-          <div className="absolute inset-0 bg-gradient-to-b from-black/70 via-black/45 to-black/70" />
+          <div className="absolute inset-0 bg-gradient-to-b from-base-100/75 via-base-100/45 to-base-100/75" />
           <div className="relative h-full flex items-center justify-center px-6">
-            <div className="w-[min(980px,94vw)] bg-black/40 border border-white/10 rounded-3xl p-6 backdrop-blur">
+            <div className="w-[min(980px,94vw)] bg-base-200/55 border border-base-300/40 rounded-3xl p-6 backdrop-blur">
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <div className="text-xs tracking-[0.35em] text-white/70">RHYTHM RUSH</div>
+                  <div className="text-xs tracking-[0.35em] text-base-content/70">RHYTHM RUSH</div>
                   <div className="text-2xl font-black mt-1">Lobby</div>
-                  <div className="text-sm text-white/60 mt-1">
+                  <div className="text-sm text-base-content/60 mt-1">
                     노래 선택 후 시작. (Manager에서 Mode=RUSH, Enabled=ON 권장)
                   </div>
                 </div>
@@ -2029,22 +1986,19 @@ export default function Rush3DPage({ status, connected = true }) {
                     className={
                       "inline-flex items-center gap-2 px-3 py-1.5 rounded-full border " +
                       (rushOk
-                        ? "border-emerald-300/30 bg-emerald-400/10 text-emerald-200"
-                        : "border-rose-300/30 bg-rose-400/10 text-rose-200")
+                        ? "border-success/30 bg-success/10 text-success"
+                        : "border-error/30 bg-error/10 text-error")
                     }
                   >
-                    <span className="text-xs font-semibold">
-                      {rushOk ? "RUSH READY" : "CHECK MANAGER"}
-                    </span>
+                    <span className="text-xs font-semibold">{rushOk ? "RUSH READY" : "CHECK MANAGER"}</span>
                   </div>
-                  <div className="mt-2 text-xs text-white/55">
+                  <div className="mt-2 text-xs text-base-content/60">
                     connected: {String(connected)} / mode: {modeU || "?"} / enabled:{" "}
                     {String(!!statusRef.current?.enabled)}
                   </div>
                 </div>
               </div>
 
-              {/* 곡 선택 카드 */}
               <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-3">
                 {SONGS.map((s) => {
                   const active = s.id === selectedId;
@@ -2055,29 +2009,28 @@ export default function Rush3DPage({ status, connected = true }) {
                       className={
                         "text-left rounded-2xl border p-4 transition " +
                         (active
-                          ? "bg-white/12 border-white/25"
-                          : "bg-white/5 border-white/10 hover:bg-white/10")
+                          ? "bg-base-300/40 border-base-300/70"
+                          : "bg-base-200/30 border-base-300/35 hover:bg-base-300/30")
                       }
                     >
-                      <div className="text-sm tracking-[0.25em] text-white/60">TRACK</div>
+                      <div className="text-sm tracking-[0.25em] text-base-content/60">TRACK</div>
                       <div className="text-lg font-bold mt-1">{s.title}</div>
-                      <div className="text-xs text-white/60 mt-1">BPM {s.bpm}</div>
-                      <div className="text-xs text-white/50 mt-1">Seed {s.seed}</div>
+                      <div className="text-xs text-base-content/60 mt-1">BPM {s.bpm}</div>
+                      <div className="text-xs text-base-content/50 mt-1">Seed {s.seed}</div>
                     </button>
                   );
                 })}
               </div>
 
-              {/* 오프셋 조절 */}
-              <div className="mt-5 bg-white/5 border border-white/10 rounded-2xl p-4">
+              <div className="mt-5 bg-base-200/35 border border-base-300/35 rounded-2xl p-4">
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="text-xs tracking-[0.25em] text-white/70">BEAT OFFSET</div>
-                    <div className="text-sm text-white/70 mt-1">
+                    <div className="text-xs tracking-[0.25em] text-base-content/70">BEAT OFFSET</div>
+                    <div className="text-sm text-base-content/60 mt-1">
                       첫 박 시작 시점(노트가 밀리면 여기만 조절)
                     </div>
                   </div>
-                  <div className="text-xs text-white/70 tabular-nums">
+                  <div className="text-xs text-base-content/70 tabular-nums">
                     {Math.round(selectedOffsetSec * 1000)}ms
                   </div>
                 </div>
@@ -2093,10 +2046,10 @@ export default function Rush3DPage({ status, connected = true }) {
                       setOffsets((prev) => ({ ...prev, [selectedId]: v }));
                       setResetNonce((n) => n + 1);
                     }}
-                    className="w-full"
+                    className="w-full range range-sm"
                   />
                   <button
-                    className="px-3 py-2 rounded-lg bg-white/10 border border-white/15 hover:bg-white/15 text-xs"
+                    className="btn btn-sm btn-ghost border border-base-300/40"
                     onClick={setNowAsFirstBeat}
                     title="음악 들으면서 '첫 박'에 맞춰 눌러 오프셋 잡기"
                   >
@@ -2105,61 +2058,52 @@ export default function Rush3DPage({ status, connected = true }) {
                 </div>
               </div>
 
-              {/* 시작 버튼 */}
               <div className="mt-5 flex items-center justify-between gap-3">
-                <div className="text-xs text-white/55 leading-5">
-                  컨트롤: 손/펜 트래킹이 안 잡히면 Manager/Agent 상태부터 확인.<br />
+                <div className="text-xs text-base-content/60 leading-5">
+                  컨트롤: 손/펜 트래킹이 안 잡히면 Manager/Agent 상태부터 확인.
+                  <br />
                   (손 모션 전용: 마우스 fallback은 OFF)
                 </div>
 
-                <button
-                  onClick={startGame}
-                  className="px-5 py-3 rounded-xl bg-white/15 border border-white/20 hover:bg-white/20 font-bold"
-                >
+                <button onClick={startGame} className="btn btn-primary rounded-xl px-6">
                   Start Game
                 </button>
+              </div>
+
+              {/* ✅ 현재 테마 표시(디버그) */}
+              <div className="mt-3 text-xs text-base-content/50">
+                theme: <span className="font-semibold">{themeKey}</span>
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* =========================
-          PLAYING HUD (상단 최소화)
-      ========================= */}
+      {/* PLAYING HUD */}
       {phase === "PLAYING" && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 w-[min(820px,92vw)] pointer-events-auto">
-          <div className="bg-black/45 border border-white/10 rounded-2xl px-4 py-3 backdrop-blur">
+          <div className="bg-base-200/55 border border-base-300/35 rounded-2xl px-4 py-3 backdrop-blur">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <div className="text-xs tracking-[0.25em] text-white/70">NOW PLAYING</div>
+                <div className="text-xs tracking-[0.25em] text-base-content/70">NOW PLAYING</div>
                 <div className="text-lg font-bold">{selectedSong.title}</div>
-                <div className="text-xs text-white/60">
-                  BPM {selectedSong.bpm} · Offset {Math.round(selectedOffsetSec * 1000)}ms ·
-                  Score {hud.score} · Combo {hud.combo}
+                <div className="text-xs text-base-content/60">
+                  BPM {selectedSong.bpm} · Offset {Math.round(selectedOffsetSec * 1000)}ms · Score{" "}
+                  {hud.score} · Combo {hud.combo}
                 </div>
               </div>
 
               <div className="flex gap-2">
                 {!playing ? (
-                  <button
-                    className="px-4 py-2 rounded-lg bg-white/10 border border-white/15 hover:bg-white/15"
-                    onClick={resume}
-                  >
+                  <button className="btn btn-sm btn-ghost border border-base-300/40" onClick={resume}>
                     Resume
                   </button>
                 ) : (
-                  <button
-                    className="px-4 py-2 rounded-lg bg-white/10 border border-white/15 hover:bg-white/15"
-                    onClick={pause}
-                  >
+                  <button className="btn btn-sm btn-ghost border border-base-300/40" onClick={pause}>
                     Pause
                   </button>
                 )}
-                <button
-                  className="px-4 py-2 rounded-lg bg-white/10 border border-white/15 hover:bg-white/15"
-                  onClick={reset}
-                >
+                <button className="btn btn-sm btn-ghost border border-base-300/40" onClick={reset}>
                   Reset
                 </button>
               </div>
@@ -2168,103 +2112,85 @@ export default function Rush3DPage({ status, connected = true }) {
         </div>
       )}
 
-      {/* 큰 SCORE / COMBO */}
       {phase === "PLAYING" && (
         <div className="absolute top-28 left-1/2 -translate-x-1/2 text-center pointer-events-none z-10">
-          <div className="text-xs tracking-[0.35em] text-white/70">SCORE</div>
+          <div className="text-xs tracking-[0.35em] text-base-content/70">SCORE</div>
           <div className="text-5xl font-black drop-shadow">{hud.score}</div>
 
           {hud.combo > 1 && (
             <div className="mt-2 text-6xl font-black drop-shadow">
-              {hud.combo} <span className="text-white/80">COMBO</span>
+              {hud.combo} <span className="text-base-content/80">COMBO</span>
             </div>
           )}
-          <div className="mt-1 text-sm text-white/60">MAX {hud.maxCombo}</div>
+          <div className="mt-1 text-sm text-base-content/60">MAX {hud.maxCombo}</div>
         </div>
       )}
 
-      {/* 판정 텍스트 */}
       {phase === "PLAYING" && judge && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <div className={`text-6xl font-black drop-shadow ${judgeColor}`}>
-            {judge.text}
-          </div>
+          <div className={`text-6xl font-black drop-shadow ${judgeColor}`}>{judge.text}</div>
         </div>
       )}
 
-      {/* =========================
-          RESULT UI
-      ========================= */}
+      {/* RESULT UI */}
       {phase === "RESULT" && (
         <div className="absolute inset-0 z-30 pointer-events-auto">
-          <div className="absolute inset-0 bg-black/70" />
+          <div className="absolute inset-0 bg-base-100/75" />
           <div className="relative h-full flex items-center justify-center px-6">
-            <div className="w-[min(720px,92vw)] bg-black/45 border border-white/10 rounded-3xl p-6 backdrop-blur">
-              <div className="text-xs tracking-[0.35em] text-white/70">RESULT</div>
+            <div className="w-[min(720px,92vw)] bg-base-200/55 border border-base-300/35 rounded-3xl p-6 backdrop-blur">
+              <div className="text-xs tracking-[0.35em] text-base-content/70">RESULT</div>
               <div className="mt-1 flex items-end justify-between gap-3">
                 <div>
                   <div className="text-2xl font-black">{selectedSong.title}</div>
-                  <div className="text-sm text-white/60 mt-1">
+                  <div className="text-sm text-base-content/60 mt-1">
                     BPM {selectedSong.bpm} · Offset {Math.round(selectedOffsetSec * 1000)}ms
                   </div>
                 </div>
                 <div className="text-right">
-                  <div className="text-xs text-white/60">RANK</div>
+                  <div className="text-xs text-base-content/60">RANK</div>
                   <div className="text-4xl font-black">{rank}</div>
-                  <div className="text-xs text-white/55 mt-1">
-                    ACC {(acc * 100).toFixed(1)}%
-                  </div>
+                  <div className="text-xs text-base-content/60 mt-1">ACC {(acc * 100).toFixed(1)}%</div>
                 </div>
               </div>
 
               <div className="mt-5 grid grid-cols-2 gap-3">
-                <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
-                  <div className="text-xs text-white/60">FINAL SCORE</div>
-                  <div className="text-4xl font-black mt-1">
-                    {result?.score ?? hud.score}
-                  </div>
+                <div className="bg-base-200/35 border border-base-300/35 rounded-2xl p-4">
+                  <div className="text-xs text-base-content/60">FINAL SCORE</div>
+                  <div className="text-4xl font-black mt-1">{result?.score ?? hud.score}</div>
                 </div>
-                <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
-                  <div className="text-xs text-white/60">MAX COMBO</div>
-                  <div className="text-4xl font-black mt-1">
-                    {result?.maxCombo ?? hud.maxCombo}
-                  </div>
+                <div className="bg-base-200/35 border border-base-300/35 rounded-2xl p-4">
+                  <div className="text-xs text-base-content/60">MAX COMBO</div>
+                  <div className="text-4xl font-black mt-1">{result?.maxCombo ?? hud.maxCombo}</div>
                 </div>
               </div>
 
-              <div className="mt-3 bg-white/5 border border-white/10 rounded-2xl p-4">
-                <div className="text-xs text-white/60 mb-2">JUDGEMENT</div>
+              <div className="mt-3 bg-base-200/35 border border-base-300/35 rounded-2xl p-4">
+                <div className="text-xs text-base-content/60 mb-2">JUDGEMENT</div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
-                  <div className="flex justify-between bg-black/20 rounded-xl px-3 py-2">
-                    <span className="text-white/70">PERFECT</span>
+                  <div className="flex justify-between bg-base-100/35 rounded-xl px-3 py-2">
+                    <span className="text-base-content/70">PERFECT</span>
                     <span className="font-bold">{result?.perfect ?? hud.perfect}</span>
                   </div>
-                  <div className="flex justify-between bg-black/20 rounded-xl px-3 py-2">
-                    <span className="text-white/70">GOOD</span>
+                  <div className="flex justify-between bg-base-100/35 rounded-xl px-3 py-2">
+                    <span className="text-base-content/70">GOOD</span>
                     <span className="font-bold">{result?.good ?? hud.good}</span>
                   </div>
-                  <div className="flex justify-between bg-black/20 rounded-xl px-3 py-2">
-                    <span className="text-white/70">MISS</span>
+                  <div className="flex justify-between bg-base-100/35 rounded-xl px-3 py-2">
+                    <span className="text-base-content/70">MISS</span>
                     <span className="font-bold">{result?.miss ?? hud.miss}</span>
                   </div>
-                  <div className="flex justify-between bg-black/20 rounded-xl px-3 py-2">
-                    <span className="text-white/70">SWING MISS</span>
+                  <div className="flex justify-between bg-base-100/35 rounded-xl px-3 py-2">
+                    <span className="text-base-content/70">SWING MISS</span>
                     <span className="font-bold">{result?.swingMiss ?? hud.swingMiss}</span>
                   </div>
                 </div>
               </div>
 
               <div className="mt-5 flex items-center justify-end gap-2">
-                <button
-                  className="px-4 py-2 rounded-lg bg-white/10 border border-white/15 hover:bg-white/15"
-                  onClick={backToLobby}
-                >
+                <button className="btn btn-sm btn-ghost border border-base-300/40" onClick={backToLobby}>
                   Back to Lobby
                 </button>
-                <button
-                  className="px-4 py-2 rounded-lg bg-white/15 border border-white/20 hover:bg-white/20 font-bold"
-                  onClick={retry}
-                >
+                <button className="btn btn-sm btn-primary" onClick={retry}>
                   Retry
                 </button>
               </div>
@@ -2273,21 +2199,24 @@ export default function Rush3DPage({ status, connected = true }) {
         </div>
       )}
 
-      {/* 연결 OFF 표시 */}
       {!connected && phase !== "RESULT" && (
-        <div className="absolute bottom-4 left-4 z-10 bg-black/60 border border-white/10 rounded-2xl px-4 py-3 text-xs backdrop-blur pointer-events-none">
+        <div className="absolute bottom-4 left-4 z-10 bg-base-200/70 border border-base-300/35 rounded-2xl px-4 py-3 text-xs backdrop-blur pointer-events-none">
           백엔드 연결 OFF
         </div>
       )}
 
-      {/* 디버그 */}
-      <div className="absolute bottom-4 right-4 bg-black/45 border border-white/10 rounded-xl px-3 py-2 text-xs leading-5 pointer-events-none">
+      <div className="absolute bottom-4 right-4 bg-base-200/55 border border-base-300/35 rounded-xl px-3 py-2 text-xs leading-5 pointer-events-none">
         <div>phase: {phase}</div>
         <div>playing: {String(playing)}</div>
+        <div>theme: {themeKey}</div>
         <div>songTime: {hud.songTime?.toFixed?.(2) ?? "0.00"}</div>
         <div>offset: {hud.beatOffsetSec?.toFixed?.(2) ?? "0.00"}s</div>
-        <div>tracking L/R: {String(hud.trackingL)} / {String(hud.trackingR)}</div>
-        <div>gesture L/R: {String(hud.gestureL)} / {String(hud.gestureR)}</div>
+        <div>
+          tracking L/R: {String(hud.trackingL)} / {String(hud.trackingR)}
+        </div>
+        <div>
+          gesture L/R: {String(hud.gestureL)} / {String(hud.gestureR)}
+        </div>
       </div>
     </div>
   );

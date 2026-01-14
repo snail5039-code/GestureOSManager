@@ -1,6 +1,6 @@
 # gestureos_agent/hud_overlay.py
 # Windows only: Always-on-top transparent HUD overlay (click-through)
-# - HUD (top-left) + Reticle (follows pointer) + Tip bubble (follows pointer)
+# - HUD (top-left) + Reticle (follows OS cursor) + Tip bubble (follows OS cursor)
 # - Tip bubble: ALL modes EXCEPT RUSH (RUSH = no bubble)
 # - Bubble text style: "MODE • action"
 # - Apply click-through to: widget hwnd + parent hwnd + root/ancestor hwnd + all descendants
@@ -55,6 +55,16 @@ SM_CXVIRTUALSCREEN = 78
 SM_CYVIRTUALSCREEN = 79
 
 user32 = ctypes.windll.user32
+kernel32 = ctypes.windll.kernel32
+
+# ---- Single instance mutex (cross-process) ----
+HUD_MUTEX_NAME = "Global\\GestureOS_HUD_Overlay_SingleInstance"
+ERROR_ALREADY_EXISTS = 183
+
+kernel32.CreateMutexW.restype = wintypes.HANDLE
+kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+kernel32.GetLastError.restype = wintypes.DWORD
+kernel32.CloseHandle.restype = wintypes.BOOL
 
 # ---- 64-bit safe: Get/SetWindowLongPtr fallback ----
 def _get_window_long_ptr(hwnd, idx):
@@ -117,13 +127,13 @@ WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT, win
 # ---- Reticle image assets (mode -> png) ----
 ASSET_DIR = os.path.join(os.path.dirname(__file__), "assets", "reticle")
 RETICLE_PNG = {
-    "MOUSE": "cursor.png",
-    "DRAW": "carrot01.png",
-    "PRESENTATION": "cat03.png",
-    "KEYBOARD": "mouse.png",
-    "RUSH": "cat.png",
-    "VKEY": "cat02.png",
-    "DEFAULT": "cursor.png",
+    "MOUSE": "mouse.png",
+    "DRAW": "draw.png",
+    "PRESENTATION": "ppt.png",
+    "KEYBOARD": "keyboard.png",
+    "RUSH": "rush.png",
+    "VKEY": "keyboard.png",     # vkey 전용 이미지 있으면 바꾸세요
+    "DEFAULT": "mouse.png",
 }
 
 # ---- Theme per mode (HUD colors) ----
@@ -144,34 +154,6 @@ def _mode_of(status: dict) -> str:
     m = str(status.get("mode", "DEFAULT")).upper()
     return m if m in THEME else "DEFAULT"
 
-def _clamp01(v):
-    try:
-        v = float(v)
-    except Exception:
-        return None
-    if v != v:
-        return None
-    return max(0.0, min(1.0, v))
-
-def _normalize_pointer(x, y, screen_w, screen_h):
-    if x is None or y is None:
-        return (None, None)
-    try:
-        fx = float(x); fy = float(y)
-    except Exception:
-        return (None, None)
-
-    if 0.0 <= fx <= 1.0 and 0.0 <= fy <= 1.0:
-        return (_clamp01(fx), _clamp01(fy))
-
-    if -1.0 <= fx <= 1.0 and -1.0 <= fy <= 1.0:
-        return (_clamp01((fx + 1.0) * 0.5), _clamp01((fy + 1.0) * 0.5))
-
-    if screen_w > 0 and screen_h > 0:
-        return (_clamp01(fx / screen_w), _clamp01(fy / screen_h))
-
-    return (None, None)
-
 def _hex_dim(color_hex, a):
     color_hex = str(color_hex).lstrip("#")
     r = int(color_hex[0:2], 16)
@@ -186,6 +168,9 @@ class OverlayHUD:
     HUD + Reticle + Tip bubble (ALL modes except RUSH)
     All windows are click-through EXCEPT the small "handle" window for drag move.
     """
+    _GLOBAL_LOCK = threading.Lock()
+    _GLOBAL_STARTED = False
+
     def __init__(self, enable=True):
         self.enable = bool(enable) and (os.name == "nt")
 
@@ -238,11 +223,36 @@ class OverlayHUD:
         self._ret_img_item = None
         self._ret_img_mode = None
 
-        # anti-flicker
-        self._last_track_ts = 0.0
-        self._last_xy01 = None   # (x01,y01)
-        self._grace_sec = 0.25   # 0.2~0.35 추천
-        self._ret_visible = False
+        self._mutex = None
+
+        # ensure mutex released on exit (best-effort)
+        atexit.register(self.stop)
+
+    # ---------------- single instance ----------------
+    def _acquire_single_instance(self) -> bool:
+        """프로세스 여러 개 떠도 HUD는 1개만."""
+        if self._mutex is not None:
+            return True
+
+        h = kernel32.CreateMutexW(None, True, HUD_MUTEX_NAME)
+        if not h:
+            # fail-open (개발 편의)
+            return True
+
+        if kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
+            kernel32.CloseHandle(h)
+            return False
+
+        self._mutex = h
+        return True
+
+    def _release_single_instance(self):
+        if self._mutex:
+            try:
+                kernel32.CloseHandle(self._mutex)
+            except Exception:
+                pass
+            self._mutex = None
 
         # visibility flags
         self._overlay_visible = True     # 전체( hud+reticle+tip ) ON/OFF
@@ -255,14 +265,33 @@ class OverlayHUD:
     def start(self):
         if not self.enable:
             return
+
+        # cross-process single instance
+        if not self._acquire_single_instance():
+            return
+
+        # in-process single instance
+        with OverlayHUD._GLOBAL_LOCK:
+            if OverlayHUD._GLOBAL_STARTED:
+                return
+            OverlayHUD._GLOBAL_STARTED = True
+
         if self._thread and self._thread.is_alive():
             return
+
+        self._stop.clear()
         self._thread = threading.Thread(target=self._run_tk, daemon=True)
         self._thread.start()
 
     def stop(self):
         if not self.enable:
             return
+
+        with OverlayHUD._GLOBAL_LOCK:
+            OverlayHUD._GLOBAL_STARTED = False
+
+        self._release_single_instance()
+
         self._stop.set()
         try:
             self._q.put_nowait({"__cmd": "STOP"})
@@ -397,7 +426,8 @@ class OverlayHUD:
             self._new_wndproc_ref[hwnd_int] = new_proc
 
         except Exception as e:
-            print("[HUD] _install_httransparent_wndproc failed:", e)
+            if HUD_DEBUG:
+                print("[HUD] _install_httransparent_wndproc failed:", e)
 
     def _apply_click_through_hwnd(self, hwnd_int: int):
         """click-through 스타일 + HTTRANSPARENT wndproc 설치"""
@@ -409,7 +439,7 @@ class OverlayHUD:
                 ex |= (WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)
                 _set_window_long_ptr(hwnd, GWL_EXSTYLE, ex)
 
-                colorkey = wintypes.COLORREF(0x00FF00FF)  # magenta
+                colorkey = wintypes.COLORREF(0x00010101)
                 user32.SetLayeredWindowAttributes(hwnd, colorkey, 0, LWA_COLORKEY)
 
                 user32.SetWindowPos(
@@ -421,7 +451,8 @@ class OverlayHUD:
                 self._install_httransparent_wndproc(hid)
 
             except Exception as e:
-                print("[HUD] apply_click_through_hwnd failed:", e)
+                if HUD_DEBUG:
+                    print("[HUD] apply_click_through_hwnd failed:", e)
 
     def _apply_handle_hwnd(self, hwnd_int: int):
         """
@@ -520,7 +551,6 @@ class OverlayHUD:
 
         if bool(st.get("scrollActive", False)):
             return "스크롤"
-
         g = str(st.get("gesture", "NONE") or "NONE").upper()
         if g == "OPEN_PALM":
             return "이동"
@@ -540,7 +570,6 @@ class OverlayHUD:
         tool = self._pick_first_str(st, ["tool", "drawTool", "brush", "pen", "eraser"])
         if tool:
             return f"{tool}"
-
         g = str(st.get("gesture", "NONE") or "NONE").upper()
         if g == "PINCH_INDEX":
             return "그리기"
@@ -556,11 +585,9 @@ class OverlayHUD:
         common = self._common_state_label(st, locked)
         if common:
             return common
-
         act = self._pick_first_str(st, ["pptAction", "presentationAction", "slideAction", "action"])
         if act:
             return act
-
         g = str(st.get("gesture", "NONE") or "NONE").upper()
         if g == "V_SIGN":
             return "다음"
@@ -576,10 +603,8 @@ class OverlayHUD:
         common = self._common_state_label(st, locked)
         if common:
             return common
-
         sel = self._pick_first_str(st, ["selectedKey", "key", "keyName", "char"])
         g = str(st.get("gesture", "NONE") or "NONE").upper()
-
         if g == "PINCH_INDEX":
             return f"입력({sel})" if sel else "입력"
         if g == "OPEN_PALM":
@@ -592,10 +617,8 @@ class OverlayHUD:
         common = self._common_state_label(st, locked)
         if common:
             return common
-
         sel = self._pick_first_str(st, ["vk", "vkey", "selectedKey", "key", "keyName", "char"])
         g = str(st.get("gesture", "NONE") or "NONE").upper()
-
         if g == "PINCH_INDEX":
             return f"입력({sel})" if sel else "입력"
         if g == "OPEN_PALM":
@@ -660,7 +683,6 @@ class OverlayHUD:
 
     # -------- tk thread --------
     def _run_tk(self):
-        print("[HUD] _run_tk entered", flush=True)
         root = tk.Tk()
         self._root = root
         root.withdraw()
@@ -1077,7 +1099,7 @@ class OverlayHUD:
                 y = base_y + math.sin(self._phase * 2.2 + i * 0.55) * amp
                 c.create_line(x, base_y, x + 18, y, fill=_hex_dim(accent, 0.55), width=2)
 
-        # ---- Reticle / Tip ----
+        # ---- Reticle / Tip (always follow OS cursor) ----
         if self._ret_win is None or self._ret_canvas is None:
             return
 
@@ -1116,6 +1138,7 @@ class OverlayHUD:
         gx = osx - self.RET_S // 2
         gy = osy - self.RET_S // 2
         gx, gy = self._clamp_screen_xy(gx, gy, self.RET_S, self.RET_S)
+
         try:
             self._ret_win.geometry(f"{self.RET_S}x{self.RET_S}+{gx}+{gy}")
         except Exception:
@@ -1146,6 +1169,8 @@ class OverlayHUD:
             self._ret_img_mode = key
 
         # ---- Tip bubble ----
+        tipw = self._tip_win
+        tipc = self._tip_canvas
         if tipw is None or tipc is None:
             return
 
@@ -1168,6 +1193,7 @@ class OverlayHUD:
         tx = self.vx + px + self.TIP_OX
         ty = self.vy + py + self.TIP_OY
         tx, ty = self._clamp_screen_xy(tx, ty, self.TIP_W, self.TIP_H)
+
         try:
             tipw.geometry(f"{self.TIP_W}x{self.TIP_H}+{tx}+{ty}")
         except Exception:
