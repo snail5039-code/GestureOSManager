@@ -8,23 +8,32 @@ pyautogui.PAUSE = 0
 @dataclass
 class PresentationHandler:
     """
-    PRESENTATION mode (단발 + 인터랙션 레이어)
+    PRESENTATION mode (단발 + 인터랙션 레이어 + 선택 연발)
 
     기본(네비게이션):
-      - 양손 OPEN_PALM     : F5  (슬라이드쇼 시작)
-      - PINCH_INDEX        : →   (다음 슬라이드)
-      - V_SIGN             : ←   (이전 슬라이드)
-      - 양손 PINCH_INDEX    : ESC (슬라이드쇼 종료)
+      - 양손 OPEN_PALM      : F5  (슬라이드쇼 시작)
+      - PINCH_INDEX         : →   (다음 슬라이드)
+      - V_SIGN              : ←   (이전 슬라이드)
+      - 양손 PINCH_INDEX     : ESC (슬라이드쇼 종료)
 
     인터랙션(핫스팟/하이퍼링크/비디오) 모드:
-      - 조건: 다른 손(other)이 FIST일 때만 활성화
-      - V_SIGN             : Tab       (다음 핫스팟 포커스)
-      - FIST               : Shift+Tab (이전 핫스팟 포커스)
-      - PINCH_INDEX        : Enter     (실행/열기)
+      - 조건: 다른 손(other)이 FIST일 때(그리고 잠깐의 grace 시간 동안 유지)
+      - FIST               : Tab       (다음 핫스팟 포커스)  ✅ 연발(홀드 유지)
+      - V_SIGN             : Shift+Tab (이전 핫스팟 포커스) ✅ 연발(홀드 유지)
+      - PINCH_INDEX        : Enter     (실행/열기)           (단발)
       - OPEN_PALM          : Alt+P     (재생/일시정지 - 환경 따라 제한 가능)
+
+    NOTE:
+      - 기존 "V_SIGN=Tab" 때문에 탭 선택 중 V_SIGN 오인식이 나면 '이전 슬라이드'로 튀는 문제가 있었음.
+        이를 줄이기 위해 인터랙션 모드에서 Tab을 '양손 FIST(=cursor FIST + other FIST)'로 바꿈.
+      - other 손이 순간적으로 끊겨도(interaction flicker) 바로 네비게이션으로 떨어지지 않도록
+        interaction_grace_sec 동안 인터랙션 모드를 유지함.
     """
 
     stable_frames: int = 3
+
+    # other 손 FIST가 순간 끊겨도(interaction flicker) 인터랙션 모드를 유지하는 시간
+    interaction_grace_sec: float = 0.80
 
     hold_sec: dict = field(default_factory=lambda: {
         # navigation
@@ -33,9 +42,9 @@ class PresentationHandler:
         "START": 0.20,
         "END": 0.20,
 
-        # interaction
-        "TAB": 0.08,
-        "SHIFT_TAB": 0.08,
+        # interaction (연발 지원: 첫 발도 좀 느긋하게)
+        "TAB": 0.22,
+        "SHIFT_TAB": 0.22,
         "ACTIVATE": 0.10,
         "PLAY_PAUSE": 0.12,
     })
@@ -47,9 +56,9 @@ class PresentationHandler:
         "START": 0.80,
         "END": 0.80,
 
-        # interaction
-        "TAB": 0.25,
-        "SHIFT_TAB": 0.25,
+        # interaction (연발 간격: 꽤 길게)
+        "TAB": 0.95,
+        "SHIFT_TAB": 0.95,
         "ACTIVATE": 0.40,
         "PLAY_PAUSE": 0.60,
     })
@@ -58,6 +67,9 @@ class PresentationHandler:
     streak: int = 0
     token_start_ts: float = 0.0
     armed: bool = True
+
+    # interaction mode sticky
+    interaction_until: float = 0.0
 
     last_fire_map: dict = field(default_factory=lambda: {
         "NEXT": 0.0, "PREV": 0.0, "START": 0.0, "END": 0.0,
@@ -73,6 +85,7 @@ class PresentationHandler:
         self.token_start_ts = 0.0
         self.armed = True
         self.mod_until = 0.0
+        self.interaction_until = 0.0
         for k in list(self.last_fire_map.keys()):
             self.last_fire_map[k] = 0.0
 
@@ -104,7 +117,7 @@ class PresentationHandler:
             self.reset()
             return
 
-        # 안전: KNIFE 오인식은 OPEN_PALM처럼 처리
+        # 안전: KNIFE 오인식은 OPEN_PALM처럼 처리(호환)
         if cursor_gesture == "KNIFE":
             cursor_gesture = "OPEN_PALM"
         if other_gesture == "KNIFE":
@@ -119,16 +132,20 @@ class PresentationHandler:
             elif cursor_gesture == "OPEN_PALM" and other_gesture == "OPEN_PALM":
                 token = "START"
 
-        # 인터랙션 모드: 다른 손이 FIST일 때만
-        interaction_mode = (got_other and other_gesture == "FIST")
+        # 인터랙션 모드: other 손이 FIST이면 켜지고, 잠깐 grace 동안 유지
+        if got_other and other_gesture == "FIST":
+            self.interaction_until = t + float(self.interaction_grace_sec or 0.0)
+        interaction_mode = (t < self.interaction_until)
 
         # 1손 제스처
         if token is None and got_cursor:
             if interaction_mode:
                 # 핫스팟(링크/비디오) 조작
-                if cursor_gesture == "V_SIGN":
+                # ✅ 탭 선택을 '양손 FIST'로:
+                # (interaction_mode 자체가 other=FIST 기반이므로 cursor=FIST면 사실상 양손 FIST)
+                if cursor_gesture == "FIST":
                     token = "TAB"
-                elif cursor_gesture == "FIST":
+                elif cursor_gesture == "V_SIGN":
                     token = "SHIFT_TAB"
                 elif cursor_gesture == "PINCH_INDEX":
                     token = "ACTIVATE"
@@ -166,9 +183,14 @@ class PresentationHandler:
         if (t - self.token_start_ts) < need_hold:
             return
 
-        # 단발 + 쿨다운
-        if not self.armed:
-            return
+        # 단발/연발 정책
+        # - TAB / SHIFT_TAB: 홀드 유지 시 연발 (쿨다운 간격으로 반복)
+        # - 나머지: 단발(포즈 풀렸다가 다시 잡아야 발동)
+        repeatable = token in ("TAB", "SHIFT_TAB")
+
+        if not repeatable:
+            if not self.armed:
+                return
 
         cd = self.cooldown_sec.get(token, 0.30)
         last_fire = self.last_fire_map.get(token, 0.0)
@@ -177,4 +199,9 @@ class PresentationHandler:
 
         self._fire(token)
         self.last_fire_map[token] = t
-        self.armed = False
+
+        if repeatable:
+            # 연발 토큰은 armed를 끄지 않음(쿨다운으로만 제어)
+            self.armed = True
+        else:
+            self.armed = False
