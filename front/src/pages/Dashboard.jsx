@@ -1,9 +1,10 @@
+// src/pages/Dashboard.jsx
 import axios from "axios";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { THEME } from "../theme/themeTokens";
 
 const POLL_MS = 500;
 
-// 서버에 보내는 mode 값(영문)은 그대로, UI 표시는 한글로
 const MODE_OPTIONS = ["MOUSE", "KEYBOARD", "PRESENTATION", "DRAW", "RUSH", "VKEY", "DEFAULT"];
 const MODE_LABEL = {
   MOUSE: "마우스",
@@ -11,7 +12,6 @@ const MODE_LABEL = {
   PRESENTATION: "프레젠테이션",
   DRAW: "그리기",
   RUSH: "러쉬",
-  VKEY: "가상 키보드",
   DEFAULT: "기본",
 };
 
@@ -28,75 +28,6 @@ function cn(...xs) {
 function clamp01(v) {
   if (typeof v !== "number" || Number.isNaN(v)) return null;
   return Math.max(0, Math.min(1, v));
-}
-
-function Badge({ children, tone = "slate" }) {
-  const map = {
-    slate: "bg-slate-800/65 text-slate-200 ring-white/10",
-    blue: "bg-sky-500/16 text-sky-200 ring-sky-400/25",
-    green: "bg-emerald-500/16 text-emerald-200 ring-emerald-400/25",
-    yellow: "bg-amber-500/16 text-amber-200 ring-amber-400/25",
-    red: "bg-rose-500/16 text-rose-200 ring-rose-400/25",
-  };
-  return (
-    <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-xs ring-1", map[tone] || map.slate)}>
-      {children}
-    </span>
-  );
-}
-
-function Card({ title, right, children, accent = "slate" }) {
-  const accentMap = {
-    slate: "from-white/10 via-white/0 to-white/0",
-    blue: "from-sky-400/22 via-sky-400/0 to-white/0",
-    green: "from-emerald-400/22 via-emerald-400/0 to-white/0",
-    red: "from-rose-400/22 via-rose-400/0 to-white/0",
-    yellow: "from-amber-400/22 via-amber-400/0 to-white/0",
-  };
-
-  const glowMap = {
-    slate: "shadow-[0_12px_40px_rgba(0,0,0,0.30)]",
-    blue: "shadow-[0_16px_55px_rgba(56,189,248,0.10)]",
-    green: "shadow-[0_16px_55px_rgba(52,211,153,0.08)]",
-    red: "shadow-[0_16px_55px_rgba(244,63,94,0.08)]",
-    yellow: "shadow-[0_16px_55px_rgba(251,191,36,0.07)]",
-  };
-
-  return (
-    <div
-      className={cn(
-        "rounded-2xl bg-slate-950/45 ring-1 ring-white/10 overflow-hidden",
-        glowMap[accent] || glowMap.slate,
-        "transition-transform duration-200 hover:-translate-y-[1px]"
-      )}
-    >
-      <div className={cn("h-px w-full bg-gradient-to-r", accentMap[accent] || accentMap.slate)} />
-      <div className="flex items-center justify-between px-5 py-4 border-b border-white/10">
-        <div className="text-sm font-semibold text-slate-100 tracking-tight">{title}</div>
-        {right}
-      </div>
-      <div className="px-5 py-4">{children}</div>
-    </div>
-  );
-}
-
-function Btn({ tone = "slate", className, ...props }) {
-  const map = {
-    slate: "bg-slate-800/85 hover:bg-slate-700 text-slate-100",
-    blue: "bg-sky-600/90 hover:bg-sky-600 text-white",
-    green: "bg-emerald-600/90 hover:bg-emerald-600 text-white",
-    red: "bg-rose-600/90 hover:bg-rose-600 text-white",
-  };
-  return (
-    <button
-      className={cn(
-        "rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition",
-        map[tone] || map.slate,
-        className
-      )}
-      {...props}
-    />
-  );
 }
 
 function formatNum(n, digits = 1) {
@@ -123,13 +54,7 @@ function IconStop() {
 }
 function IconRefresh({ spinning }) {
   return (
-    <svg
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      className={cn("opacity-90", spinning && "animate-spin")}
-    >
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className={cn("opacity-90", spinning && "animate-spin")}>
       <path
         d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6"
         stroke="currentColor"
@@ -156,12 +81,7 @@ function IconEye() {
 function IconLock() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="opacity-90">
-      <path
-        d="M8 11V8a4 4 0 0 1 8 0v3"
-        stroke="currentColor"
-        strokeWidth="1.7"
-        strokeLinecap="round"
-      />
+      <path d="M8 11V8a4 4 0 0 1 8 0v3" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
       <path d="M7 11h10v10H7V11Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
     </svg>
   );
@@ -175,32 +95,80 @@ function IconChevron() {
 }
 
 /* =========================
-   Action Tile
+   Theme-aware UI blocks
 ========================= */
-function ActionTile({ tone = "slate", icon, title, desc, className, ...props }) {
+function Badge({ t, children, tone = "slate" }) {
   const map = {
-    slate:
-      "bg-gradient-to-b from-white/6 to-white/0 hover:from-white/9 ring-white/10",
-    green:
-      "bg-gradient-to-b from-emerald-400/14 to-white/0 hover:from-emerald-400/18 ring-emerald-400/25",
-    red:
-      "bg-gradient-to-b from-rose-400/14 to-white/0 hover:from-rose-400/18 ring-rose-400/25",
-    blue:
-      "bg-gradient-to-b from-sky-400/14 to-white/0 hover:from-sky-400/18 ring-sky-400/25",
+    slate: cn(t.chip, t.text2, "ring-1"),
+    blue: cn("bg-sky-500/12 ring-sky-400/25", t.text2, "ring-1"),
+    green: cn("bg-emerald-500/12 ring-emerald-400/25", t.text2, "ring-1"),
+    yellow: cn("bg-amber-500/14 ring-amber-400/25", t.text2, "ring-1"),
+    red: cn("bg-rose-500/12 ring-rose-400/25", t.text2, "ring-1"),
+  };
+  return <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-xs", map[tone] || map.slate)}>{children}</span>;
+}
+
+function Card({ t, title, right, children, accent = "slate" }) {
+  const topLine = {
+    slate: "from-slate-400/18 via-transparent to-transparent",
+    blue: "from-sky-400/20 via-transparent to-transparent",
+    green: "from-emerald-400/20 via-transparent to-transparent",
+    red: "from-rose-400/20 via-transparent to-transparent",
+    yellow: "from-amber-400/20 via-transparent to-transparent",
+  };
+
+  const isBright = t._isBright ?? false;
+  const shadow = isBright
+    ? "shadow-[0_10px_30px_rgba(15,23,42,0.08)]"
+    : "shadow-[0_12px_40px_rgba(0,0,0,0.25)]";
+
+  return (
+    <div className={cn("rounded-2xl ring-1 overflow-hidden", t.panel, shadow, "transition-transform duration-200 hover:-translate-y-[1px]")}>
+      <div className={cn("h-px w-full bg-gradient-to-r", topLine[accent] || topLine.slate)} />
+      <div className={cn("flex items-center justify-between px-5 py-4 border-b", isBright ? "border-slate-200" : "border-white/10")}>
+        <div className={cn("text-sm font-semibold", t.text)}>{title}</div>
+        {right}
+      </div>
+      <div className="px-5 py-4">{children}</div>
+    </div>
+  );
+}
+
+function Btn({ t, className, ...props }) {
+  return (
+    <button
+      className={cn(
+        "w-full rounded-2xl py-3 text-sm font-semibold ring-1 transition disabled:opacity-50 disabled:cursor-not-allowed",
+        t.btn,
+        className
+      )}
+      {...props}
+    />
+  );
+}
+
+function ActionTile({ t, tone = "slate", icon, title, desc, className, ...props }) {
+  const isBright = t._isBright ?? false;
+
+  const map = {
+    slate: cn(isBright ? "bg-white" : "bg-white/5", isBright ? "ring-slate-200" : "ring-white/12"),
+    green: cn("bg-emerald-500/8", isBright ? "ring-emerald-300/70" : "ring-emerald-400/25"),
+    red: cn("bg-rose-500/8", isBright ? "ring-rose-300/70" : "ring-rose-400/25"),
+    blue: cn("bg-sky-500/8", isBright ? "ring-sky-300/70" : "ring-sky-400/25"),
   };
 
   const chipMap = {
-    slate: "bg-slate-950/45 ring-white/10",
-    green: "bg-emerald-950/35 ring-emerald-400/20",
-    red: "bg-rose-950/35 ring-rose-400/20",
-    blue: "bg-sky-950/35 ring-sky-400/20",
+    slate: cn(t.chip),
+    green: cn("bg-emerald-500/10", isBright ? "ring-emerald-300/70" : "ring-emerald-400/25"),
+    red: cn("bg-rose-500/10", isBright ? "ring-rose-300/70" : "ring-rose-400/25"),
+    blue: cn("bg-sky-500/10", isBright ? "ring-sky-300/70" : "ring-sky-400/25"),
   };
 
   return (
     <button
       className={cn(
         "w-full rounded-2xl p-4 ring-1 transition text-left disabled:opacity-50 disabled:cursor-not-allowed",
-        "shadow-[0_10px_35px_rgba(0,0,0,0.25)] hover:shadow-[0_16px_50px_rgba(0,0,0,0.35)]",
+        isBright ? "shadow-[0_10px_30px_rgba(15,23,42,0.08)]" : "shadow-[0_10px_35px_rgba(0,0,0,0.25)]",
         map[tone] || map.slate,
         className
       )}
@@ -208,15 +176,15 @@ function ActionTile({ tone = "slate", icon, title, desc, className, ...props }) 
     >
       <div className="flex items-center gap-3">
         <div className={cn("h-11 w-11 rounded-2xl ring-1 grid place-items-center", chipMap[tone] || chipMap.slate)}>
-          <div className="text-slate-100">{icon}</div>
+          <div className={cn(t.text)}>{icon}</div>
         </div>
 
         <div className="min-w-0">
-          <div className="text-sm font-semibold text-slate-100">{title}</div>
-          <div className="text-xs text-slate-300/80 mt-0.5 truncate">{desc}</div>
+          <div className={cn("text-sm font-semibold", t.text)}>{title}</div>
+          <div className={cn("text-xs mt-0.5 truncate", t.muted)}>{desc}</div>
         </div>
 
-        <div className="ml-auto text-slate-300/60">
+        <div className={cn("ml-auto", t.muted2)}>
           <IconChevron />
         </div>
       </div>
@@ -224,10 +192,8 @@ function ActionTile({ tone = "slate", icon, title, desc, className, ...props }) 
   );
 }
 
-/* =========================
-   Switch
-========================= */
-function Switch({ checked, onChange, disabled }) {
+function Switch({ t, checked, onChange, disabled }) {
+  const isBright = t._isBright ?? false;
   return (
     <button
       type="button"
@@ -235,14 +201,18 @@ function Switch({ checked, onChange, disabled }) {
       onClick={() => onChange?.(!checked)}
       className={cn(
         "relative inline-flex h-6 w-11 items-center rounded-full ring-1 transition disabled:opacity-50 disabled:cursor-not-allowed",
-        checked ? "bg-sky-500/30 ring-sky-400/30" : "bg-slate-800/70 ring-white/10"
+        checked
+          ? "bg-sky-500/25 ring-sky-300/70"
+          : isBright
+            ? "bg-slate-200 ring-slate-300"
+            : "bg-slate-800/70 ring-white/12"
       )}
       aria-checked={checked}
       role="switch"
     >
       <span
         className={cn(
-          "inline-block h-5 w-5 transform rounded-full bg-white/90 transition",
+          "inline-block h-5 w-5 transform rounded-full bg-white transition",
           checked ? "translate-x-5" : "translate-x-1"
         )}
       />
@@ -250,63 +220,65 @@ function Switch({ checked, onChange, disabled }) {
   );
 }
 
-function StatTile({ label, value, tone = "slate" }) {
+function StatTile({ t, label, value, tone = "slate" }) {
+  const isBright = t._isBright ?? false;
+
   const ring =
     tone === "green"
-      ? "ring-emerald-400/22"
+      ? isBright ? "ring-emerald-300/70" : "ring-emerald-400/25"
       : tone === "blue"
-      ? "ring-sky-400/22"
-      : tone === "yellow"
-      ? "ring-amber-400/22"
-      : tone === "red"
-      ? "ring-rose-400/22"
-      : "ring-white/10";
-
-  const topGlow =
-    tone === "green"
-      ? "from-emerald-400/20"
-      : tone === "blue"
-      ? "from-sky-400/20"
-      : tone === "yellow"
-      ? "from-amber-400/18"
-      : tone === "red"
-      ? "from-rose-400/18"
-      : "from-white/10";
+        ? isBright ? "ring-sky-300/70" : "ring-sky-400/25"
+        : tone === "yellow"
+          ? isBright ? "ring-amber-300/70" : "ring-amber-400/25"
+          : tone === "red"
+            ? isBright ? "ring-rose-300/70" : "ring-rose-400/25"
+            : isBright ? "ring-slate-200" : "ring-white/12";
 
   return (
-    <div className={cn("rounded-xl bg-slate-950/45 ring-1 p-3 overflow-hidden", ring)}>
-      <div className={cn("h-px w-full bg-gradient-to-r", topGlow, "via-white/0 to-white/0")} />
-      <div className="mt-2 text-xs text-slate-400">{label}</div>
-      <div className="mt-1 font-semibold text-sm text-slate-100">{value}</div>
+    <div className={cn("rounded-xl ring-1 p-3 overflow-hidden", t.panelSoft, ring)}>
+      <div className={cn("mt-1 text-xs", t.muted)}>{label}</div>
+      <div className={cn("mt-1 font-semibold text-sm", t.text)}>{value}</div>
     </div>
   );
 }
 
-function PointerMiniMap({ x, y }) {
+function PointerMiniMap({ t, theme, x, y }) {
   const cx = clamp01(x);
   const cy = clamp01(y);
 
   const left = cx === null ? 50 : cx * 100;
   const top = cy === null ? 50 : cy * 100;
 
+  const isBright = t._isBright ?? false;
+
+  // ✅ 요구사항: 포인터 네모 영역 흰색 (kuromi도 포함)
+  const forceWhiteMap = theme === "rose" || theme === "kuromi";
+
   return (
-    <div className="rounded-xl bg-slate-950/45 ring-1 ring-white/10 p-3 overflow-hidden">
+    <div className={cn("rounded-xl ring-1 p-3 overflow-hidden", t.panelSoft, isBright ? "ring-slate-200" : "ring-white/12")}>
       <div className="flex items-center justify-between">
-        <div className="text-xs text-slate-400">포인터</div>
-        <div className="text-xs text-slate-400 tabular-nums">
+        <div className={cn("text-xs", t.muted)}>포인터</div>
+        <div className={cn("text-xs tabular-nums", t.muted)}>
           {cx === null ? "-" : cx.toFixed(3)} / {cy === null ? "-" : cy.toFixed(3)}
         </div>
       </div>
 
-      <div className="mt-3 relative h-20 rounded-lg bg-slate-900/35 ring-1 ring-white/10 overflow-hidden">
-        {/* subtle grid */}
-        <div className="absolute inset-0 opacity-[0.20]">
-          <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(255,255,255,.08)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,.08)_1px,transparent_1px)] bg-[size:16px_16px]" />
+      <div
+        className={cn(
+          "mt-3 relative h-20 rounded-lg ring-1 overflow-hidden",
+          forceWhiteMap
+            ? "bg-white ring-violet-200"
+            : isBright
+              ? "bg-white ring-slate-200"
+              : "bg-slate-900/35 ring-white/12"
+        )}
+      >
+        <div className="absolute inset-0 opacity-[0.18]">
+          <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(15,23,42,.08)_1px,transparent_1px),linear-gradient(to_bottom,rgba(15,23,42,.08)_1px,transparent_1px)] bg-[size:16px_16px]" />
         </div>
 
-        {/* dot */}
         <div
-          className="absolute h-2.5 w-2.5 rounded-full bg-sky-300 shadow-[0_0_18px_rgba(56,189,248,0.65)]"
+          className={cn("absolute h-2.5 w-2.5 rounded-full", t.dot)}
           style={{ left: `${left}%`, top: `${top}%`, transform: "translate(-50%,-50%)" }}
         />
       </div>
@@ -314,24 +286,26 @@ function PointerMiniMap({ x, y }) {
   );
 }
 
-export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions } = {}) {
+/* =========================
+   Dashboard
+========================= */
+export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions, theme = "dark" } = {}) {
   const [status, setStatus] = useState(null);
   const [mode, setMode] = useState("MOUSE");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
+  const t = THEME[theme] || THEME.dark;
+
   const [preview, setPreview] = useState(false);
   const previewRef = useRef(false);
   const previewBusyRef = useRef(false);
 
   const abortRef = useRef(null);
-
-  // 요청 완료 후 다음 호출(겹침 방지)
   const pollTimerRef = useRef(null);
   const unmountedRef = useRef(false);
 
-  // Debug
   const [showRaw, setShowRaw] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -359,7 +333,6 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
     };
   }, [status, mode]);
 
-  // 표시용 텍스트(밋밋함 줄이기 + true/false 제거)
   const view = useMemo(() => {
     return {
       connText: derived.connected ? "연결됨" : "끊김",
@@ -384,7 +357,6 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
       setStatus(data);
       setMode((prev) => data?.mode ?? prev);
 
-      // preview는 서버가 내려줄 때만 동기화
       if (typeof data?.preview === "boolean") {
         setPreview(data.preview);
         previewRef.current = data.preview;
@@ -517,12 +489,10 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
     [fetchStatus]
   );
 
-  // HUD 액션 전달
   useEffect(() => {
     onHudActions?.({ start, stop, applyMode, togglePreview, fetchStatus, setLock });
   }, [onHudActions, start, stop, applyMode, togglePreview, fetchStatus, setLock]);
 
-  // HUD 표시 데이터 전달
   useEffect(() => {
     onHudState?.({ status, connected: derived.connected, modeOptions: MODE_OPTIONS });
   }, [onHudState, status, derived.connected]);
@@ -539,50 +509,64 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
   }, [status]);
 
   const topOk = !error;
-
-  // Start/Stop 자동 비활성화
   const canStart = !busy && !derived.enabled;
   const canStop = !busy && !!derived.enabled;
 
+  // ✅ 밝은 테마 판정은 기존대로 유지 (기능 영향 X)
+  const isBright = theme === "light" || theme === "rose";
+
   return (
-    <div className="min-h-screen relative overflow-hidden bg-[#070c16] text-slate-100">
-      {/* background: subtle glow + grid */}
+    <div className={cn("min-h-screen relative", t.page)}>
+      {/* background */}
       <div className="pointer-events-none absolute inset-0">
-        <div className="absolute -top-40 -left-40 h-[520px] w-[520px] rounded-full bg-sky-500/10 blur-3xl" />
-        <div className="absolute -bottom-52 -right-48 h-[560px] w-[560px] rounded-full bg-emerald-500/8 blur-3xl" />
-        <div className="absolute inset-0 opacity-[0.08] bg-[linear-gradient(to_right,rgba(255,255,255,.10)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,.10)_1px,transparent_1px)] bg-[size:60px_60px]" />
+        <div className={cn("absolute -top-40 -left-40 h-[520px] w-[520px] rounded-full blur-3xl", t.glow1)} />
+        <div className={cn("absolute -bottom-52 -right-48 h-[560px] w-[560px] rounded-full blur-3xl", t.glow2)} />
+        <div className={cn("absolute inset-0 bg-[size:60px_60px]", t.grid)} />
       </div>
 
       {/* Topbar */}
-      <div className="sticky top-0 z-20 border-b border-white/10 bg-gradient-to-r from-[#0b4aa2]/22 via-[#0b1220]/85 to-[#0b1220]/85 backdrop-blur">
+      <div className={cn("sticky top-0 z-20 border-b backdrop-blur", t.topbarFx)}>
         <div className="mx-auto max-w-[1200px] px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="h-9 w-9 rounded-2xl bg-gradient-to-b from-sky-400/20 to-sky-400/0 ring-1 ring-sky-400/20 grid place-items-center shadow-[0_0_24px_rgba(56,189,248,0.15)]">
-              <span className="text-sky-200 font-bold text-sm">G</span>
+            <div
+              className={cn(
+                "h-9 w-9 rounded-2xl ring-1 grid place-items-center",
+                isBright ? "bg-sky-500/10 ring-sky-300/60" : "bg-sky-400/10 ring-sky-400/20"
+              )}
+            >
+              <span className={cn("font-bold text-sm", isBright ? "text-slate-900" : "text-sky-200")}>G</span>
             </div>
-            <div className="text-base font-bold tracking-tight">GestureOSManager</div>
+            <div className={cn("text-base font-bold tracking-tight", t.text)}>GestureOSManager</div>
           </div>
 
           <div className="flex items-center gap-2">
-            {topOk ? <Badge tone="green">정상</Badge> : <Badge tone="red">오류</Badge>}
-            <Badge tone={derived.enabled ? "green" : "slate"}>{view.enabledText}</Badge>
-            <Badge tone={derived.connected ? "blue" : "red"}>{view.connText}</Badge>
-            <Badge tone={derived.locked ? "yellow" : "slate"}>{view.lockText}</Badge>
-            <Badge tone={preview ? "blue" : "slate"}>{preview ? "프리뷰" : "노프리뷰"}</Badge>
-            <Badge tone="slate">모드: {view.modeText}</Badge>
+            {topOk ? <Badge t={t} tone="green">정상</Badge> : <Badge t={t} tone="red">오류</Badge>}
+            <Badge t={t} tone={derived.enabled ? "green" : "slate"}>{view.enabledText}</Badge>
+            <Badge t={t} tone={derived.connected ? "blue" : "red"}>{view.connText}</Badge>
+            <Badge t={t} tone={derived.locked ? "yellow" : "slate"}>{view.lockText}</Badge>
+            <Badge t={t} tone={preview ? "blue" : "slate"}>{preview ? "프리뷰" : "노프리뷰"}</Badge>
+            <Badge t={t} tone="slate">모드: {view.modeText}</Badge>
 
             <button
               type="button"
               onClick={onToggleHud}
               className={cn(
                 "ml-2 inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold ring-1 transition",
-                hudOn
-                  ? "bg-sky-500/15 text-sky-200 ring-sky-400/25 hover:bg-sky-500/25"
-                  : "bg-slate-800/70 text-slate-200 ring-white/10 hover:bg-white/10"
+                isBright
+                  ? "bg-slate-900/5 text-slate-900 ring-slate-200 hover:bg-slate-900/10"
+                  : cn(
+                      "bg-white/7 ring-white/14 hover:bg-white/12",
+                      t.text // ✅ 테마 텍스트 색 그대로
+                    )
               )}
               title="HUD 켬/끔"
             >
-              <span className={cn("h-2 w-2 rounded-full", hudOn ? "bg-sky-300" : "bg-slate-500")} />
+              <span
+                className={cn(
+                  "h-2 w-2 rounded-full",
+                  hudOn ? "bg-sky-400" : isBright ? "bg-slate-400" : "bg-slate-500"
+                )}
+              />
               HUD {hudOn ? "켬" : "끔"}
             </button>
           </div>
@@ -592,21 +576,25 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
       {/* Content */}
       <div className="relative mx-auto max-w-[1200px] px-6 py-6 space-y-5">
         {error ? (
-          <div className="rounded-2xl bg-rose-950/30 ring-1 ring-rose-900/60 px-5 py-4 text-sm text-rose-100 shadow-[0_18px_55px_rgba(244,63,94,0.08)]">
+          <div className={cn("rounded-2xl ring-1 px-5 py-4 text-sm", isBright ? "bg-rose-50 ring-rose-200 text-slate-900" : "bg-rose-950/30 ring-rose-900/60 text-rose-100")}>
             {error}
           </div>
         ) : null}
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-          {/* 좌: 모드(위) + 퀵액션 */}
+          {/* left */}
           <div className="lg:col-span-5 space-y-5">
-            <Card title="모드" accent="blue">
+            <Card t={t} title="모드" accent="blue">
               <div className="space-y-3">
                 <select
                   value={mode}
                   onChange={(e) => applyMode(e.target.value)}
                   disabled={busy}
-                  className="w-full rounded-xl bg-slate-950/55 ring-1 ring-white/10 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-sky-500/45 disabled:opacity-50"
+                  className={cn(
+                    "w-full rounded-xl ring-1 px-3 py-2 text-sm outline-none focus:ring-2 disabled:opacity-50",
+                    t.input,
+                    isBright ? "focus:ring-sky-400/40" : "focus:ring-sky-500/45"
+                  )}
                 >
                   {MODE_OPTIONS.map((m) => (
                     <option key={m} value={m}>
@@ -626,8 +614,10 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
                         className={cn(
                           "px-3 py-1 rounded-full text-xs font-semibold ring-1 transition",
                           active
-                            ? "bg-sky-500/18 text-sky-200 ring-sky-400/25 shadow-[0_0_20px_rgba(56,189,248,0.12)]"
-                            : "bg-slate-900/35 text-slate-200 ring-white/10 hover:bg-white/5",
+                            ? isBright
+                              ? "bg-sky-500/12 text-slate-900 ring-sky-300/70"
+                              : "bg-sky-500/14 text-slate-100 ring-sky-400/25"
+                            : cn(t.chip, t.text2),
                           busy && "opacity-50 cursor-not-allowed"
                         )}
                       >
@@ -640,12 +630,14 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
             </Card>
 
             <Card
+              t={t}
               title="빠른 동작"
               accent="green"
-              right={busy ? <Badge tone="blue">처리 중</Badge> : <Badge tone="slate">대기</Badge>}
+              right={busy ? <Badge t={t} tone="blue">처리 중</Badge> : <Badge t={t} tone="slate">대기</Badge>}
             >
               <div className="grid grid-cols-2 gap-3">
                 <ActionTile
+                  t={t}
                   tone="green"
                   icon={<IconPlay />}
                   title="시작"
@@ -654,6 +646,7 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
                   disabled={!canStart}
                 />
                 <ActionTile
+                  t={t}
                   tone="red"
                   icon={<IconStop />}
                   title="정지"
@@ -663,112 +656,114 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
                 />
               </div>
 
-              <div className="mt-4 rounded-2xl bg-gradient-to-b from-white/6 to-white/0 ring-1 ring-white/10 p-4 space-y-3">
+              <div className={cn("mt-4 rounded-2xl ring-1 p-4 space-y-3", t.panelSoft)}>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <span className="text-slate-200">
-                      <IconEye />
-                    </span>
+                    <span className={cn(t.text2)}><IconEye /></span>
                     <div>
-                      <div className="text-sm font-semibold">프리뷰</div>
-                      <div className="text-xs text-slate-400">카메라/랜드마크 미리보기</div>
+                      <div className={cn("text-sm font-semibold", t.text)}>프리뷰</div>
+                      <div className={cn("text-xs", t.muted)}>카메라/랜드마크 미리보기</div>
                     </div>
                   </div>
-                  <Switch checked={preview} onChange={() => togglePreview()} disabled={busy} />
+                  <Switch t={t} checked={preview} onChange={() => togglePreview()} disabled={busy} />
                 </div>
 
-                <div className="h-px bg-white/10" />
+                <div className={cn("h-px", t.divider)} />
 
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <span className="text-slate-200">
-                      <IconLock />
-                    </span>
+                    <span className={cn(t.text2)}><IconLock /></span>
                     <div>
-                      <div className="text-sm font-semibold">잠금</div>
-                      <div className="text-xs text-slate-400">제스처 입력 잠금/해제</div>
+                      <div className={cn("text-sm font-semibold", t.text)}>잠금</div>
+                      <div className={cn("text-xs", t.muted)}>제스처 입력 잠금/해제</div>
                     </div>
                   </div>
-                  <Switch checked={derived.locked} onChange={(v) => setLock(!!v)} disabled={busy} />
+                  <Switch t={t} checked={derived.locked} onChange={(v) => setLock(!!v)} disabled={busy} />
                 </div>
               </div>
 
               <Btn
-                tone="slate"
+                t={t}
                 onClick={fetchStatus}
                 disabled={busy}
-                className="w-full mt-4 flex items-center justify-center gap-2 rounded-2xl py-3 bg-gradient-to-b from-white/8 to-white/0"
+                className="mt-4 flex items-center justify-center gap-2"
               >
                 <IconRefresh spinning={busy} />
                 새로고침
               </Btn>
 
               <div className="mt-4 grid grid-cols-2 gap-2">
-                <StatTile label="FPS" value={formatNum(derived.fps, 1)} tone="blue" />
-                <StatTile label="현재 제스처" value={derived.gesture} tone="slate" />
+                <StatTile t={t} label="FPS" value={formatNum(derived.fps, 1)} tone="blue" />
+                <StatTile t={t} label="현재 제스처" value={derived.gesture} tone="slate" />
               </div>
             </Card>
           </div>
 
-          {/* 우: 상태 + Debug(영어) */}
+          {/* right */}
           <div className="lg:col-span-7 space-y-5">
             <Card
+              t={t}
               title="상태"
               accent="blue"
-              right={loading ? <Badge tone="yellow">불러오는 중</Badge> : <Badge tone="slate">라이브</Badge>}
+              right={loading ? <Badge t={t} tone="yellow">불러오는 중</Badge> : <Badge t={t} tone="slate">라이브</Badge>}
             >
               <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                <StatTile label="연결" value={view.connText} tone={derived.connected ? "blue" : "red"} />
-                <StatTile label="실행" value={view.enabledText} tone={derived.enabled ? "green" : "slate"} />
-                <StatTile label="잠금" value={view.lockText} tone={derived.locked ? "yellow" : "slate"} />
+                <StatTile t={t} label="연결" value={view.connText} tone={derived.connected ? "blue" : "red"} />
+                <StatTile t={t} label="실행" value={view.enabledText} tone={derived.enabled ? "green" : "slate"} />
+                <StatTile t={t} label="잠금" value={view.lockText} tone={derived.locked ? "yellow" : "slate"} />
 
-                <StatTile label="이동" value={view.moveText} tone={derived.canMove ? "green" : "slate"} />
-                <StatTile label="클릭" value={view.clickText} tone={derived.canClick ? "green" : "slate"} />
-                <StatTile label="스크롤" value={view.scrollText} tone={derived.scrollActive ? "blue" : "slate"} />
+                <StatTile t={t} label="이동" value={view.moveText} tone={derived.canMove ? "green" : "slate"} />
+                <StatTile t={t} label="클릭" value={view.clickText} tone={derived.canClick ? "green" : "slate"} />
+                <StatTile t={t} label="스크롤" value={view.scrollText} tone={derived.scrollActive ? "blue" : "slate"} />
 
-                <StatTile label="트래킹" value={view.trackingText} tone={derived.tracking ? "green" : "slate"} />
-                <StatTile label="포인터 X" value={derived.pointerX === null ? "-" : formatNum(derived.pointerX, 3)} tone="slate" />
-                <StatTile label="포인터 Y" value={derived.pointerY === null ? "-" : formatNum(derived.pointerY, 3)} tone="slate" />
+                <StatTile t={t} label="트래킹" value={view.trackingText} tone={derived.tracking ? "green" : "slate"} />
+                <StatTile t={t} label="포인터 X" value={derived.pointerX === null ? "-" : formatNum(derived.pointerX, 3)} tone="slate" />
+                <StatTile t={t} label="포인터 Y" value={derived.pointerY === null ? "-" : formatNum(derived.pointerY, 3)} tone="slate" />
               </div>
 
               <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-                <PointerMiniMap x={derived.pointerX} y={derived.pointerY} />
-                <div className="rounded-xl bg-slate-950/45 ring-1 ring-white/10 p-3">
-                  <div className="text-xs text-slate-400">요약</div>
+                <PointerMiniMap t={t} theme={theme} x={derived.pointerX} y={derived.pointerY} />
+                <div className={cn("rounded-xl ring-1 p-3", t.panelSoft)}>
+                  <div className={cn("text-xs", t.muted)}>요약</div>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    <Badge tone="slate">제스처: {derived.gesture}</Badge>
-                    <Badge tone={preview ? "blue" : "slate"}>{preview ? "Preview ON" : "Preview OFF"}</Badge>
-                    <Badge tone="slate">Mode: {view.modeText}</Badge>
+                    <Badge t={t} tone="slate">제스처: {derived.gesture}</Badge>
+                    <Badge t={t} tone={preview ? "blue" : "slate"}>{preview ? "Preview ON" : "Preview OFF"}</Badge>
+                    <Badge t={t} tone="slate">Mode: {view.modeText}</Badge>
                   </div>
                 </div>
               </div>
             </Card>
 
             <Card
+              t={t}
               title="Debug"
               accent="slate"
               right={
                 <div className="flex items-center gap-2">
-                  <Btn tone="slate" className="px-3 py-1.5 text-xs rounded-full" onClick={copyRaw} disabled={!status}>
+                  <button
+                    className={cn("px-3 py-1.5 text-xs rounded-full ring-1 transition disabled:opacity-50", t.btn)}
+                    onClick={copyRaw}
+                    disabled={!status}
+                    type="button"
+                  >
                     {copied ? "Copied" : "Copy JSON"}
-                  </Btn>
-                  <Btn
-                    tone="slate"
-                    className="px-3 py-1.5 text-xs rounded-full"
+                  </button>
+                  <button
+                    className={cn("px-3 py-1.5 text-xs rounded-full ring-1 transition disabled:opacity-50", t.btn)}
                     onClick={() => setShowRaw((v) => !v)}
                     disabled={loading}
+                    type="button"
                   >
                     {showRaw ? "Hide Raw" : "Show Raw"}
-                  </Btn>
+                  </button>
                 </div>
               }
             >
               {showRaw ? (
-                <pre className="text-xs leading-relaxed overflow-auto max-h-96 rounded-xl bg-slate-950/50 ring-1 ring-white/10 p-4">
+                <pre className={cn("text-xs leading-relaxed overflow-auto max-h-96 rounded-xl ring-1 p-4", t.panelSolid || t.panel2 || t.panel, t.input)}>
                   {status ? JSON.stringify(status, null, 2) : loading ? "Loading..." : "No data"}
                 </pre>
               ) : (
-                // 안내 문구 제거 요청 반영: 내용은 비우되, 카드가 죽어 보이지 않게 높이만 유지
                 <div className="h-2" />
               )}
             </Card>
