@@ -286,6 +286,14 @@ class OverlayHUD:
         y = max(min_y, min(int(y), int(max_y)))
         return x, y
 
+    def _get_os_cursor_xy(self):
+        pt = wintypes.POINT()
+        ok = user32.GetCursorPos(ctypes.byref(pt))  # argtypes 안 건드리면 pyautogui랑 충돌 없음
+        if not ok:
+            return (None, None)
+        return (int(pt.x), int(pt.y))
+
+
     def _iter_related_hwnds(self, hwnd_int: int):
         """yield hwnd + parent + root ancestor (dedup)"""
         seen = set()
@@ -734,89 +742,75 @@ class OverlayHUD:
         tipw = self._tip_win
         tipc = self._tip_canvas
 
-        if not tracking:
-            try: self._ret_win.withdraw()
-            except Exception: pass
-            if tipw is not None:
-                try: tipw.withdraw()
+        # ✅ 손 추적 여부와 무관하게 "항상" OS 커서 위치에 레티클/말풍선 표시
+        osx, osy = self._get_os_cursor_xy()
+
+        # OS 커서 못 얻는 아주 예외적인 경우만 status pointer로 fallback
+        if osx is None or osy is None:
+            x01, y01 = _normalize_pointer(st.get("pointerX"), st.get("pointerY"), self.vw, self.vh)
+            if x01 is None or y01 is None:
+                # 좌표가 아예 없으면 표시 불가
+                try: self._ret_win.withdraw()
                 except Exception: pass
-            return
+                if tipw is not None:
+                    try: tipw.withdraw()
+                    except Exception: pass
+                return
+            osx = self.vx + int(x01 * self.vw)
+            osy = self.vy + int(y01 * self.vh)
 
-        # 1) status pointer로 시도
-        x01, y01 = _normalize_pointer(st.get("pointerX"), st.get("pointerY"), self.vw, self.vh)
-
-        # 2) 없으면 OS 커서로 fallback (시작 즉시 표시되게)
-        if x01 is None or y01 is None:
-            try: self._ret_win.withdraw()
-            except Exception: pass
-            if tipw is not None:
-                try: tipw.withdraw()
-                except Exception: pass
-            return
-
-        # 여기부터는 무조건 표시
-        try: self._ret_win.deiconify()
+        # ✅ 이제부터는 무조건 표시 (손이 없어도 계속 보임)
+        try:
+            self._ret_win.deiconify()
         except Exception:
             pass
 
-
-
-        try: self._ret_win.deiconify()
-        except Exception:
-            pass
-        # 처음 다시 보이는 프레임이면 아이템 재생성
+        # ✅ "미리 만들어둔 PNG 아이템"을 지우지 말 것 (첫 표시 지연/끊김 원인)
         if not self._ret_visible:
             self._ret_visible = True
-            self._ret_img_item = None
-            try:
-                self._ret_canvas.delete("all")
-            except Exception:
-                pass
-        px = int(x01 * self.vw)
-        py = int(y01 * self.vh)
-        gx = self.vx + px - self.RET_S // 2
-        gy = self.vy + py - self.RET_S // 2
+            # self._ret_img_item = None  # ❌ 삭제하지 마세요
+            # self._ret_canvas.delete("all")  # ❌ 삭제하지 마세요
+
+        gx = osx - self.RET_S // 2
+        gy = osy - self.RET_S // 2
+
+        gx, gy = self._clamp_screen_xy(gx, gy, self.RET_S, self.RET_S)
         try:
             self._ret_win.geometry(f"{self.RET_S}x{self.RET_S}+{gx}+{gy}")
         except Exception:
             pass
 
+        # tip도 같은 기준(=OS 커서)으로 붙임
+        px = osx - self.vx
+        py = osy - self.vy
+       
+
         rc = self._ret_canvas
 
-        # --- PNG reticle (mode based) ---
+        # --- PNG reticle (mode based) : PNG ONLY ---
         key = mode if mode in self._ret_imgs else "DEFAULT"
         img = self._ret_imgs.get(key) or self._ret_imgs.get("DEFAULT")
 
-        if img is not None:
-            # 매 프레임 delete하지 말고 item만 유지/교체
-            if self._ret_img_item is None:
-                rc.delete("all")
-                self._ret_img_item = rc.create_image(
-                    self.RET_S // 2, self.RET_S // 2,
-                    image=img, anchor="center"
-                )
-                self._ret_img_mode = key
-            elif self._ret_img_mode != key:
-                rc.itemconfig(self._ret_img_item, image=img)
-                self._ret_img_mode = key
+        # PNG가 없으면(에셋 로드 실패) 레티클/말풍선 숨김
+        if img is None:
+            try: self._ret_win.withdraw()
+            except Exception: pass
+            if tipw is not None:
+                try: tipw.withdraw()
+                except Exception: pass
             return
 
-        # --- fallback: 기존 도형 레티클 ---
-        rc.delete("all")
-
-        acc = _hex_dim(accent, 0.55 if locked else 1.0)
-        s = self.RET_S
-        cx = s // 2
-        cy = s // 2
-
-        # crosshair (as-is)
-        ring = 16 + int(2 * math.sin(self._phase * 3.0))
-        rc.create_oval(cx-ring, cy-ring, cx+ring, cy+ring, outline=acc, width=2)
-        rc.create_oval(cx-3, cy-3, cx+3, cy+3, outline="", fill=acc)
-        rc.create_line(cx-28, cy, cx-10, cy, fill=acc, width=2)
-        rc.create_line(cx+10, cy, cx+28, cy, fill=acc, width=2)
-        rc.create_line(cx, cy-28, cx, cy-10, fill=acc, width=2)
-        rc.create_line(cx, cy+10, cx, cy+28, fill=acc, width=2)
+        # PNG만 렌더 (도형 레티클 절대 그리지 않음)
+        if self._ret_img_item is None:
+            rc.delete("all")
+            self._ret_img_item = rc.create_image(
+                self.RET_S // 2, self.RET_S // 2,
+                image=img, anchor="center"
+            )
+            self._ret_img_mode = key
+        elif self._ret_img_mode != key:
+            rc.itemconfig(self._ret_img_item, image=img)
+            self._ret_img_mode = key
 
         # ---- Tip bubble ----
         if tipw is None or tipc is None:
