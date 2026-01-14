@@ -6,6 +6,12 @@ import ctypes
 
 from gestureos_agent.config import parse_cli
 from gestureos_agent.hud_overlay import OverlayHUD
+import gestureos_agent.hud_overlay as ho
+from gestureos_agent.cursor_system import apply_invisible_cursor, restore_system_cursors
+import os
+
+print("[HUD] hud_overlay file =", ho.__file__, flush=True)
+
 
 from gestureos_agent.agents.hands_agent import HandsAgent
 from gestureos_agent.agents.color_rush_agent import ColorRushAgent
@@ -71,6 +77,16 @@ def main():
     no_hud = ("--no-hud" in sys.argv)
     hud = OverlayHUD(enable=(not no_hud))
     hud.start()
+    
+    # OS 커서 숨기기(원할 때만)
+    HIDE_OS_CURSOR = True  # 필요하면 False로 끄기
+
+    if HIDE_OS_CURSOR and (not no_hud):
+        try:
+            cur_path = os.path.join(os.path.dirname(__file__), "gestureos_agent", "assets", "reticle", "invisible.cur")
+            apply_invisible_cursor(cur_path)
+        except Exception as e:
+            print("[CURSOR] hide failed:", e, flush=True)
 
     try:
         if isinstance(cfg, dict):
@@ -85,8 +101,12 @@ def main():
             HandsAgent(cfg_for_agent).run()
 
     finally:
+        if HIDE_OS_CURSOR and (not no_hud):
+            try:
+                restore_system_cursors()
+            except Exception:
+                pass
         hud.stop()
-
 
 if __name__ == "__main__":
     main()
