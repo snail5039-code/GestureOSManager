@@ -117,13 +117,13 @@ WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT, win
 # ---- Reticle image assets (mode -> png) ----
 ASSET_DIR = os.path.join(os.path.dirname(__file__), "assets", "reticle")
 RETICLE_PNG = {
-    "MOUSE": "cursor.png",
-    "DRAW": "carrot01.png",
-    "PRESENTATION": "cat03.png",
-    "KEYBOARD": "mouse.png",
-    "RUSH": "cat.png",
-    "VKEY": "cat02.png",
-    "DEFAULT": "cursor.png",
+    "MOUSE": "mouse.png",
+    "DRAW": "draw.png",
+    "PRESENTATION": "ppt.png",
+    "KEYBOARD": "keyboard.png",
+    "RUSH": "rush.png",
+    "VKEY": "keyboard.png",     # vkey 전용 이미지 있으면 바꾸세요
+    "DEFAULT": "mouse.png",
 }
 
 # ---- Theme per mode (HUD colors) ----
@@ -138,7 +138,7 @@ THEME = {
 }
 
 HUD_DEBUG = False
-TRANSPARENT = "#ff00ff"  # colorkey magenta
+TRANSPARENT = "#010101"
 
 def _mode_of(status: dict) -> str:
     m = str(status.get("mode", "DEFAULT")).upper()
@@ -384,7 +384,7 @@ class OverlayHUD:
                 ex |= (WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)
                 _set_window_long_ptr(hwnd, GWL_EXSTYLE, ex)
 
-                colorkey = wintypes.COLORREF(0x00FF00FF)  # magenta
+                colorkey = wintypes.COLORREF(0x00010101)
                 user32.SetLayeredWindowAttributes(hwnd, colorkey, 0, LWA_COLORKEY)
 
                 user32.SetWindowPos(
