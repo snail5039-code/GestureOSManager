@@ -1,10 +1,10 @@
-import json
+# gestureos_agent/agents/hands_agent.py
 import os
 import time
-os.environ.setdefault("GLOG_minloglevel", "2")
 import ctypes
-from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
+
+os.environ.setdefault("GLOG_minloglevel", "2")
 
 import cv2
 import mediapipe as mp
@@ -15,11 +15,21 @@ from ..gestures import palm_center, classify_gesture
 from ..control import ControlMapper
 from ..ws_client import WSClient
 
+from ..modes.mouse import MouseClickDrag, MouseRightClick, MouseScroll, MouseLockToggle
+from ..modes.keyboard import KeyboardHandler
+from ..modes.draw import DrawHandler
+from ..modes.presentation import PresentationHandler
+from ..modes.vkey import VKeyHandler
+from ..modes.ui_menu import UIModeMenu
+from ..modes.rush_lr import RushLRPicker
+from ..modes.rush_color import ColorStickTracker
+
 # =============================================================================
 # OS cursor -> virtual screen normalized (0~1) for HUD reticle alignment
 # =============================================================================
 class _POINT(ctypes.Structure):
     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
 
 def _get_os_cursor_norm01():
     """Return (x01,y01) normalized to Windows virtual screen (multi-monitor).
@@ -28,8 +38,8 @@ def _get_os_cursor_norm01():
         return (None, None)
     try:
         user32 = ctypes.windll.user32
-        SM_XVIRTUALSCREEN  = 76
-        SM_YVIRTUALSCREEN  = 77
+        SM_XVIRTUALSCREEN = 76
+        SM_YVIRTUALSCREEN = 77
         SM_CXVIRTUALSCREEN = 78
         SM_CYVIRTUALSCREEN = 79
 
@@ -53,14 +63,6 @@ def _get_os_cursor_norm01():
         return (None, None)
 
 
-from ..modes.mouse import MouseClickDrag, MouseRightClick, MouseScroll, MouseLockToggle
-from ..modes.keyboard import KeyboardHandler
-from ..modes.draw import DrawHandler
-from ..modes.presentation import PresentationHandler
-from ..modes.vkey import VKeyHandler
-from ..modes.ui_menu import UIModeMenu
-from ..modes.rush_lr import RushLRPicker
-
 # tracking loss handling
 LOSS_GRACE_SEC = 0.30
 HARD_LOSS_SEC = 0.55
@@ -70,42 +72,70 @@ REACQUIRE_BLOCK_SEC = 0.12
 MODE_HOLD_SEC = 0.8
 MODE_COOLDOWN_SEC = 1.2
 
+
 def _lm_to_payload(lm):
     if lm is None:
         return []
     return [{"x": float(p[0]), "y": float(p[1]), "z": float(p[2])} for p in lm]
 
+
+def _pack_xy(p: Optional[dict]):
+    """accept (cx,cy) or (nx,ny) or (x,y) packs"""
+    if p is None:
+        return None
+    cx = p.get("cx")
+    cy = p.get("cy")
+    if cx is None:
+        cx = p.get("nx")
+    if cy is None:
+        cy = p.get("ny")
+    if cx is None:
+        cx = p.get("x")
+    if cy is None:
+        cy = p.get("y")
+    if cx is None or cy is None:
+        return None
+    return float(cx), float(cy)
+
 class HandsAgent:
+    """
+    Main agent:
+    - MOUSE / KEYBOARD / PRESENTATION / DRAW / VKEY
+    - RUSH_HAND: mediapipe hands-based left/right
+    - RUSH_COLOR: HSV stick tracking left/right (ColorStickTracker)
+    """
+
     def __init__(self, cfg: AgentConfig):
         self.cfg = cfg
 
-        self.enabled = bool(cfg.start_enabled)
-        self.mode = "MOUSE"
-        if cfg.start_keyboard:
-            self.mode = "KEYBOARD"
-        elif cfg.start_rush:
-            self.mode = "RUSH"
-        elif cfg.start_vkey:
-            self.mode = "VKEY"
-            
+        self.enabled = bool(getattr(cfg, "start_enabled", False))
 
-        # lock policy: start locked unless enabled, but most modes unlock for usability
+        # ---- initial mode ----
+        self.mode = "MOUSE"
+        if getattr(cfg, "start_keyboard", False):
+            self.mode = "KEYBOARD"
+        elif getattr(cfg, "start_rush", False):
+            ri = str(getattr(cfg, "rush_input", "HAND")).upper()
+            self.mode = "RUSH_COLOR" if ri == "COLOR" else "RUSH_HAND"
+        elif getattr(cfg, "start_vkey", False):
+            self.mode = "VKEY"
+
+        # lock policy
         self.locked = True
         if self.enabled:
             self.locked = False
-        if self.mode in ("KEYBOARD", "PRESENTATION", "DRAW", "RUSH", "VKEY"):
+        if self.mode in ("KEYBOARD", "PRESENTATION", "DRAW", "RUSH_HAND", "RUSH_COLOR", "VKEY"):
             self.locked = False
 
-        self.preview = (not cfg.headless)
-
-        self.cursor_hand_label = "Left" if cfg.force_cursor_left else "Right"
+        self.preview = (not getattr(cfg, "headless", False))
+        self.cursor_hand_label = "Left" if getattr(cfg, "force_cursor_left", False) else "Right"
 
         self.control = ControlMapper(
-            control_box=cfg.control_box,
-            gain=cfg.control_gain,
-            ema_alpha=cfg.ema_alpha,
-            deadzone_px=cfg.deadzone_px,
-            move_interval_sec=(1.0 / max(1e-6, cfg.move_hz)),
+            control_box=getattr(cfg, "control_box", (0.30, 0.35, 0.70, 0.92)),
+            gain=float(getattr(cfg, "control_gain", 1.35)),
+            ema_alpha=float(getattr(cfg, "ema_alpha", 0.45)),
+            deadzone_px=float(getattr(cfg, "deadzone_px", 2.0)),
+            move_interval_sec=(1.0 / max(1e-6, float(getattr(cfg, "move_hz", 60.0)))),
         )
 
         # mode handlers
@@ -118,8 +148,12 @@ class HandsAgent:
         self.draw = DrawHandler()
         self.ppt = PresentationHandler()
         self.vkey = VKeyHandler()
+
         self.ui_menu = UIModeMenu()
+
+        # rush handlers
         self.rush_lr = RushLRPicker()
+        self.rush_color = ColorStickTracker()
 
         # tracking loss
         self.last_seen_ts = 0.0
@@ -146,11 +180,14 @@ class HandsAgent:
         )
 
         # ws
-        self.ws = WSClient(cfg.ws_url, self._on_command, enabled=(not cfg.no_ws))
+        self.ws = WSClient(
+            getattr(cfg, "ws_url", "ws://127.0.0.1:8080/ws/agent"),
+            self._on_command,
+            enabled=(not getattr(cfg, "no_ws", False)),
+        )
 
     # ---------- WS helpers ----------
     def send_event(self, name: str, payload: Optional[dict]):
-
         msg = {"type": "EVENT", "name": name}
         if payload is not None:
             msg["payload"] = payload
@@ -179,12 +216,10 @@ class HandsAgent:
 
     # ---------- mode + state ----------
     def _reset_side_effects(self):
-        # mouse drag/click internal states
         self.mouse_click.reset()
         self.mouse_right.reset()
         self.mouse_scroll.reset()
 
-        # per-mode states
         self.kb.reset()
         self.draw.reset()
         self.ppt.reset()
@@ -197,36 +232,40 @@ class HandsAgent:
         if nm == "PAINT":
             nm = "DRAW"
 
-        allowed = {"MOUSE", "KEYBOARD", "PRESENTATION", "DRAW", "RUSH", "VKEY"}
+        # aliases
+        if nm == "RUSH":
+            nm = "RUSH_HAND"
+        if nm in ("RUSH_STICK", "RUSH_COLOR_STICK"):
+            nm = "RUSH_COLOR"
+
+        allowed = {"MOUSE", "KEYBOARD", "PRESENTATION", "DRAW", "VKEY", "RUSH_HAND", "RUSH_COLOR"}
         if nm not in allowed:
             print("[PY] apply_set_mode ignored:", new_mode)
             return
 
-        # reset EMA
         self.control.reset_ema()
 
-        # leaving draw => ensure mouseUp
         if self.mode == "DRAW" and nm != "DRAW":
             self.draw.reset()
 
-        # leaving mouse => release drag if any
         if nm != "MOUSE":
             self.mouse_click.reset()
             self.mouse_right.reset()
             self.mouse_scroll.reset()
 
-        # entering: unlock convenience
-        if nm in ("KEYBOARD", "PRESENTATION", "DRAW", "RUSH", "VKEY"):
+        if nm in ("KEYBOARD", "PRESENTATION", "DRAW", "RUSH_HAND", "RUSH_COLOR", "VKEY"):
             self.locked = False
 
-        # reset mode handlers when switching
         self.kb.reset()
         self.ppt.reset()
         self.draw.reset()
         self.vkey.reset()
 
         if nm == "VKEY":
-            self.vkey.open_windows_osk()
+            try:
+                self.vkey.open_windows_osk()
+            except Exception:
+                pass
 
         self.mode = nm
         print("[PY] apply_set_mode ->", self.mode)
@@ -249,9 +288,9 @@ class HandsAgent:
     # ---------- main loop ----------
     def run(self):
         print("[PY] running:", os.path.abspath(__file__))
-        print("[PY] WS_URL:", self.cfg.ws_url, "(disabled)" if self.cfg.no_ws else "")
+        print("[PY] WS_URL:", getattr(self.cfg, "ws_url", ""), "(disabled)" if getattr(self.cfg, "no_ws", False) else "")
         print("[PY] CURSOR_HAND_LABEL:", self.cursor_hand_label)
-        print("[PY] NO_INJECT:", self.cfg.no_inject)
+        print("[PY] NO_INJECT:", getattr(self.cfg, "no_inject", False))
 
         cap = self._open_camera()
         self.ws.start()
@@ -288,10 +327,17 @@ class HandsAgent:
                     label = labels[i] if i < len(labels) else None
                     hands_list.append((label, lm))
 
-            # rush left/right packs
+            # rush left/right packs (hands-based default)
             rush_left, rush_right = self.rush_lr.pick(t, hands_list)
 
-            # cursor / other selection
+            # RUSH_COLOR: override with HSV stick tracking (BLUE=Left, RED=Right)
+            if str(self.mode).upper() == "RUSH_COLOR":
+                try:
+                    rush_left, rush_right = self.rush_color.process(frame, t)
+                except Exception as e:
+                    print("[RUSH_COLOR] tracker error:", e)
+
+            # cursor / other selection (for non-rush UI + gestures)
             cursor_lm = None
             other_lm = None
             if hands_list:
@@ -338,7 +384,7 @@ class HandsAgent:
             mode_u = str(self.mode).upper()
 
             # UI menu (HUD)
-            ui_consuming = self.ui_menu.update(
+            _ = self.ui_menu.update(
                 t=t,
                 enabled=self.enabled,
                 mode=self.mode,
@@ -375,15 +421,16 @@ class HandsAgent:
                 self.mouse_lock.reset()
 
             # injection permissions
-            can_mouse_inject = self.enabled and (mode_u == "MOUSE") and (t >= self.reacquire_until) and (not self.locked) and (not self.cfg.no_inject)
-            can_draw_inject  = self.enabled and (mode_u == "DRAW") and (t >= self.reacquire_until) and (not self.locked) and (not self.cfg.no_inject)
-            can_kb_inject    = self.enabled and (mode_u == "KEYBOARD") and (t >= self.reacquire_until) and (not self.locked) and (not self.cfg.no_inject)
-            can_ppt_inject   = self.enabled and (mode_u == "PRESENTATION") and (t >= self.reacquire_until) and (not self.locked) and (not self.cfg.no_inject)
-            can_vkey_detect  = self.enabled and (mode_u == "VKEY") and (t >= self.reacquire_until) and (not self.locked)  # detection even if no_inject
-            can_vkey_click   = can_vkey_detect and (not self.cfg.no_inject)
+            no_inject = bool(getattr(self.cfg, "no_inject", False))
+            can_mouse_inject = self.enabled and (mode_u == "MOUSE") and (t >= self.reacquire_until) and (not self.locked) and (not no_inject)
+            can_draw_inject  = self.enabled and (mode_u == "DRAW") and (t >= self.reacquire_until) and (not self.locked) and (not no_inject)
+            can_kb_inject    = self.enabled and (mode_u == "KEYBOARD") and (t >= self.reacquire_until) and (not self.locked) and (not no_inject)
+            can_ppt_inject   = self.enabled and (mode_u == "PRESENTATION") and (t >= self.reacquire_until) and (not self.locked) and (not no_inject)
+            can_vkey_detect  = self.enabled and (mode_u == "VKEY") and (t >= self.reacquire_until) and (not self.locked)
+            can_vkey_click   = can_vkey_detect and (not no_inject)
 
             # RUSH disables OS inject
-            if mode_u == "RUSH":
+            if mode_u.startswith("RUSH"):
                 can_mouse_inject = False
                 can_draw_inject = False
                 can_kb_inject = False
@@ -450,7 +497,7 @@ class HandsAgent:
             if mode_u == "VKEY":
                 self.vkey.update(t, can_vkey_click, cursor_lm, self.control.map_control_to_screen)
 
-            # send status
+            # send status (RUSH 포함)
             self._send_status(
                 fps=fps,
                 cursor_gesture=cursor_gesture,
@@ -467,8 +514,8 @@ class HandsAgent:
                 got_cursor=got_cursor,
             )
 
-            # preview keys
-            if self.cfg.headless:
+            # preview
+            if bool(getattr(self.cfg, "headless", False)):
                 time.sleep(0.001)
                 continue
 
@@ -477,21 +524,18 @@ class HandsAgent:
                     cv2.namedWindow("GestureOS Agent", cv2.WINDOW_NORMAL)
                     self.window_open = True
 
-                fn_on = (t < self.kb.mod_until) or (t < self.ppt.mod_until)
-                line1 = f"mode={mode_u} enabled={self.enabled} locked={self.locked} cur={cursor_gesture} oth={other_gesture} FN={fn_on} noInject={self.cfg.no_inject}"
+                fn_on = (t < getattr(self.kb, "mod_until", 0.0)) or (t < getattr(self.ppt, "mod_until", 0.0))
+                line1 = f"mode={mode_u} enabled={self.enabled} locked={self.locked} cur={cursor_gesture} oth={other_gesture} FN={fn_on} noInject={no_inject}"
                 cv2.putText(frame, line1, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
 
-                if mode_u == "VKEY":
-                    cv2.putText(frame, "VKEY: Multi-finger AirTap (4/8/12/16/20)", (10, 50),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 0), 2)
-                    cv2.putText(frame, f"tapSeq={self.vkey.tap_seq}", (10, 75),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 0), 2)
-
-                if rush_left is not None:
-                    cv2.putText(frame, f"RUSH L: ({rush_left['cx']:.2f},{rush_left['cy']:.2f}) {rush_left['gesture']}",
+                # rush preview safe
+                lp = _pack_xy(rush_left)
+                rp = _pack_xy(rush_right)
+                if lp is not None:
+                    cv2.putText(frame, f"RUSH L: ({lp[0]:.2f},{lp[1]:.2f}) {str((rush_left or {}).get('gesture','NONE'))}",
                                 (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 0), 2)
-                if rush_right is not None:
-                    cv2.putText(frame, f"RUSH R: ({rush_right['cx']:.2f},{rush_right['cy']:.2f}) {rush_right['gesture']}",
+                if rp is not None:
+                    cv2.putText(frame, f"RUSH R: ({rp[0]:.2f},{rp[1]:.2f}) {str((rush_right or {}).get('gesture','NONE'))}",
                                 (10, 125), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 0, 255), 2)
 
                 cv2.imshow("GestureOS Agent", frame)
@@ -499,66 +543,42 @@ class HandsAgent:
                 key = cv2.waitKey(1) & 0xFF
                 if key == 27:
                     break
-                elif key in (ord('e'), ord('E')):
-                    self.enabled = not self.enabled
-                    if not self.enabled:
-                        self._reset_side_effects()
-                    print("[KEY] enabled:", self.enabled)
-                elif key in (ord('l'), ord('L')):
-                    self.locked = not self.locked
-                    print("[KEY] locked:", self.locked)
-                elif key in (ord('p'), ord('P')):
-                    self.preview = not self.preview
-                    print("[KEY] preview:", self.preview)
-                elif key in (ord('m'), ord('M')):
-                    self.apply_set_mode("MOUSE")
-                elif key in (ord('k'), ord('K')):
-                    self.apply_set_mode("KEYBOARD")
-                elif key in (ord('r'), ord('R')):
-                    self.apply_set_mode("RUSH")
-                elif key in (ord('v'), ord('V')):
-                    self.apply_set_mode("VKEY")
-                elif key in (ord('o'), ord('O')):
-                    self.vkey.open_windows_osk()
-                elif key in (ord('d'), ord('D')):
-                    self.apply_set_mode("DRAW")
-                elif key in (ord('t'), ord('T')):
-                    self.apply_set_mode("PRESENTATION")    
-                    print("[KEY] open OSK")
-                elif key in (ord('c'), ord('C')):
-
-                    # calibrate control box around current cursor center
-                    cx, cy = self.last_cursor_cxcy if self.last_cursor_cxcy is not None else (0.5, 0.5)
-                    from ..mathutil import clamp01
-                    minx = clamp01(cx - self.cfg.control_half_w)
-                    maxx = clamp01(cx + self.cfg.control_half_w)
-                    miny = clamp01(cy - self.cfg.control_half_h)
-                    maxy = clamp01(cy + self.cfg.control_half_h)
-                    self.control.control_box = (minx, miny, maxx, maxy)
-                    self.control.reset_ema()
-                    print("[CALIB] CONTROL_BOX =", self.control.control_box)
-            else:
-                if self.window_open:
-                    cv2.destroyWindow("GestureOS Agent")
-                    self.window_open = False
-                time.sleep(0.005)
 
         cap.release()
         cv2.destroyAllWindows()
 
-    def _send_status(self, fps: float, cursor_gesture: str, other_gesture: str,
-                 scroll_active: bool, can_mouse: bool, can_key: bool,
-                 rush_left, rush_right, cursor_lm, other_lm,
-                 cursor_cx: float, cursor_cy: float, got_cursor: bool):
-
-        if self.cfg.no_ws:
+    # ---------- status payload ----------
+    def _send_status(
+        self,
+        fps: float,
+        cursor_gesture: str,
+        other_gesture: str,
+        scroll_active: bool,
+        can_mouse: bool,
+        can_key: bool,
+        rush_left,
+        rush_right,
+        cursor_lm,
+        other_lm,
+        cursor_cx: float,
+        cursor_cy: float,
+        got_cursor: bool,
+    ):
+        if getattr(self.cfg, "no_ws", False):
             return
 
         mode_u = str(self.mode).upper()
+
+        # ✅ 외부(서버/프론트)에는 RUSH로만 보낸다
+        wire_mode = "RUSH" if mode_u.startswith("RUSH") else mode_u
+
+        lp = _pack_xy(rush_left)
+        rp = _pack_xy(rush_right)
+
         payload = {
             "type": "STATUS",
             "enabled": bool(self.enabled),
-            "mode": str(self.mode),
+            "mode": wire_mode,  # ✅ 중요
             "locked": bool(self.locked),
             "preview": bool(self.preview),
 
@@ -575,87 +595,68 @@ class HandsAgent:
             "cursorLandmarks": _lm_to_payload(cursor_lm),
             "otherLandmarks": _lm_to_payload(other_lm),
 
-            # AirTap
-            "tapSeq": int(self.vkey.tap_seq),
+            "tapSeq": int(getattr(self.vkey, "tap_seq", 0)),
+            "connected": bool(self.ws.connected),
         }
 
-        # ✅ HUD/Overlay용 pointer (MOUSE/DRAW/PPT에서도 항상 제공)
-        payload["connected"] = bool(self.ws.connected)
-        payload["tracking"] = bool(got_cursor)
+        # ✅ 러쉬 입력 타입은 보조 필드로
+        if wire_mode == "RUSH":
+            payload["rushInput"] = "COLOR" if mode_u == "RUSH_COLOR" else "HAND"
 
-        # pointerX/Y: decide once at the end (mode-aware) to keep HUD reticle aligned
+        # pointer 초기화
         payload["pointerX"] = None
         payload["pointerY"] = None
-        payload["isTracking"] = False        
+        payload["isTracking"] = False
 
-        if self.vkey.last_tap is not None:
-            payload["tapX"] = float(self.vkey.last_tap["x"])
-            payload["tapY"] = float(self.vkey.last_tap["y"])
-            payload["tapFinger"] = int(self.vkey.last_tap["finger"])
-            payload["tapTs"] = float(self.vkey.last_tap["ts"])
-
-        # RUSH packs
-        if rush_left is not None:
-            payload["leftPointerX"] = float(rush_left["cx"])
-            payload["leftPointerY"] = float(rush_left["cy"])
+        # left/right packs
+        if lp is not None:
+            payload["leftPointerX"], payload["leftPointerY"] = lp
             payload["leftTracking"] = True
-            payload["leftGesture"] = str(rush_left.get("gesture", "NONE"))
+            payload["leftGesture"] = str((rush_left or {}).get("gesture", "NONE"))
         else:
             payload["leftTracking"] = False
 
-        if rush_right is not None:
-            payload["rightPointerX"] = float(rush_right["cx"])
-            payload["rightPointerY"] = float(rush_right["cy"])
+        if rp is not None:
+            payload["rightPointerX"], payload["rightPointerY"] = rp
             payload["rightTracking"] = True
-            payload["rightGesture"] = str(rush_right.get("gesture", "NONE"))
+            payload["rightGesture"] = str((rush_right or {}).get("gesture", "NONE"))
         else:
             payload["rightTracking"] = False
 
-        # pointer (HUD/매니저 공통): "한 번만" 결정해서 HUD 레티클과 실제 커서가 일치하게 함
-        if mode_u == "RUSH":
-            # Rush는 게임용 손 포인터를 그대로 사용
-            if rush_right is not None:
-                payload["pointerX"] = float(rush_right["cx"])
-                payload["pointerY"] = float(rush_right["cy"])
+        # pointer 결정(단 한 번)
+        if wire_mode == "RUSH":
+            if rp is not None:
+                payload["pointerX"], payload["pointerY"] = rp
                 payload["isTracking"] = True
-            elif rush_left is not None:
-                payload["pointerX"] = float(rush_left["cx"])
-                payload["pointerY"] = float(rush_left["cy"])
+            elif lp is not None:
+                payload["pointerX"], payload["pointerY"] = lp
                 payload["isTracking"] = True
 
         elif mode_u == "VKEY" and cursor_lm is not None:
-            # VKEY는 손가락 끝(검지 tip) 기준
             payload["pointerX"] = float(cursor_lm[8][0])
             payload["pointerY"] = float(cursor_lm[8][1])
             payload["isTracking"] = True
 
         elif got_cursor:
-            # MOUSE/DRAW/PPT/KEYBOARD 등: OS 커서 위치를 virtual screen 기준 0~1로 보내서 1:1 정렬
             x01, y01 = _get_os_cursor_norm01()
             if x01 is not None and y01 is not None:
                 payload["pointerX"] = float(x01)
                 payload["pointerY"] = float(y01)
                 payload["isTracking"] = True
             else:
-                # 안전 fallback
                 payload["pointerX"] = float(cursor_cx)
                 payload["pointerY"] = float(cursor_cy)
                 payload["isTracking"] = True
 
-        else:
-            payload["pointerX"] = None
-            payload["pointerY"] = None
-            payload["isTracking"] = False        
+        payload["tracking"] = bool(payload.get("isTracking", False))
 
-        # ---- WS send (server) ----
-        if not self.cfg.no_ws:
-            self.ws.send_dict(payload)
+        # ---- WS send ----
+        self.ws.send_dict(payload)
 
+        # ---- HUD overlay push (local) ----
         hud = getattr(self.cfg, "hud", None)
         if hud:
             hud_payload = dict(payload)
             hud_payload["connected"] = bool(self.ws.connected)
             hud_payload["tracking"] = bool(payload.get("isTracking", False))
             hud.push(hud_payload)
-
-

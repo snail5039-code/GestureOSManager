@@ -1,35 +1,34 @@
+import os
 import sys
-import threading
 import time
 import math
 import ctypes
+from dataclasses import replace
 
 from gestureos_agent.config import parse_cli
 from gestureos_agent.hud_overlay import OverlayHUD
 import gestureos_agent.hud_overlay as ho
+
 from gestureos_agent.cursor_system import apply_invisible_cursor, restore_system_cursors
-import os
+from gestureos_agent.agents.hands_agent import HandsAgent
+
 
 print("[HUD] hud_overlay file =", ho.__file__, flush=True)
 
 
-from gestureos_agent.agents.hands_agent import HandsAgent
-from gestureos_agent.agents.color_rush_agent import ColorRushAgent
-
-
-
-
 def _set_dpi_awareness():
-    # Windows DPI scaling (125%/150%)에서도 좌표계 일치시키기
+    # Windows DPI scaling에서도 좌표계 일치시키기
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(2)  # Per-monitor DPI aware
     except Exception:
         try:
-            ctypes.windll.user32.SetProcessDPIAware()   # System DPI aware (fallback)
+            ctypes.windll.user32.SetProcessDPIAware()  # fallback
         except Exception:
             pass
 
+
 _set_dpi_awareness()
+
 
 class CfgProxy:
     """frozen dataclass cfg에도 hud를 '추가로' 제공하기 위한 래퍼"""
@@ -53,34 +52,20 @@ class CfgProxy:
         return getattr(b, key)
 
 
-def _hud_test(hud):
-    """HUD가 살아있는지 5초만 확인하는 더미 테스트"""
-    t0 = time.time()
-    while time.time() - t0 < 5:
-        t = time.time() - t0
-        hud.push({
-            "mode": "MOUSE",
-            "tracking": True,
-            "locked": False,
-            "gesture": "TEST",
-            "fps": 0.0,
-            "connected": True,
-            "pointerX": 0.5 + 0.2 * math.sin(t),
-            "pointerY": 0.5 + 0.2 * math.cos(t),
-        })
-        time.sleep(0.016)
-
-
 def main():
     agent_kind, cfg = parse_cli()
 
+    # Backward-compat: --agent=color -> start RUSH_COLOR
+    if agent_kind == "color":
+        cfg = replace(cfg, start_rush=True, rush_input="COLOR")
+
     no_hud = ("--no-hud" in sys.argv)
+
     hud = OverlayHUD(enable=(not no_hud))
     hud.start()
-    
-    # OS 커서 숨기기(원할 때만)
-    HIDE_OS_CURSOR = True  # 필요하면 False로 끄기
 
+    # OS 커서 숨기기(원할 때만)
+    HIDE_OS_CURSOR = True
     if HIDE_OS_CURSOR and (not no_hud):
         try:
             cur_path = os.path.join(os.path.dirname(__file__), "gestureos_agent", "assets", "reticle", "invisible.cur")
@@ -95,10 +80,7 @@ def main():
         else:
             cfg_for_agent = CfgProxy(cfg, hud)
 
-        if agent_kind == "color":
-            ColorRushAgent(cfg_for_agent).run()
-        else:
-            HandsAgent(cfg_for_agent).run()
+        HandsAgent(cfg_for_agent).run()
 
     finally:
         if HIDE_OS_CURSOR and (not no_hud):
@@ -107,6 +89,7 @@ def main():
             except Exception:
                 pass
         hud.stop()
+
 
 if __name__ == "__main__":
     main()
