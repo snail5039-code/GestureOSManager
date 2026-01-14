@@ -1,6 +1,6 @@
 # gestureos_agent/hud_overlay.py
 # Windows only: Always-on-top transparent HUD overlay (click-through)
-# - HUD (top-left) + Reticle (follows pointer) + Tip bubble (follows pointer)
+# - HUD (top-left) + Reticle (follows OS cursor) + Tip bubble (follows OS cursor)
 # - Tip bubble: ALL modes EXCEPT RUSH (RUSH = no bubble)
 # - Bubble text style: "MODE • action"
 # - Apply click-through to: widget hwnd + parent hwnd + root/ancestor hwnd + all descendants
@@ -15,6 +15,7 @@ from ctypes import wintypes
 import tkinter as tk
 import time
 import math
+import atexit
 
 # ---------------- Win32 constants ----------------
 GWL_EXSTYLE = -20
@@ -44,6 +45,16 @@ SM_CXVIRTUALSCREEN = 78
 SM_CYVIRTUALSCREEN = 79
 
 user32 = ctypes.windll.user32
+kernel32 = ctypes.windll.kernel32
+
+# ---- Single instance mutex (cross-process) ----
+HUD_MUTEX_NAME = "Global\\GestureOS_HUD_Overlay_SingleInstance"
+ERROR_ALREADY_EXISTS = 183
+
+kernel32.CreateMutexW.restype = wintypes.HANDLE
+kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+kernel32.GetLastError.restype = wintypes.DWORD
+kernel32.CloseHandle.restype = wintypes.BOOL
 
 # ---- 64-bit safe: Get/SetWindowLongPtr fallback ----
 def _get_window_long_ptr(hwnd, idx):
@@ -127,40 +138,11 @@ THEME = {
 }
 
 HUD_DEBUG = False
-
 TRANSPARENT = "#ff00ff"  # colorkey magenta
 
 def _mode_of(status: dict) -> str:
     m = str(status.get("mode", "DEFAULT")).upper()
     return m if m in THEME else "DEFAULT"
-
-def _clamp01(v):
-    try:
-        v = float(v)
-    except Exception:
-        return None
-    if v != v:
-        return None
-    return max(0.0, min(1.0, v))
-
-def _normalize_pointer(x, y, screen_w, screen_h):
-    if x is None or y is None:
-        return (None, None)
-    try:
-        fx = float(x); fy = float(y)
-    except Exception:
-        return (None, None)
-
-    if 0.0 <= fx <= 1.0 and 0.0 <= fy <= 1.0:
-        return (_clamp01(fx), _clamp01(fy))
-
-    if -1.0 <= fx <= 1.0 and -1.0 <= fy <= 1.0:
-        return (_clamp01((fx + 1.0) * 0.5), _clamp01((fy + 1.0) * 0.5))
-
-    if screen_w > 0 and screen_h > 0:
-        return (_clamp01(fx / screen_w), _clamp01(fy / screen_h))
-
-    return (None, None)
 
 def _hex_dim(color_hex, a):
     color_hex = str(color_hex).lstrip("#")
@@ -176,6 +158,9 @@ class OverlayHUD:
     HUD + Reticle + Tip bubble (ALL modes except RUSH)
     All windows are click-through.
     """
+    _GLOBAL_LOCK = threading.Lock()
+    _GLOBAL_STARTED = False
+
     def __init__(self, enable=True):
         self.enable = bool(enable) and (os.name == "nt")
 
@@ -185,11 +170,6 @@ class OverlayHUD:
         self._latest = {}
         self._phase = 0.0
         self._ct_tick = 0
-        # pointer grace (prevent reticle hide flicker / start delay)
-        self._last_ptr01 = (0.5, 0.5)
-        self._last_ptr_ts = 0.0
-        self.PTR_GRACE_SEC = 1.5  # 끊겨도 1.5초는 마지막 위치 유지
-
 
         # virtual screen (multi-monitor)
         self.vx = user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
@@ -216,16 +196,44 @@ class OverlayHUD:
         # wndproc hooks (keep refs to prevent GC)
         self._old_wndproc = {}     # hwnd_int -> old_proc_ptr
         self._new_wndproc_ref = {} # hwnd_int -> WNDPROC callable
+
+        # reticle images + single canvas item
         self._ret_imgs = {}
         self._ret_img_item = None
         self._ret_img_mode = None
 
-        # anti-flicker
-        self._last_track_ts = 0.0
-        self._last_xy01 = None   # (x01,y01)
-        self._grace_sec = 0.25   # 0.2~0.35 추천
-        self._ret_visible = False
+        self._mutex = None
 
+        # ensure mutex released on exit (best-effort)
+        atexit.register(self.stop)
+
+    # ---------------- single instance ----------------
+    def _acquire_single_instance(self) -> bool:
+        """프로세스 여러 개 떠도 HUD는 1개만."""
+        if self._mutex is not None:
+            return True
+
+        h = kernel32.CreateMutexW(None, True, HUD_MUTEX_NAME)
+        if not h:
+            # fail-open (개발 편의)
+            return True
+
+        if kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
+            kernel32.CloseHandle(h)
+            return False
+
+        self._mutex = h
+        return True
+
+    def _release_single_instance(self):
+        if self._mutex:
+            try:
+                kernel32.CloseHandle(self._mutex)
+            except Exception:
+                pass
+            self._mutex = None
+
+    # ---------------- assets ----------------
     def _load_reticle_images(self):
         self._ret_imgs = {}
         if HUD_DEBUG:
@@ -233,11 +241,10 @@ class OverlayHUD:
 
         for mode, fn in RETICLE_PNG.items():
             path = os.path.join(ASSET_DIR, fn)
-
             if not os.path.exists(path):
                 if HUD_DEBUG:
                     print("[HUD] missing:", mode, path, flush=True)
-                    continue
+                continue
 
             try:
                 img = tk.PhotoImage(file=path)
@@ -248,18 +255,37 @@ class OverlayHUD:
                 if HUD_DEBUG:
                     print("[HUD] reticle load failed:", mode, path, e, flush=True)
 
-              
+    # ---------------- public ----------------
     def start(self):
         if not self.enable:
             return
+
+        # cross-process single instance
+        if not self._acquire_single_instance():
+            return
+
+        # in-process single instance
+        with OverlayHUD._GLOBAL_LOCK:
+            if OverlayHUD._GLOBAL_STARTED:
+                return
+            OverlayHUD._GLOBAL_STARTED = True
+
         if self._thread and self._thread.is_alive():
             return
+
+        self._stop.clear()
         self._thread = threading.Thread(target=self._run_tk, daemon=True)
         self._thread.start()
 
     def stop(self):
         if not self.enable:
             return
+
+        with OverlayHUD._GLOBAL_LOCK:
+            OverlayHUD._GLOBAL_STARTED = False
+
+        self._release_single_instance()
+
         self._stop.set()
         try:
             self._q.put_nowait({"__cmd": "STOP"})
@@ -276,7 +302,7 @@ class OverlayHUD:
         except Exception:
             pass
 
-    # -------- internal helpers --------
+    # ---------------- internal helpers ----------------
     def _clamp_screen_xy(self, x, y, w, h):
         min_x = self.vx
         min_y = self.vy
@@ -288,11 +314,10 @@ class OverlayHUD:
 
     def _get_os_cursor_xy(self):
         pt = wintypes.POINT()
-        ok = user32.GetCursorPos(ctypes.byref(pt))  # argtypes 안 건드리면 pyautogui랑 충돌 없음
+        ok = user32.GetCursorPos(ctypes.byref(pt))
         if not ok:
             return (None, None)
         return (int(pt.x), int(pt.y))
-
 
     def _iter_related_hwnds(self, hwnd_int: int):
         """yield hwnd + parent + root ancestor (dedup)"""
@@ -347,7 +372,8 @@ class OverlayHUD:
             self._new_wndproc_ref[hwnd_int] = new_proc
 
         except Exception as e:
-            print("[HUD] _install_httransparent_wndproc failed:", e)
+            if HUD_DEBUG:
+                print("[HUD] _install_httransparent_wndproc failed:", e)
 
     def _apply_click_through_hwnd(self, hwnd_int: int):
         for hid in self._iter_related_hwnds(hwnd_int):
@@ -370,7 +396,8 @@ class OverlayHUD:
                 self._install_httransparent_wndproc(hid)
 
             except Exception as e:
-                print("[HUD] apply_click_through_hwnd failed:", e)
+                if HUD_DEBUG:
+                    print("[HUD] apply_click_through_hwnd failed:", e)
 
     def _walk_widgets(self, w):
         yield w
@@ -393,7 +420,7 @@ class OverlayHUD:
             except Exception:
                 pass
 
-    # -------- bubble text helpers --------
+    # ---------------- bubble text helpers ----------------
     @staticmethod
     def _pick_first_str(st: dict, keys):
         for k in keys:
@@ -402,8 +429,7 @@ class OverlayHUD:
                 return v.strip()
         return None
 
-    def _common_state_label(self, st: dict, locked: bool) -> str | None:
-        # enabled 키가 없으면 True로 취급
+    def _common_state_label(self, st: dict, locked: bool):
         enabled = bool(st.get("enabled", True))
         if not enabled:
             return "비활성"
@@ -415,11 +441,8 @@ class OverlayHUD:
         common = self._common_state_label(st, locked)
         if common:
             return common
-
-        # 스크롤 최우선(다른 손으로 스크롤 중)
         if bool(st.get("scrollActive", False)):
             return "스크롤"
-
         g = str(st.get("gesture", "NONE") or "NONE").upper()
         if g == "OPEN_PALM":
             return "이동"
@@ -435,12 +458,9 @@ class OverlayHUD:
         common = self._common_state_label(st, locked)
         if common:
             return common
-
-        # 혹시 툴/브러시 같은 정보가 내려오면 우선 반영
         tool = self._pick_first_str(st, ["tool", "drawTool", "brush", "pen", "eraser"])
         if tool:
             return f"{tool}"
-
         g = str(st.get("gesture", "NONE") or "NONE").upper()
         if g == "PINCH_INDEX":
             return "그리기"
@@ -456,11 +476,9 @@ class OverlayHUD:
         common = self._common_state_label(st, locked)
         if common:
             return common
-
         act = self._pick_first_str(st, ["pptAction", "presentationAction", "slideAction", "action"])
         if act:
             return act
-
         g = str(st.get("gesture", "NONE") or "NONE").upper()
         if g == "V_SIGN":
             return "다음"
@@ -476,10 +494,8 @@ class OverlayHUD:
         common = self._common_state_label(st, locked)
         if common:
             return common
-
         sel = self._pick_first_str(st, ["selectedKey", "key", "keyName", "char"])
         g = str(st.get("gesture", "NONE") or "NONE").upper()
-
         if g == "PINCH_INDEX":
             return f"입력({sel})" if sel else "입력"
         if g == "OPEN_PALM":
@@ -492,10 +508,8 @@ class OverlayHUD:
         common = self._common_state_label(st, locked)
         if common:
             return common
-
         sel = self._pick_first_str(st, ["vk", "vkey", "selectedKey", "key", "keyName", "char"])
         g = str(st.get("gesture", "NONE") or "NONE").upper()
-
         if g == "PINCH_INDEX":
             return f"입력({sel})" if sel else "입력"
         if g == "OPEN_PALM":
@@ -515,17 +529,13 @@ class OverlayHUD:
 
     def _bubble_text(self, st: dict, mode: str, locked: bool) -> str:
         mode_u = str(mode).upper()
-
-        # RUSH 모드: 말풍선 아예 제거
         if mode_u == "RUSH":
             return ""
 
-        # 1) 외부에서 내려준 커스텀 텍스트 있으면 우선
         bubble = st.get("cursorBubble", None)
         if bubble is not None:
             return str(bubble).strip()
 
-        # 2) 모드별 action 라벨
         if mode_u == "MOUSE":
             action = self._action_mouse(st, locked)
         elif mode_u == "DRAW":
@@ -542,9 +552,8 @@ class OverlayHUD:
         action = str(action).strip() if action is not None else ""
         return f"{mode_u} • {action}" if action else mode_u
 
-    # -------- tk thread --------
+    # ---------------- tk thread ----------------
     def _run_tk(self):
-        print("[HUD] _run_tk entered", flush=True)
         root = tk.Tk()
         self._root = root
         root.withdraw()
@@ -586,20 +595,6 @@ class OverlayHUD:
         )
         ret_canvas.pack(fill="both", expand=True)
         self._ret_canvas = ret_canvas
-        self._load_reticle_images()
-        
-        # ✅ PNG를 "미리" 하나 만들어두면, 첫 deiconify 때 바로 그려진다
-        img0 = self._ret_imgs.get("DEFAULT")
-        if img0 is None and self._ret_imgs:
-            # DEFAULT가 없으면 아무거나 1개
-            img0 = next(iter(self._ret_imgs.values()), None)
-
-        if img0 is not None:
-            self._ret_img_item = ret_canvas.create_image(
-                self.RET_S // 2, self.RET_S // 2,
-                image=img0, anchor="center"
-            )
-            self._ret_img_mode = "DEFAULT"
 
         # Tip window
         tip = tk.Toplevel(root)
@@ -620,17 +615,33 @@ class OverlayHUD:
         tip_canvas.pack(fill="both", expand=True)
         self._tip_canvas = tip_canvas
 
-        # Tk 레벨 input disable
+        # Disable input at Tk level (extra safety)
         for w in (hud, ret, tip):
             try:
                 w.attributes("-disabled", True)
             except Exception:
                 pass
 
-        # click-through
+        # Click-through hardening
         self._apply_click_through(hud)
         self._apply_click_through(ret)
         self._apply_click_through(tip)
+
+        # Load images AFTER Tk init
+        self._load_reticle_images()
+
+        # Create reticle image item ONCE (no accumulation)
+        img0 = self._ret_imgs.get("DEFAULT")
+        if img0 is None and self._ret_imgs:
+            img0 = next(iter(self._ret_imgs.values()), None)
+
+        if img0 is not None:
+            self._ret_img_item = ret_canvas.create_image(
+                self.RET_S // 2, self.RET_S // 2,
+                image=img0, anchor="center",
+                tags=("RETICLE_IMG",)
+            )
+            self._ret_img_mode = "DEFAULT"
 
         last_t = time.time()
 
@@ -672,7 +683,7 @@ class OverlayHUD:
 
             self._render()
 
-            # 주기적 재적용(드물게 풀리는 환경 대비)
+            # Periodically re-apply click-through (some environments lose it)
             self._ct_tick += 1
             if (self._ct_tick % 60) == 0:
                 for w in (hud, ret, tip):
@@ -712,8 +723,8 @@ class OverlayHUD:
         fg = "#E5E7EB"
         sub = "#9CA3AF"
 
-        c.create_rectangle(8, 8, self.HUD_W-8, self.HUD_H-8, fill=bg, outline=border, width=2)
-        c.create_rectangle(8, 8, 14, self.HUD_H-8, fill=accent, outline="")
+        c.create_rectangle(8, 8, self.HUD_W - 8, self.HUD_H - 8, fill=bg, outline=border, width=2)
+        c.create_rectangle(8, 8, 14, self.HUD_H - 8, fill=accent, outline="")
 
         dot = "#22c55e" if connected else "#ef4444"
         c.create_oval(20, 18, 28, 26, fill=dot, outline="")
@@ -721,12 +732,12 @@ class OverlayHUD:
 
         pill_text = "LOCK" if locked else "OK"
         pill_fill = "#f59e0b" if locked else _hex_dim(accent, 0.55)
-        c.create_rectangle(self.HUD_W-86, 14, self.HUD_W-16, 34, fill=pill_fill, outline="")
-        c.create_text(self.HUD_W-51, 24, fill="#050a14", font=("Segoe UI", 9, "bold"), text=pill_text)
+        c.create_rectangle(self.HUD_W - 86, 14, self.HUD_W - 16, 34, fill=pill_fill, outline="")
+        c.create_text(self.HUD_W - 51, 24, fill="#050a14", font=("Segoe UI", 9, "bold"), text=pill_text)
 
         c.create_text(20, 52, anchor="w", fill=sub, font=("Segoe UI", 9), text=f"GESTURE: {gesture}")
         c.create_text(20, 70, anchor="w", fill=sub, font=("Segoe UI", 9), text=f"TRACK: {'ON' if tracking else 'OFF'}")
-        c.create_text(self.HUD_W-20, 70, anchor="e", fill=sub, font=("Segoe UI", 9), text=f"{fps:.1f} FPS")
+        c.create_text(self.HUD_W - 20, 70, anchor="e", fill=sub, font=("Segoe UI", 9), text=f"{fps:.1f} FPS")
 
         base_y = 96
         for i in range(0, 12):
@@ -735,100 +746,86 @@ class OverlayHUD:
             y = base_y + math.sin(self._phase * 2.2 + i * 0.55) * amp
             c.create_line(x, base_y, x + 18, y, fill=_hex_dim(accent, 0.55), width=2)
 
-        # ---- Reticle / Tip ----
+        # ---- Reticle / Tip (always follow OS cursor) ----
         if self._ret_win is None or self._ret_canvas is None:
             return
 
-        tipw = self._tip_win
-        tipc = self._tip_canvas
-
-        # ✅ 손 추적 여부와 무관하게 "항상" OS 커서 위치에 레티클/말풍선 표시
         osx, osy = self._get_os_cursor_xy()
-
-        # OS 커서 못 얻는 아주 예외적인 경우만 status pointer로 fallback
         if osx is None or osy is None:
-            x01, y01 = _normalize_pointer(st.get("pointerX"), st.get("pointerY"), self.vw, self.vh)
-            if x01 is None or y01 is None:
-                # 좌표가 아예 없으면 표시 불가
-                try: self._ret_win.withdraw()
-                except Exception: pass
-                if tipw is not None:
-                    try: tipw.withdraw()
-                    except Exception: pass
-                return
-            osx = self.vx + int(x01 * self.vw)
-            osy = self.vy + int(y01 * self.vh)
+            # extremely rare; if can't get OS cursor, just skip this frame
+            return
 
-        # ✅ 이제부터는 무조건 표시 (손이 없어도 계속 보임)
+        # Keep reticle window visible always
         try:
             self._ret_win.deiconify()
         except Exception:
             pass
 
-        # ✅ "미리 만들어둔 PNG 아이템"을 지우지 말 것 (첫 표시 지연/끊김 원인)
-        if not self._ret_visible:
-            self._ret_visible = True
-            # self._ret_img_item = None  # ❌ 삭제하지 마세요
-            # self._ret_canvas.delete("all")  # ❌ 삭제하지 마세요
-
         gx = osx - self.RET_S // 2
         gy = osy - self.RET_S // 2
-
         gx, gy = self._clamp_screen_xy(gx, gy, self.RET_S, self.RET_S)
+
         try:
             self._ret_win.geometry(f"{self.RET_S}x{self.RET_S}+{gx}+{gy}")
         except Exception:
             pass
 
-        # tip도 같은 기준(=OS 커서)으로 붙임
-        px = osx - self.vx
-        py = osy - self.vy
-       
-
-        rc = self._ret_canvas
-
-        # --- PNG reticle (mode based) : PNG ONLY ---
+        # Choose image for mode
         key = mode if mode in self._ret_imgs else "DEFAULT"
         img = self._ret_imgs.get(key) or self._ret_imgs.get("DEFAULT")
 
-        # PNG가 없으면(에셋 로드 실패) 레티클/말풍선 숨김
+        # If asset missing, hide reticle to avoid broken state
         if img is None:
-            try: self._ret_win.withdraw()
-            except Exception: pass
-            if tipw is not None:
-                try: tipw.withdraw()
-                except Exception: pass
+            try:
+                self._ret_win.withdraw()
+            except Exception:
+                pass
+            if self._tip_win is not None:
+                try:
+                    self._tip_win.withdraw()
+                except Exception:
+                    pass
             return
 
-        # PNG만 렌더 (도형 레티클 절대 그리지 않음)
+        # IMPORTANT: DO NOT create new images every frame.
+        # Create ONCE and itemconfig() thereafter -> prevents overlap/accumulation.
         if self._ret_img_item is None:
-            rc.delete("all")
-            self._ret_img_item = rc.create_image(
+            self._ret_img_item = self._ret_canvas.create_image(
                 self.RET_S // 2, self.RET_S // 2,
-                image=img, anchor="center"
+                image=img, anchor="center",
+                tags=("RETICLE_IMG",)
             )
-            self._ret_img_mode = key
-        elif self._ret_img_mode != key:
-            rc.itemconfig(self._ret_img_item, image=img)
-            self._ret_img_mode = key
+        else:
+            # Only swap image; no duplicates.
+            self._ret_canvas.itemconfig(self._ret_img_item, image=img)
+
+        self._ret_img_mode = key
 
         # ---- Tip bubble ----
+        tipw = self._tip_win
+        tipc = self._tip_canvas
         if tipw is None or tipc is None:
             return
 
         bubble = self._bubble_text(st, mode, locked).strip()
         if not bubble:
-            try: tipw.withdraw()
-            except Exception: pass
+            try:
+                tipw.withdraw()
+            except Exception:
+                pass
             return
 
-        try: tipw.deiconify()
+        try:
+            tipw.deiconify()
         except Exception:
             pass
 
+        px = osx - self.vx
+        py = osy - self.vy
         tx = self.vx + px + self.TIP_OX
         ty = self.vy + py + self.TIP_OY
         tx, ty = self._clamp_screen_xy(tx, ty, self.TIP_W, self.TIP_H)
+
         try:
             tipw.geometry(f"{self.TIP_W}x{self.TIP_H}+{tx}+{ty}")
         except Exception:
