@@ -1,3 +1,4 @@
+// Dashboard.jsx
 import axios from "axios";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -169,7 +170,13 @@ function IconLock() {
 function IconChevron() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="opacity-85">
-      <path d="m9 6 6 6-6 6" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      <path
+        d="m9 6 6 6-6 6"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
@@ -179,14 +186,10 @@ function IconChevron() {
 ========================= */
 function ActionTile({ tone = "slate", icon, title, desc, className, ...props }) {
   const map = {
-    slate:
-      "bg-gradient-to-b from-white/6 to-white/0 hover:from-white/9 ring-white/10",
-    green:
-      "bg-gradient-to-b from-emerald-400/14 to-white/0 hover:from-emerald-400/18 ring-emerald-400/25",
-    red:
-      "bg-gradient-to-b from-rose-400/14 to-white/0 hover:from-rose-400/18 ring-rose-400/25",
-    blue:
-      "bg-gradient-to-b from-sky-400/14 to-white/0 hover:from-sky-400/18 ring-sky-400/25",
+    slate: "bg-gradient-to-b from-white/6 to-white/0 hover:from-white/9 ring-white/10",
+    green: "bg-gradient-to-b from-emerald-400/14 to-white/0 hover:from-emerald-400/18 ring-emerald-400/25",
+    red: "bg-gradient-to-b from-rose-400/14 to-white/0 hover:from-rose-400/18 ring-rose-400/25",
+    blue: "bg-gradient-to-b from-sky-400/14 to-white/0 hover:from-sky-400/18 ring-sky-400/25",
   };
 
   const chipMap = {
@@ -299,12 +302,10 @@ function PointerMiniMap({ x, y }) {
       </div>
 
       <div className="mt-3 relative h-20 rounded-lg bg-slate-900/35 ring-1 ring-white/10 overflow-hidden">
-        {/* subtle grid */}
         <div className="absolute inset-0 opacity-[0.20]">
           <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(255,255,255,.08)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,.08)_1px,transparent_1px)] bg-[size:16px_16px]" />
         </div>
 
-        {/* dot */}
         <div
           className="absolute h-2.5 w-2.5 rounded-full bg-sky-300 shadow-[0_0_18px_rgba(56,189,248,0.65)]"
           style={{ left: `${left}%`, top: `${top}%`, transform: "translate(-50%,-50%)" }}
@@ -326,14 +327,83 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
   const previewBusyRef = useRef(false);
 
   const abortRef = useRef(null);
-
-  // 요청 완료 후 다음 호출(겹침 방지)
   const pollTimerRef = useRef(null);
   const unmountedRef = useRef(false);
 
   // Debug
   const [showRaw, setShowRaw] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  /* =========================
+     OS HUD (Windows OverlayHUD) Controls
+  ========================= */
+  const [osHudOn, setOsHudOn] = useState(() => {
+    const v = localStorage.getItem("osHudOn");
+    return v === null ? true : v === "1";
+  });
+  const [osHudBusy, setOsHudBusy] = useState(false);
+
+  const [hudStep, setHudStep] = useState(() => {
+    const v = Number(localStorage.getItem("osHudStep") ?? 20);
+    return Number.isFinite(v) ? v : 20;
+  });
+
+  const osHudSyncedRef = useRef(false);
+
+  useEffect(() => {
+    localStorage.setItem("osHudOn", osHudOn ? "1" : "0");
+  }, [osHudOn]);
+
+  useEffect(() => {
+    localStorage.setItem("osHudStep", String(hudStep));
+  }, [hudStep]);
+
+  const postHud = useCallback(
+    async (path, params) => {
+      setOsHudBusy(true);
+      setError("");
+      try {
+        await api.post(path, null, { params });
+      } catch (e) {
+        const msg = e?.response
+          ? `HUD 요청 실패: ${path} (HTTP ${e.response.status})${e.response.data ? `: ${String(e.response.data)}` : ""}`
+          : e?.message || `HUD 요청 실패: ${path}`;
+        setError(msg);
+        throw e;
+      } finally {
+        setOsHudBusy(false);
+      }
+    },
+    [setError]
+  );
+
+  const setOsHudVisible = useCallback(
+    async (next) => {
+      const prev = osHudOn;
+      setOsHudOn(!!next);
+      try {
+        await postHud("/hud/show", { enabled: !!next });
+      } catch {
+        setOsHudOn(prev);
+      }
+    },
+    [osHudOn, postHud]
+  );
+
+  const nudgeOsHud = useCallback(async (dx, dy) => {
+    await postHud("/hud/nudge", { dx: Math.trunc(dx), dy: Math.trunc(dy) });
+  }, [postHud]);
+
+  const resetOsHudPos = useCallback(async () => {
+    await postHud("/hud/resetpos", {});
+  }, [postHud]);
+
+  // OS HUD 초기 1회 동기화
+  useEffect(() => {
+    if (osHudSyncedRef.current) return;
+    osHudSyncedRef.current = true;
+    api.post("/hud/show", null, { params: { enabled: osHudOn } }).catch(() => {});
+  }, [osHudOn]);
 
   useEffect(() => {
     previewRef.current = preview;
@@ -359,7 +429,6 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
     };
   }, [status, mode]);
 
-  // 표시용 텍스트(밋밋함 줄이기 + true/false 제거)
   const view = useMemo(() => {
     return {
       connText: derived.connected ? "연결됨" : "끊김",
@@ -384,7 +453,6 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
       setStatus(data);
       setMode((prev) => data?.mode ?? prev);
 
-      // preview는 서버가 내려줄 때만 동기화
       if (typeof data?.preview === "boolean") {
         setPreview(data.preview);
         previewRef.current = data.preview;
@@ -540,13 +608,12 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
 
   const topOk = !error;
 
-  // Start/Stop 자동 비활성화
   const canStart = !busy && !derived.enabled;
   const canStop = !busy && !!derived.enabled;
 
   return (
     <div className="min-h-screen relative overflow-hidden bg-[#070c16] text-slate-100">
-      {/* background: subtle glow + grid */}
+      {/* background */}
       <div className="pointer-events-none absolute inset-0">
         <div className="absolute -top-40 -left-40 h-[520px] w-[520px] rounded-full bg-sky-500/10 blur-3xl" />
         <div className="absolute -bottom-52 -right-48 h-[560px] w-[560px] rounded-full bg-emerald-500/8 blur-3xl" />
@@ -571,6 +638,7 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
             <Badge tone={preview ? "blue" : "slate"}>{preview ? "프리뷰" : "노프리뷰"}</Badge>
             <Badge tone="slate">모드: {view.modeText}</Badge>
 
+            {/* 기존(웹) HUD 토글 */}
             <button
               type="button"
               onClick={onToggleHud}
@@ -585,6 +653,23 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
               <span className={cn("h-2 w-2 rounded-full", hudOn ? "bg-sky-300" : "bg-slate-500")} />
               HUD {hudOn ? "켬" : "끔"}
             </button>
+
+            {/* OS HUD(파이썬 OverlayHUD) 토글 */}
+            <button
+              type="button"
+              onClick={() => setOsHudVisible(!osHudOn)}
+              disabled={osHudBusy}
+              className={cn(
+                "inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold ring-1 transition disabled:opacity-50 disabled:cursor-not-allowed",
+                osHudOn
+                  ? "bg-emerald-500/15 text-emerald-200 ring-emerald-400/25 hover:bg-emerald-500/25"
+                  : "bg-slate-800/70 text-slate-200 ring-white/10 hover:bg-white/10"
+              )}
+              title="윈도우 오버레이 HUD(파이썬)"
+            >
+              <span className={cn("h-2 w-2 rounded-full", osHudOn ? "bg-emerald-300" : "bg-slate-500")} />
+              OS HUD {osHudOn ? "켬" : "끔"}
+            </button>
           </div>
         </div>
       </div>
@@ -598,7 +683,7 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
         ) : null}
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-          {/* 좌: 모드(위) + 퀵액션 */}
+          {/* 좌 */}
           <div className="lg:col-span-5 space-y-5">
             <Card title="모드" accent="blue">
               <div className="space-y-3">
@@ -645,22 +730,8 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
               right={busy ? <Badge tone="blue">처리 중</Badge> : <Badge tone="slate">대기</Badge>}
             >
               <div className="grid grid-cols-2 gap-3">
-                <ActionTile
-                  tone="green"
-                  icon={<IconPlay />}
-                  title="시작"
-                  desc="Start"
-                  onClick={start}
-                  disabled={!canStart}
-                />
-                <ActionTile
-                  tone="red"
-                  icon={<IconStop />}
-                  title="정지"
-                  desc="Stop"
-                  onClick={stop}
-                  disabled={!canStop}
-                />
+                <ActionTile tone="green" icon={<IconPlay />} title="시작" desc="Start" onClick={start} disabled={!canStart} />
+                <ActionTile tone="red" icon={<IconStop />} title="정지" desc="Stop" onClick={stop} disabled={!canStop} />
               </div>
 
               <div className="mt-4 rounded-2xl bg-gradient-to-b from-white/6 to-white/0 ring-1 ring-white/10 p-4 space-y-3">
@@ -708,9 +779,67 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
                 <StatTile label="현재 제스처" value={derived.gesture} tone="slate" />
               </div>
             </Card>
+
+            {/* OS HUD Control Card */}
+            <Card
+              title="OS HUD(윈도우 오버레이) 위치/표시"
+              accent="slate"
+              right={osHudBusy ? <Badge tone="blue">처리 중</Badge> : <Badge tone="slate">컨트롤</Badge>}
+            >
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-semibold">오버레이 표시</div>
+                    <div className="text-xs text-slate-400">파이썬 HUD(패널 + 레티클/말풍선)</div>
+                  </div>
+                  <Switch checked={osHudOn} onChange={setOsHudVisible} disabled={osHudBusy} />
+                </div>
+
+                <div className="h-px bg-white/10" />
+
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-xs text-slate-400">이동 step(px)</div>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={hudStep}
+                    onChange={(e) => setHudStep(Math.max(1, Number(e.target.value) || 1))}
+                    className="w-28 rounded-xl bg-slate-950/55 ring-1 ring-white/10 px-3 py-2 text-sm outline-none"
+                    disabled={osHudBusy}
+                  />
+                </div>
+
+                <div className="grid grid-cols-3 gap-2 w-[240px] mx-auto">
+                  <div />
+                  <Btn tone="slate" className="w-full px-0 py-2 rounded-xl" onClick={() => nudgeOsHud(0, -hudStep)} disabled={osHudBusy}>
+                    ▲
+                  </Btn>
+                  <div />
+
+                  <Btn tone="slate" className="w-full px-0 py-2 rounded-xl" onClick={() => nudgeOsHud(-hudStep, 0)} disabled={osHudBusy}>
+                    ◀
+                  </Btn>
+
+                  <Btn tone="blue" className="w-full px-0 py-2 rounded-xl" onClick={resetOsHudPos} disabled={osHudBusy}>
+                    Reset
+                  </Btn>
+
+                  <Btn tone="slate" className="w-full px-0 py-2 rounded-xl" onClick={() => nudgeOsHud(hudStep, 0)} disabled={osHudBusy}>
+                    ▶
+                  </Btn>
+
+                  <div />
+                  <Btn tone="slate" className="w-full px-0 py-2 rounded-xl" onClick={() => nudgeOsHud(0, hudStep)} disabled={osHudBusy}>
+                    ▼
+                  </Btn>
+                  <div />
+                </div>
+              </div>
+            </Card>
           </div>
 
-          {/* 우: 상태 + Debug(영어) */}
+          {/* 우 */}
           <div className="lg:col-span-7 space-y-5">
             <Card
               title="상태"
@@ -768,7 +897,6 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
                   {status ? JSON.stringify(status, null, 2) : loading ? "Loading..." : "No data"}
                 </pre>
               ) : (
-                // 안내 문구 제거 요청 반영: 내용은 비우되, 카드가 죽어 보이지 않게 높이만 유지
                 <div className="h-2" />
               )}
             </Card>

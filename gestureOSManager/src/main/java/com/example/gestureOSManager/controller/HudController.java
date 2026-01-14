@@ -43,4 +43,32 @@ public class HudController {
     hudWsHandler.broadcastJson("{\"type\":\"EXIT\"}");
     log.info("[HUD] EXIT (sessions={})", hudWsHandler.count());
   }
+  
+  // 절대 위치 지정
+  @PostMapping("/pos")
+  public void pos(
+      @RequestParam double x,
+      @RequestParam double y,
+      @RequestParam(defaultValue = "false") boolean normalized
+  ) {
+    String msg = String.format(
+        "{\"type\":\"SET_HUD_POS\",\"x\":%s,\"y\":%s,\"normalized\":%s}",
+        x, y, normalized
+    );
+    hudWsHandler.broadcastJson(msg);
+  }
+
+  // 미세 이동
+  @PostMapping("/nudge")
+  public void nudge(@RequestParam int dx, @RequestParam int dy) {
+    String msg = String.format("{\"type\":\"NUDGE_HUD\",\"dx\":%d,\"dy\":%d}", dx, dy);
+    hudWsHandler.broadcastJson(msg);
+  }
+
+  // 위치 초기화(20,20)
+  @PostMapping("/resetpos")
+  public void resetpos() {
+    hudWsHandler.broadcastJson("{\"type\":\"RESET_HUD_POS\"}");
+  }
+
 }

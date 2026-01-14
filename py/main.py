@@ -15,9 +15,7 @@ print("[HUD] hud_overlay file =", ho.__file__, flush=True)
 
 from gestureos_agent.agents.hands_agent import HandsAgent
 from gestureos_agent.agents.color_rush_agent import ColorRushAgent
-
-
-
+from gestureos_agent.ws_client import WSClient
 
 def _set_dpi_awareness():
     # Windows DPI scaling (125%/150%)에서도 좌표계 일치시키기
@@ -78,6 +76,41 @@ def main():
     hud = OverlayHUD(enable=(not no_hud))
     hud.start()
     
+    # --- HUD control WS: ws://.../ws/hud ---
+    def _on_hud_cmd(msg: dict):
+        t = str(msg.get("type", "")).upper()
+
+        if t == "SET_VISIBLE":
+            hud.set_overlay_visible(bool(msg.get("enabled", True)))
+
+        elif t == "SET_HUD_VISIBLE":
+            hud.set_hud_visible(bool(msg.get("enabled", True)))
+
+        elif t == "SET_HUD_POS":
+            hud.set_hud_position(
+                msg.get("x", 20),
+                msg.get("y", 20),
+                normalized=bool(msg.get("normalized", False)),
+            )
+
+        elif t == "NUDGE_HUD":
+            hud.nudge_hud(int(msg.get("dx", 0) or 0), int(msg.get("dy", 0) or 0))
+
+        elif t == "RESET_HUD_POS":
+            hud.reset_hud_position()
+
+        elif t == "EXIT":
+            os._exit(0)
+
+    # cfg.ws_url: 기본 ws://127.0.0.1:8080/ws/agent -> /ws/hud로 치환
+    base_ws = cfg["ws_url"] if isinstance(cfg, dict) else getattr(cfg, "ws_url", "ws://127.0.0.1:8080/ws/agent")
+    hud_ws_url = str(base_ws).replace("/ws/agent", "/ws/hud")
+
+    no_ws = cfg.get("no_ws", False) if isinstance(cfg, dict) else getattr(cfg, "no_ws", False)
+    hud_ws = WSClient(hud_ws_url, _on_hud_cmd, enabled=(not no_ws) and (not no_hud))
+    hud_ws.start()
+
+
     # OS 커서 숨기기(원할 때만)
     HIDE_OS_CURSOR = True  # 필요하면 False로 끄기
 
