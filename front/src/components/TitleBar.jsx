@@ -1,4 +1,6 @@
 // src/components/TitleBar.jsx
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 function cn(...xs) {
   return xs.filter(Boolean).join(" ");
@@ -16,35 +18,153 @@ export default function TitleBar({
   const onMax = () => window.managerWin?.toggleMaximize?.();
   const onClose = () => window.managerWin?.close?.();
 
-  // ✅ return(JSX) 밖에서만 선언해야 함
-  const THEME_PRESETS = ["dark", "light", "acid", "valentine"];
+  const THEME_PRESETS = useMemo(
+    () => [
+      { id: "dark", label: "다크" },
+      { id: "light", label: "라이트" },
+      { id: "neon", label: "네온" },
+      { id: "rose", label: "로즈" },
+      { id: "devil", label: "데빌" },
+    ],
+    []
+  );
+
+  const currentThemeLabel =
+    THEME_PRESETS.find((t) => t.id === theme)?.label ?? theme ?? "dark";
+
+  // =========================
+  // Theme Select Popover (Portal)
+  // - overflow-hidden에 안 잘리게 fixed + portal
+  // =========================
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef(null);
+  const popRef = useRef(null);
+  const [pos, setPos] = useState({ top: 48, left: 0, width: 220 });
+
+  const calcPos = () => {
+    const el = btnRef.current;
+    if (!el) return;
+
+    const r = el.getBoundingClientRect();
+    const margin = 8;
+    const width = Math.max(180, r.width + 24);
+
+    // 오른쪽 정렬 느낌으로: 버튼 right에 맞춰서 팝오버 배치
+    const desiredLeft = r.right - width;
+    const left = Math.max(margin, Math.min(desiredLeft, window.innerWidth - width - margin));
+    const top = Math.min(r.bottom + margin, window.innerHeight - margin);
+
+    setPos({ top, left, width });
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    calcPos();
+
+    const onDown = (e) => {
+      const t = e.target;
+      const btn = btnRef.current;
+      const pop = popRef.current;
+      if (!btn || !pop) return;
+      if (btn.contains(t) || pop.contains(t)) return;
+      setOpen(false);
+    };
+
+    const onKey = (e) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+
+    const onResize = () => calcPos();
+    const onScroll = () => calcPos();
+
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("resize", onResize);
+    // 스크롤 컨테이너가 뭘지 몰라서 capture로 받음
+    window.addEventListener("scroll", onScroll, true);
+
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("scroll", onScroll, true);
+    };
+  }, [open]);
+
+  const ThemePopover = open
+    ? createPortal(
+        <div
+          ref={popRef}
+          style={{
+            position: "fixed",
+            top: pos.top,
+            left: pos.left,
+            width: pos.width,
+            zIndex: 99999,
+          }}
+          className={cn(
+            "rounded-xl shadow-2xl ring-1",
+            "bg-base-200 text-base-content border border-base-300/60",
+            "p-2"
+          )}
+        >
+          <div className="text-[11px] px-2 py-1 opacity-70">Theme</div>
+          <ul className="menu menu-sm w-full">
+            {THEME_PRESETS.map((t) => {
+              const active = t.id === theme;
+              return (
+                <li key={t.id}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTheme?.(t.id);
+                      setOpen(false);
+                    }}
+                    className={cn(
+                      "flex items-center justify-between rounded-lg",
+                      active ? "active font-semibold" : ""
+                    )}
+                  >
+                    <span>{t.label}</span>
+                    {active ? <span className="opacity-70">✓</span> : null}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>,
+        document.body
+      )
+    : null;
 
   return (
     <div
-      className="navbar bg-base-200 h-11 flex items-center justify-between px-3 select-none border-b border-white/10 bg-gradient-to-b from-[#0b1020] to-[#070b14]"
+      className={cn(
+        "navbar h-11 px-3 select-none",
+        "border-b border-base-300/50",
+        "bg-base-200/80 backdrop-blur",
+        "text-base-content"
+      )}
       style={{ WebkitAppRegion: "no-drag" }}
       onDoubleClick={onMax}
     >
-      {/* LEFT: Logo + Title + Screen Tabs */}
-      <div className="flex items-center gap-3 text-slate-200">
-        <div className="w-6 h-6 rounded-md bg-white/10 flex items-center justify-center text-xs">
+      {/* LEFT: Logo + Title + Tabs + HUD */}
+      <div className="flex items-center gap-3">
+        <div className="w-6 h-6 rounded-md bg-base-300/40 ring-1 ring-base-300/60 flex items-center justify-center text-xs font-bold">
           GA
         </div>
         <span className="font-semibold text-sm">Gesture Agent Manager</span>
 
         {/* 화면 전환 탭 */}
-        <div
-          className="ml-2 flex items-center gap-1 bg-white/5 p-1 rounded-lg"
-          style={{ WebkitAppRegion: "no-drag" }}
-        >
+        <div className="ml-2 flex items-center gap-1 bg-base-100/40 ring-1 ring-base-300/50 p-1 rounded-lg">
           <button
             type="button"
             onClick={() => onChangeScreen?.("dashboard")}
             className={cn(
               "px-3 py-1 text-xs rounded-md transition",
               screen === "dashboard"
-                ? "bg-white/20 text-white"
-                : "text-white/70 hover:bg-white/10 hover:text-white"
+                ? "bg-base-300/50 text-base-content"
+                : "opacity-80 hover:bg-base-300/30 hover:opacity-100"
             )}
           >
             Dashboard
@@ -56,24 +176,11 @@ export default function TitleBar({
             className={cn(
               "px-3 py-1 text-xs rounded-md transition",
               screen === "rush"
-                ? "bg-white/20 text-white"
-                : "text-white/70 hover:bg-white/10 hover:text-white"
+                ? "bg-base-300/50 text-base-content"
+                : "opacity-80 hover:bg-base-300/30 hover:opacity-100"
             )}
           >
             Rush
-          </button>
-
-          <button
-            type="button"
-            onClick={() => onChangeScreen?.("vkey")}
-            className={cn(
-              "px-3 py-1 text-xs rounded-md transition",
-              screen === "vkey"
-                ? "bg-white/20 text-white"
-                : "text-white/70 hover:bg-white/10 hover:text-white"
-            )}
-          >
-            VKey
           </button>
         </div>
 
@@ -82,70 +189,66 @@ export default function TitleBar({
           type="button"
           onClick={() => onToggleHud?.()}
           className={cn(
-            "ml-1 px-3 py-1 text-xs rounded-lg transition",
+            "ml-1 px-3 py-1 text-xs rounded-lg transition ring-1",
             hudOn
-              ? "bg-emerald-500/15 border border-emerald-400/25 text-emerald-50 hover:bg-emerald-500/25"
-              : "bg-white/5 border border-white/10 text-white/80 hover:bg-white/10"
+              ? "bg-primary/15 ring-primary/25 text-base-content hover:bg-primary/20"
+              : "bg-base-100/35 ring-base-300/50 opacity-90 hover:opacity-100 hover:bg-base-100/50"
           )}
-          style={{ WebkitAppRegion: "no-drag" }}
           title="Toggle HUD"
         >
           HUD: {hudOn ? "ON" : "OFF"}
         </button>
       </div>
 
-      {/* THEME BUTTONS */}
+      {/* RIGHT: Theme select + Window controls */}
       <div
-        className="ml-2 inline-flex items-center rounded-full ring-1 ring-white/10 bg-slate-900/35 p-1"
+        className="ml-auto flex items-center gap-2"
         style={{ WebkitAppRegion: "no-drag" }}
       >
-        {THEME_PRESETS.map((th) => {
-          const active = theme === th;
+        {/* ✅ Theme Select (Portal Popover) */}
+        <button
+          ref={btnRef}
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className={cn(
+            "btn btn-sm rounded-lg",
+            "bg-base-100/35 border border-base-300/60",
+            "hover:bg-base-100/55",
+            "text-base-content"
+          )}
+          aria-expanded={open}
+        >
+          <span className="text-xs opacity-70 mr-2">Theme</span>
+          <span className="text-xs font-semibold">{currentThemeLabel}</span>
+          <span className="ml-2 opacity-60">▾</span>
+        </button>
 
-          return (
-            <button
-              key={th}
-              type="button"
-              onClick={() => setTheme?.(th)}
-              className={cn(
-                "btn btn-sm rounded-full",
-                active
-                  ? "btn-primary" : "btn-ghost"
-              )}
-              title={`테마: ${th}`}
-            >
-              {th}
-            </button>
-          );
-        })}
-      </div>
+        {ThemePopover}
 
-      {/* RIGHT: Window Controls */}
-      <div
-        className="flex items-center gap-2"
-        style={{ WebkitAppRegion: "no-drag" }}
-      >
-        <button
-          className="w-10 h-8 rounded-md hover:bg-white/10 text-slate-200"
-          onClick={onMin}
-          title="Minimize"
-        >
-          —
-        </button>
-        <button
-          className="w-10 h-8 rounded-md hover:bg-white/10 text-slate-200"
-          onClick={onMax}
-          title="Maximize"
-        >
-          □
-        </button>
-        <button
-          className="w-10 h-8 rounded-md hover:bg-red-500/30 text-slate-200"
-          onClick={onClose}
-          title="Close"
-        >
-          ×
-        </button>
+        {/* Window Controls */}
+        <div className="flex items-center gap-2">
+          <button
+            className="w-10 h-8 rounded-md hover:bg-base-300/40"
+            onClick={onMin}
+            title="Minimize"
+          >
+            —
+          </button>
+          <button
+            className="w-10 h-8 rounded-md hover:bg-base-300/40"
+            onClick={onMax}
+            title="Maximize"
+          >
+            □
+          </button>
+          <button
+            className="w-10 h-8 rounded-md hover:bg-error/25"
+            onClick={onClose}
+            title="Close"
+          >
+            ×
+          </button>
+        </div>
       </div>
     </div>
   );

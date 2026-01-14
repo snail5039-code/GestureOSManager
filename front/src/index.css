@@ -22,3 +22,8 @@ main {
 }
 
 html { font-size: 20px; }
+
+html[data-theme="devil"] body,
+html[data-theme="devil"] * {
+  cursor: url("/cursor/devil.png") 16 16, auto !important;
+}
