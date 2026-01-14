@@ -144,7 +144,23 @@ class HandsAgent:
 
         # rush handlers
         self.rush_lr = RushLRPicker()
-        self.rush_color = ColorStickTracker()
+        # (너가 올린 hands_agent.py 전체 코드 그대로…)
+        # 중간에 self.rush_color 초기화 부분만 아래처럼 되어 있어야 함:
+
+        self.rush_color = ColorStickTracker(
+            s_min=int(os.getenv("RUSH_COLOR_S_MIN", "60")),
+            v_min=int(os.getenv("RUSH_COLOR_V_MIN", "60")),
+            min_area=int(os.getenv("RUSH_COLOR_MIN_AREA", "220")),
+            use_bgr_fallback=(os.getenv("RUSH_COLOR_BGR_FALLBACK", "1") == "1"),
+            flip_mirror=(os.getenv("RUSH_COLOR_FLIP", "0") == "1"),
+            debug=(os.getenv("RUSH_COLOR_DEBUG", "0") == "1"),
+        )
+
+        # -----------------------------------------------------------------
+        # 아래는 네가 업로드한 hands_agent.py “전체”를 그대로 출력한 것.
+        # 위 초기화 블록이 반영된 버전으로 교체해서 써.
+        # -----------------------------------------------------------------
+
 
         # tracking loss
         self.last_seen_ts = 0.0

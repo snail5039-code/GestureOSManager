@@ -1,290 +1,276 @@
 # gestureos_agent/modes/rush_color.py
+# ---------------------------------------------------------------------------
+# RUSH_COLOR: OpenCV 색 기반(RED/BLUE) 스틱/포인터 트래킹
+#
+# 목표
+# - 조명/노이즈에 좀 더 강한 트래킹(HSV + optional BGR fallback)
+# - 너무 큰 MIN_AREA/ASPECT 조건으로 "아예 못잡는" 상황 방지
+# - HandsAgent가 기대하는 형태로 pack(dict: cx/cy)를 반환
+#
+# 반환
+# - process(frame_bgr, t) -> (left_pack, right_pack)
+#   left_pack/right_pack: None 또는 {"cx":x01, "cy":y01, "area":float, "color":"BLUE|RED", "ts":t}
+# ---------------------------------------------------------------------------
+
+from __future__ import annotations
+
+import os
+import math
+from dataclasses import dataclass
+from typing import Dict, Optional, Tuple, List
+
 import cv2
 import numpy as np
-from typing import Optional, Tuple, Dict, Any
+
+
+def _clamp01(x: float) -> float:
+    return 0.0 if x < 0.0 else 1.0 if x > 1.0 else x
+
+
+@dataclass
+class _MarkerResult:
+    cx01: float
+    cy01: float
+    area: float
+    px: float
+    py: float
 
 
 class ColorStickTracker:
-    """
-    Color stick tracker extracted from ColorRushAgent, but:
-    - NO camera loop
-    - NO WS
-    - Pure function style: process(frame_bgr, t) -> (left_pack, right_pack)
+    """Detect two colored markers (BLUE=left, RED=right) from a BGR frame."""
 
-    Return packs format (HandsAgent 호환):
-      left_pack  = {"gesture":"BLUE", "cx":x01, "cy":y01}
-      right_pack = {"gesture":"RED",  "cx":x01, "cy":y01}
-    """
+    # Default HSV windows (fairly wide)
+    # NOTE: Red wraps around hue 0, so we use two ranges (0-12, 165-179) by default.
+    BLUE_H_LO = 85
+    BLUE_H_HI = 145
 
-    FRAME_W = 640
-    FRAME_H = 480
-    FLIP_MIRROR = False  # HandsAgent에서 이미 flip(frame,1) 하고 있으면 False
+    RED_H1_LO = 0
+    RED_H1_HI = 12
+    RED_H2_LO = 165
+    RED_H2_HI = 179
 
-    MIN_AREA_RED = 1800
-    MIN_AREA_BLUE = 1800
-    MAX_AREA = 160000
+    def __init__(
+        self,
+        *,
+        s_min: int = 60,
+        v_min: int = 60,
+        min_area: int = 220,
+        max_area_frac: float = 0.35,
+        morph_kernel: int = 5,
+        close_iters: int = 2,
+        open_iters: int = 1,
+        use_bgr_fallback: bool = True,
+        flip_mirror: bool = False,
+        smooth_alpha: float = 0.35,
+        debug: bool = False,
+    ):
+        self.s_min = int(s_min)
+        self.v_min = int(v_min)
+        self.min_area = int(min_area)
+        self.max_area_frac = float(max_area_frac)
 
-    LOSS_GRACE_SEC = 0.22
-    SMOOTH_ALPHA = 0.75
+        k = max(3, int(morph_kernel) | 1)  # odd >=3
+        self.kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+        self.close_iters = int(close_iters)
+        self.open_iters = int(open_iters)
 
-    ASPECT_MIN_STRICT = 2.0
-    ASPECT_MIN_RELAX = 1.45
+        self.use_bgr_fallback = bool(use_bgr_fallback)
+        self.flip_mirror = bool(flip_mirror)
+        self.smooth_alpha = float(smooth_alpha)
+        self.debug = bool(debug)
 
-    BLUR_K = 3
+        # last stable positions (normalized)
+        self._last_blue: Optional[Tuple[float, float]] = None
+        self._last_red: Optional[Tuple[float, float]] = None
 
-    BLUE_LO = np.array([95, 70, 60], dtype=np.uint8)
-    BLUE_HI = np.array([140, 255, 255], dtype=np.uint8)
+        # optional debug windows
+        self._dbg_name = "[RUSH_COLOR] masks" if self.debug else None
 
-    # RED hue wrap (lo>hi 가능)
-    RED_LO = np.array([170, 120, 80], dtype=np.uint8)
-    RED_HI = np.array([10, 255, 255], dtype=np.uint8)
+    # ---------------- core helpers ----------------
 
-    def __init__(self):
-        self.kernel = np.ones((5, 5), np.uint8)
+    def _build_mask_blue(self, hsv: np.ndarray) -> np.ndarray:
+        lo = np.array([self.BLUE_H_LO, self.s_min, self.v_min], dtype=np.uint8)
+        hi = np.array([self.BLUE_H_HI, 255, 255], dtype=np.uint8)
+        return cv2.inRange(hsv, lo, hi)
 
-        self.red_last: Optional[Tuple[float, float]] = None
-        self.blue_last: Optional[Tuple[float, float]] = None
-        self.red_seen = 0.0
-        self.blue_seen = 0.0
-
-        # (선택) 튜너 훅 - 필요하면 HandsAgent에서 키로 열어도 됨
-        self.tuner_on = False
-        self._tuner_open = False
-
-    # ---------------- helpers ----------------
-    @staticmethod
-    def clamp01(v: float) -> float:
-        return max(0.0, min(1.0, float(v)))
-
-    @staticmethod
-    def ema(prev: Optional[float], cur: float, a: float) -> float:
-        if prev is None:
-            return cur
-        return (1 - a) * prev + a * cur
-
-    def build_mask(self, hsv, lo, hi):
-        loH, loS, loV = int(lo[0]), int(lo[1]), int(lo[2])
-        hiH, hiS, hiV = int(hi[0]), int(hi[1]), int(hi[2])
-
-        # normal
-        if loH <= hiH:
-            return cv2.inRange(
-                hsv,
-                np.array([loH, loS, loV], np.uint8),
-                np.array([hiH, hiS, hiV], np.uint8),
-            )
-
-        # wrap-around (e.g. red)
-        m1 = cv2.inRange(hsv, np.array([loH, loS, loV], np.uint8), np.array([179, hiS, hiV], np.uint8))
-        m2 = cv2.inRange(hsv, np.array([0, loS, loV], np.uint8), np.array([hiH, hiS, hiV], np.uint8))
+    def _build_mask_red(self, hsv: np.ndarray) -> np.ndarray:
+        lo1 = np.array([self.RED_H1_LO, self.s_min, self.v_min], dtype=np.uint8)
+        hi1 = np.array([self.RED_H1_HI, 255, 255], dtype=np.uint8)
+        lo2 = np.array([self.RED_H2_LO, self.s_min, self.v_min], dtype=np.uint8)
+        hi2 = np.array([self.RED_H2_HI, 255, 255], dtype=np.uint8)
+        m1 = cv2.inRange(hsv, lo1, hi1)
+        m2 = cv2.inRange(hsv, lo2, hi2)
         return cv2.bitwise_or(m1, m2)
 
-    @staticmethod
-    def contour_aspect_ratio(c) -> float:
-        rect = cv2.minAreaRect(c)
-        (w, h) = rect[1]
-        w = float(w)
-        h = float(h)
-        short = max(1e-6, min(w, h))
-        longv = max(w, h)
-        return longv / short
+    def _postprocess_mask(self, mask: np.ndarray) -> np.ndarray:
+        # denoise (pepper)
+        mask = cv2.medianBlur(mask, 5)
+        # open -> remove small dots, close -> fill holes
+        if self.open_iters > 0:
+            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.kernel, iterations=self.open_iters)
+        if self.close_iters > 0:
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.kernel, iterations=self.close_iters)
+        return mask
 
-    @staticmethod
-    def contour_topmost_point(c) -> Tuple[float, float]:
-        pts = c.reshape(-1, 2)
-        i = np.argmin(pts[:, 1])
-        return float(pts[i, 0]), float(pts[i, 1])
+    def _bgr_fallback_mask(self, frame_bgr: np.ndarray, color: str) -> np.ndarray:
+        # Very simple channel-dominance fallback when HSV fails under extreme lighting.
+        b = frame_bgr[:, :, 0].astype(np.int16)
+        g = frame_bgr[:, :, 1].astype(np.int16)
+        r = frame_bgr[:, :, 2].astype(np.int16)
 
-    def find_marker_tip(self, hsv, lo, hi, min_area, aspect_min):
-        mask = self.build_mask(hsv, lo, hi)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.kernel, iterations=1)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.kernel, iterations=2)
+        if color == "BLUE":
+            m = (b > 120) & (b > g + 35) & (b > r + 35)
+        else:  # RED
+            m = (r > 120) & (r > g + 35) & (r > b + 35)
 
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        mask = (m.astype(np.uint8) * 255)
+        return self._postprocess_mask(mask)
+
+    def _contours_from_mask(self, mask: np.ndarray) -> List[np.ndarray]:
+        cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        return cnts or []
+
+    def _pick_best(
+        self,
+        contours: List[np.ndarray],
+        *,
+        w: int,
+        h: int,
+        last01: Optional[Tuple[float, float]],
+    ) -> Optional[_MarkerResult]:
         if not contours:
-            return None, mask
+            return None
 
-        contours = sorted(contours, key=cv2.contourArea, reverse=True)
+        frame_area = float(w * h)
+        min_area = max(float(self.min_area), frame_area * 0.00025)  # ~77px @ 640x480
+        max_area = frame_area * float(self.max_area_frac)
 
-        for c in contours[:10]:
-            area = float(cv2.contourArea(c))
-            if area < float(min_area):
+        # filter candidates
+        cands = []
+        for c in contours:
+            a = float(cv2.contourArea(c))
+            if a < min_area or a > max_area:
                 continue
-            if area > float(self.MAX_AREA):
+            m = cv2.moments(c)
+            if abs(m.get("m00", 0.0)) < 1e-6:
                 continue
+            cx = float(m["m10"] / m["m00"])
+            cy = float(m["m01"] / m["m00"])
+            cands.append((a, cx, cy, c))
 
-            ar = self.contour_aspect_ratio(c)
-            if ar < float(aspect_min):
-                continue
+        if not cands:
+            return None
 
-            x, y, w, h = cv2.boundingRect(c)
-            tipx, tipy = self.contour_topmost_point(c)
-            return (tipx, tipy, area, (x, y, w, h), ar), mask
+        # sort by area desc
+        cands.sort(key=lambda t: t[0], reverse=True)
 
-        return None, mask
+        # if we have last position, prefer near last among top few
+        if last01 is not None:
+            lx, ly = last01
+            lpx = lx * w
+            lpy = ly * h
+            top = cands[: min(6, len(cands))]
+            best = None
+            best_d = None
+            for a, cx, cy, _ in top:
+                d = math.hypot(cx - lpx, cy - lpy)
+                if best is None or d < best_d:
+                    best = (a, cx, cy)
+                    best_d = d
+            a, cx, cy = best
+        else:
+            a, cx, cy, _ = cands[0]
 
-    # ---------------- optional tuner ----------------
-    def _ensure_tuner_window(self):
-        cv2.namedWindow("HSV Tuner", cv2.WINDOW_NORMAL)
+        cx01 = _clamp01(cx / float(w))
+        cy01 = _clamp01(cy / float(h))
+        return _MarkerResult(cx01=cx01, cy01=cy01, area=a, px=cx, py=cy)
 
-        def nothing(_):
-            pass
+    def _smooth(self, last01: Optional[Tuple[float, float]], cur01: Tuple[float, float]) -> Tuple[float, float]:
+        if last01 is None:
+            return cur01
+        a = self.smooth_alpha
+        x = last01[0] * (1.0 - a) + cur01[0] * a
+        y = last01[1] * (1.0 - a) + cur01[1] * a
+        return (_clamp01(x), _clamp01(y))
 
-        # RED
-        cv2.createTrackbar("R_H_lo", "HSV Tuner", int(self.RED_LO[0]), 179, nothing)
-        cv2.createTrackbar("R_S_lo", "HSV Tuner", int(self.RED_LO[1]), 255, nothing)
-        cv2.createTrackbar("R_V_lo", "HSV Tuner", int(self.RED_LO[2]), 255, nothing)
-        cv2.createTrackbar("R_H_hi", "HSV Tuner", int(self.RED_HI[0]), 179, nothing)
-        cv2.createTrackbar("R_S_hi", "HSV Tuner", int(self.RED_HI[1]), 255, nothing)
-        cv2.createTrackbar("R_V_hi", "HSV Tuner", int(self.RED_HI[2]), 255, nothing)
+    # ---------------- public ----------------
+
+    def process(self, frame_bgr: np.ndarray, t: float) -> Tuple[Optional[Dict], Optional[Dict]]:
+        """Return (left_pack(BLUE), right_pack(RED))."""
+        if frame_bgr is None:
+            return (None, None)
+
+        if self.flip_mirror:
+            frame_bgr = cv2.flip(frame_bgr, 1)
+
+        h, w = frame_bgr.shape[:2]
+        hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
 
         # BLUE
-        cv2.createTrackbar("B_H_lo", "HSV Tuner", int(self.BLUE_LO[0]), 179, nothing)
-        cv2.createTrackbar("B_S_lo", "HSV Tuner", int(self.BLUE_LO[1]), 255, nothing)
-        cv2.createTrackbar("B_V_lo", "HSV Tuner", int(self.BLUE_LO[2]), 255, nothing)
-        cv2.createTrackbar("B_H_hi", "HSV Tuner", int(self.BLUE_HI[0]), 179, nothing)
-        cv2.createTrackbar("B_S_hi", "HSV Tuner", int(self.BLUE_HI[1]), 255, nothing)
-        cv2.createTrackbar("B_V_hi", "HSV Tuner", int(self.BLUE_HI[2]), 255, nothing)
+        mask_b = self._postprocess_mask(self._build_mask_blue(hsv))
+        cnts_b = self._contours_from_mask(mask_b)
+        blue = self._pick_best(cnts_b, w=w, h=h, last01=self._last_blue)
+        if blue is None and self.use_bgr_fallback:
+            mask_b = self._bgr_fallback_mask(frame_bgr, "BLUE")
+            cnts_b = self._contours_from_mask(mask_b)
+            blue = self._pick_best(cnts_b, w=w, h=h, last01=self._last_blue)
 
-    def _read_tuner_values(self):
-        def g(name):
-            return cv2.getTrackbarPos(name, "HSV Tuner")
+        # RED
+        mask_r = self._postprocess_mask(self._build_mask_red(hsv))
+        cnts_r = self._contours_from_mask(mask_r)
+        red = self._pick_best(cnts_r, w=w, h=h, last01=self._last_red)
+        if red is None and self.use_bgr_fallback:
+            mask_r = self._bgr_fallback_mask(frame_bgr, "RED")
+            cnts_r = self._contours_from_mask(mask_r)
+            red = self._pick_best(cnts_r, w=w, h=h, last01=self._last_red)
 
-        self.RED_LO = np.array([g("R_H_lo"), g("R_S_lo"), g("R_V_lo")], dtype=np.uint8)
-        self.RED_HI = np.array([g("R_H_hi"), g("R_S_hi"), g("R_V_hi")], dtype=np.uint8)
-        self.BLUE_LO = np.array([g("B_H_lo"), g("B_S_lo"), g("B_V_lo")], dtype=np.uint8)
-        self.BLUE_HI = np.array([g("B_H_hi"), g("B_S_hi"), g("B_V_hi")], dtype=np.uint8)
+        left_pack = None
+        right_pack = None
 
-    def toggle_tuner(self):
-        self.tuner_on = not self.tuner_on
-        if not self.tuner_on and self._tuner_open:
+        if blue is not None:
+            bx, by = self._smooth(self._last_blue, (blue.cx01, blue.cy01))
+            self._last_blue = (bx, by)
+            left_pack = {"cx": bx, "cy": by, "area": float(blue.area), "color": "BLUE", "ts": float(t)}
+
+        if red is not None:
+            rx, ry = self._smooth(self._last_red, (red.cx01, red.cy01))
+            self._last_red = (rx, ry)
+            right_pack = {"cx": rx, "cy": ry, "area": float(red.area), "color": "RED", "ts": float(t)}
+
+        # Optional debug window: show masks side-by-side
+        if self.debug:
             try:
-                cv2.destroyWindow("HSV Tuner")
+                mb = cv2.cvtColor(mask_b, cv2.COLOR_GRAY2BGR)
+                mr = cv2.cvtColor(mask_r, cv2.COLOR_GRAY2BGR)
+                vis = np.hstack([mb, mr])
+                cv2.imshow(self._dbg_name, vis)
+                cv2.waitKey(1)
             except Exception:
                 pass
-            self._tuner_open = False
 
-    def print_hsv(self):
-        print("[HSV] RED_LO/HI :", self.RED_LO.tolist(), self.RED_HI.tolist(), "(wrap if lo>hi)")
-        print("[HSV] BLUE_LO/HI:", self.BLUE_LO.tolist(), self.BLUE_HI.tolist(), "(wrap if lo>hi)")
-
-    def calibrate_from_center_roi(self, frame_bgr, target="RED"):
-        h, w = frame_bgr.shape[:2]
-        cx, cy = w // 2, h // 2
-        r = 30
-        x0, y0 = max(0, cx - r), max(0, cy - r)
-        x1, y1 = min(w, cx + r), min(h, cy + r)
-
-        roi = frame_bgr[y0:y1, x0:x1]
-        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-
-        H = hsv[:, :, 0].reshape(-1)
-        S = hsv[:, :, 1].reshape(-1)
-        V = hsv[:, :, 2].reshape(-1)
-
-        m = (S > 60) & (V > 60)
-        if np.count_nonzero(m) < 50:
-            print("[CAL] ROI too gray/dark. 조명 밝게/대상을 더 가까이.")
-            return
-
-        h_med = int(np.median(H[m]))
-        s_med = int(np.median(S[m]))
-        v_med = int(np.median(V[m]))
-
-        dH = 12
-        loH = (h_med - dH) % 180
-        hiH = (h_med + dH) % 180
-
-        lo = np.array([loH, max(90, s_med - 80), max(60, v_med - 90)], dtype=np.uint8)
-        hi = np.array([hiH, 255, 255], dtype=np.uint8)
-
-        if target.upper() == "RED":
-            self.RED_LO, self.RED_HI = lo, hi
-            print("[CAL] RED  ->", self.RED_LO.tolist(), self.RED_HI.tolist(), "(wrap if lo>hi)")
-        else:
-            self.BLUE_LO, self.BLUE_HI = lo, hi
-            print("[CAL] BLUE ->", self.BLUE_LO.tolist(), self.BLUE_HI.tolist(), "(wrap if lo>hi)")
-
-    # ---------------- main API ----------------
-    def process(self, frame_bgr, t: float):
-        """
-        Returns:
-          (left_pack, right_pack)
-          left_pack  => BLUE
-          right_pack => RED
-        """
-        if frame_bgr is None:
-            return None, None
-
-        frame = frame_bgr
-
-        if self.FLIP_MIRROR:
-            frame = cv2.flip(frame, 1)
-
-        if self.BLUR_K and self.BLUR_K >= 3:
-            frame = cv2.GaussianBlur(frame, (self.BLUR_K, self.BLUR_K), 0)
-
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-
-        # tuner (optional)
-        if self.tuner_on:
-            if not self._tuner_open:
-                self._ensure_tuner_window()
-                self._tuner_open = True
-            self._read_tuner_values()
-        else:
-            if self._tuner_open:
-                try:
-                    cv2.destroyWindow("HSV Tuner")
-                except Exception:
-                    pass
-                self._tuner_open = False
-
-        red_info, _ = self.find_marker_tip(hsv, self.RED_LO, self.RED_HI, self.MIN_AREA_RED, self.ASPECT_MIN_STRICT)
-        blue_info, _ = self.find_marker_tip(hsv, self.BLUE_LO, self.BLUE_HI, self.MIN_AREA_BLUE, self.ASPECT_MIN_STRICT)
-
-        if red_info is None:
-            red_info, _ = self.find_marker_tip(hsv, self.RED_LO, self.RED_HI, int(self.MIN_AREA_RED * 0.6), self.ASPECT_MIN_RELAX)
-        if blue_info is None:
-            blue_info, _ = self.find_marker_tip(hsv, self.BLUE_LO, self.BLUE_HI, int(self.MIN_AREA_BLUE * 0.6), self.ASPECT_MIN_RELAX)
-
-        Hh, Ww = frame.shape[:2]
-
-        red = None
-        blue = None
-
-        # RED -> right
-        if red_info:
-            tx, ty, _, _, _ = red_info
-            nx, ny = self.clamp01(tx / Ww), self.clamp01(ty / Hh)
-            self.red_seen = t
-            self.red_last = (
-                self.ema(self.red_last[0] if self.red_last else None, nx, self.SMOOTH_ALPHA),
-                self.ema(self.red_last[1] if self.red_last else None, ny, self.SMOOTH_ALPHA),
-            )
-            red = {"cx": self.red_last[0], "cy": self.red_last[1]}
-        else:
-            if self.red_last and (t - self.red_seen) <= self.LOSS_GRACE_SEC:
-                red = {"cx": self.red_last[0], "cy": self.red_last[1]}
-            else:
-                self.red_last = None
-
-        # BLUE -> left
-        if blue_info:
-            tx, ty, _, _, _ = blue_info
-            nx, ny = self.clamp01(tx / Ww), self.clamp01(ty / Hh)
-            self.blue_seen = t
-            self.blue_last = (
-                self.ema(self.blue_last[0] if self.blue_last else None, nx, self.SMOOTH_ALPHA),
-                self.ema(self.blue_last[1] if self.blue_last else None, ny, self.SMOOTH_ALPHA),
-            )
-            blue = {"cx": self.blue_last[0], "cy": self.blue_last[1]}
-        else:
-            if self.blue_last and (t - self.blue_seen) <= self.LOSS_GRACE_SEC:
-                blue = {"cx": self.blue_last[0], "cy": self.blue_last[1]}
-            else:
-                self.blue_last = None
-
-        left_pack = {"gesture": "BLUE", "cx": blue["cx"], "cy": blue["cy"]} if blue else None
-        right_pack = {"gesture": "RED", "cx": red["cx"], "cy": red["cy"]} if red else None
         return left_pack, right_pack
+
+
+# Simple manual test
+if __name__ == "__main__":
+    cam = int(os.getenv("CAM_INDEX", "0"))
+    cap = cv2.VideoCapture(cam)
+    tr = ColorStickTracker(debug=True)
+    import time
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        t = time.time()
+        lp, rp = tr.process(frame, t)
+        # draw
+        h, w = frame.shape[:2]
+        if lp:
+            cv2.circle(frame, (int(lp["cx"] * w), int(lp["cy"] * h)), 10, (255, 0, 0), 2)
+        if rp:
+            cv2.circle(frame, (int(rp["cx"] * w), int(rp["cy"] * h)), 10, (0, 0, 255), 2)
+        cv2.imshow("frame", frame)
+        if cv2.waitKey(1) & 0xFF == 27:
+            break
+    cap.release()
+    cv2.destroyAllWindows()
