@@ -1,4 +1,3 @@
-# gestureos_agent/agents/hands_agent.py
 import os
 import time
 import ctypes
@@ -55,7 +54,6 @@ def _get_os_cursor_norm01():
         x01 = (pt.x - vx) / max(1, vw)
         y01 = (pt.y - vy) / max(1, vh)
 
-        # clamp
         x01 = 0.0 if x01 < 0.0 else (1.0 if x01 > 1.0 else float(x01))
         y01 = 0.0 if y01 < 0.0 else (1.0 if y01 > 1.0 else float(y01))
         return (x01, y01)
@@ -80,28 +78,21 @@ def _lm_to_payload(lm):
 
 
 def _pack_xy(p: Optional[dict]):
-    """accept (cx,cy) or (nx,ny) or (x,y) packs"""
+    """accept both (cx,cy) or (nx,ny) packs"""
     if p is None:
         return None
-    cx = p.get("cx")
-    cy = p.get("cy")
-    if cx is None:
-        cx = p.get("nx")
-    if cy is None:
-        cy = p.get("ny")
-    if cx is None:
-        cx = p.get("x")
-    if cy is None:
-        cy = p.get("y")
+    cx = p.get("cx", p.get("nx"))
+    cy = p.get("cy", p.get("ny"))
     if cx is None or cy is None:
         return None
     return float(cx), float(cy)
+
 
 class HandsAgent:
     """
     Main agent:
     - MOUSE / KEYBOARD / PRESENTATION / DRAW / VKEY
-    - RUSH_HAND: mediapipe hands-based left/right
+    - RUSH_HAND: mediapipe hands-based left/right (RushLRPicker)
     - RUSH_COLOR: HSV stick tracking left/right (ColorStickTracker)
     """
 
@@ -131,7 +122,7 @@ class HandsAgent:
         self.cursor_hand_label = "Left" if getattr(cfg, "force_cursor_left", False) else "Right"
 
         self.control = ControlMapper(
-            control_box=getattr(cfg, "control_box", (0.30, 0.35, 0.70, 0.92)),
+            control_box=getattr(cfg, "control_box", (0.3, 0.35, 0.7, 0.92)),
             gain=float(getattr(cfg, "control_gain", 1.35)),
             ema_alpha=float(getattr(cfg, "ema_alpha", 0.45)),
             deadzone_px=float(getattr(cfg, "deadzone_px", 2.0)),
@@ -196,15 +187,17 @@ class HandsAgent:
     def _on_command(self, data: dict):
         typ = data.get("type")
 
+        # 디버그(지금 단계에서 매우 중요)
+        if typ in ("SET_MODE", "ENABLE", "DISABLE", "SET_PREVIEW"):
+            print("[PY] cmd:", data, flush=True)
+
         if typ == "ENABLE":
             self.enabled = True
             self.locked = False
-            print("[PY] cmd ENABLE -> enabled=True")
 
         elif typ == "DISABLE":
             self.enabled = False
             self._reset_side_effects()
-            print("[PY] cmd DISABLE -> enabled=False")
 
         elif typ == "SET_MODE":
             new_mode = str(data.get("mode", "MOUSE")).upper()
@@ -212,7 +205,6 @@ class HandsAgent:
 
         elif typ == "SET_PREVIEW":
             self.preview = bool(data.get("enabled", True))
-            print("[PY] cmd SET_PREVIEW ->", self.preview)
 
     # ---------- mode + state ----------
     def _reset_side_effects(self):
@@ -232,7 +224,7 @@ class HandsAgent:
         if nm == "PAINT":
             nm = "DRAW"
 
-        # aliases
+        # aliases(레거시 호환)
         if nm == "RUSH":
             nm = "RUSH_HAND"
         if nm in ("RUSH_STICK", "RUSH_COLOR_STICK"):
@@ -240,7 +232,7 @@ class HandsAgent:
 
         allowed = {"MOUSE", "KEYBOARD", "PRESENTATION", "DRAW", "VKEY", "RUSH_HAND", "RUSH_COLOR"}
         if nm not in allowed:
-            print("[PY] apply_set_mode ignored:", new_mode)
+            print("[PY] apply_set_mode ignored:", new_mode, flush=True)
             return
 
         self.control.reset_ema()
@@ -268,7 +260,7 @@ class HandsAgent:
                 pass
 
         self.mode = nm
-        print("[PY] apply_set_mode ->", self.mode)
+        print("[PY] apply_set_mode ->", self.mode, flush=True)
 
     # ---------- capture ----------
     def _open_camera(self):
@@ -287,10 +279,8 @@ class HandsAgent:
 
     # ---------- main loop ----------
     def run(self):
-        print("[PY] running:", os.path.abspath(__file__))
-        print("[PY] WS_URL:", getattr(self.cfg, "ws_url", ""), "(disabled)" if getattr(self.cfg, "no_ws", False) else "")
-        print("[PY] CURSOR_HAND_LABEL:", self.cursor_hand_label)
-        print("[PY] NO_INJECT:", getattr(self.cfg, "no_inject", False))
+        print("[PY] running:", os.path.abspath(__file__), flush=True)
+        print("[PY] WS_URL:", getattr(self.cfg, "ws_url", ""), "(disabled)" if getattr(self.cfg, "no_ws", False) else "", flush=True)
 
         cap = self._open_camera()
         self.ws.start()
@@ -330,14 +320,14 @@ class HandsAgent:
             # rush left/right packs (hands-based default)
             rush_left, rush_right = self.rush_lr.pick(t, hands_list)
 
-            # RUSH_COLOR: override with HSV stick tracking (BLUE=Left, RED=Right)
+            # RUSH_COLOR: override with HSV stick tracking
             if str(self.mode).upper() == "RUSH_COLOR":
                 try:
                     rush_left, rush_right = self.rush_color.process(frame, t)
                 except Exception as e:
-                    print("[RUSH_COLOR] tracker error:", e)
+                    print("[RUSH_COLOR] tracker error:", e, flush=True)
 
-            # cursor / other selection (for non-rush UI + gestures)
+            # cursor / other selection
             cursor_lm = None
             other_lm = None
             if hands_list:
@@ -497,7 +487,7 @@ class HandsAgent:
             if mode_u == "VKEY":
                 self.vkey.update(t, can_vkey_click, cursor_lm, self.control.map_control_to_screen)
 
-            # send status (RUSH 포함)
+            # send status
             self._send_status(
                 fps=fps,
                 cursor_gesture=cursor_gesture,
@@ -524,19 +514,16 @@ class HandsAgent:
                     cv2.namedWindow("GestureOS Agent", cv2.WINDOW_NORMAL)
                     self.window_open = True
 
-                fn_on = (t < getattr(self.kb, "mod_until", 0.0)) or (t < getattr(self.ppt, "mod_until", 0.0))
-                line1 = f"mode={mode_u} enabled={self.enabled} locked={self.locked} cur={cursor_gesture} oth={other_gesture} FN={fn_on} noInject={no_inject}"
-                cv2.putText(frame, line1, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
-
-                # rush preview safe
                 lp = _pack_xy(rush_left)
                 rp = _pack_xy(rush_right)
+
+                line1 = f"mode={mode_u} enabled={self.enabled} locked={self.locked} cur={cursor_gesture} oth={other_gesture}"
+                cv2.putText(frame, line1, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
+
                 if lp is not None:
-                    cv2.putText(frame, f"RUSH L: ({lp[0]:.2f},{lp[1]:.2f}) {str((rush_left or {}).get('gesture','NONE'))}",
-                                (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 0), 2)
+                    cv2.putText(frame, f"RUSH L: ({lp[0]:.2f},{lp[1]:.2f})", (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 0), 2)
                 if rp is not None:
-                    cv2.putText(frame, f"RUSH R: ({rp[0]:.2f},{rp[1]:.2f}) {str((rush_right or {}).get('gesture','NONE'))}",
-                                (10, 125), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 0, 255), 2)
+                    cv2.putText(frame, f"RUSH R: ({rp[0]:.2f},{rp[1]:.2f})", (10, 125), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 0, 255), 2)
 
                 cv2.imshow("GestureOS Agent", frame)
 
@@ -547,7 +534,6 @@ class HandsAgent:
         cap.release()
         cv2.destroyAllWindows()
 
-    # ---------- status payload ----------
     def _send_status(
         self,
         fps: float,
@@ -569,16 +555,13 @@ class HandsAgent:
 
         mode_u = str(self.mode).upper()
 
-        # ✅ 외부(서버/프론트)에는 RUSH로만 보낸다
-        wire_mode = "RUSH" if mode_u.startswith("RUSH") else mode_u
-
         lp = _pack_xy(rush_left)
         rp = _pack_xy(rush_right)
 
         payload = {
             "type": "STATUS",
             "enabled": bool(self.enabled),
-            "mode": wire_mode,  # ✅ 중요
+            "mode": mode_u,  # ✅ 절대 RUSH로 뭉개지 말 것 (RUSH_HAND/RUSH_COLOR 그대로)
             "locked": bool(self.locked),
             "preview": bool(self.preview),
 
@@ -599,11 +582,11 @@ class HandsAgent:
             "connected": bool(self.ws.connected),
         }
 
-        # ✅ 러쉬 입력 타입은 보조 필드로
-        if wire_mode == "RUSH":
+        # 러쉬 입력 타입 제공(서버/프론트 표시용)
+        if mode_u.startswith("RUSH"):
             payload["rushInput"] = "COLOR" if mode_u == "RUSH_COLOR" else "HAND"
 
-        # pointer 초기화
+        # pointer
         payload["pointerX"] = None
         payload["pointerY"] = None
         payload["isTracking"] = False
@@ -612,19 +595,17 @@ class HandsAgent:
         if lp is not None:
             payload["leftPointerX"], payload["leftPointerY"] = lp
             payload["leftTracking"] = True
-            payload["leftGesture"] = str((rush_left or {}).get("gesture", "NONE"))
         else:
             payload["leftTracking"] = False
 
         if rp is not None:
             payload["rightPointerX"], payload["rightPointerY"] = rp
             payload["rightTracking"] = True
-            payload["rightGesture"] = str((rush_right or {}).get("gesture", "NONE"))
         else:
             payload["rightTracking"] = False
 
         # pointer 결정(단 한 번)
-        if wire_mode == "RUSH":
+        if mode_u.startswith("RUSH"):
             if rp is not None:
                 payload["pointerX"], payload["pointerY"] = rp
                 payload["isTracking"] = True
@@ -650,10 +631,8 @@ class HandsAgent:
 
         payload["tracking"] = bool(payload.get("isTracking", False))
 
-        # ---- WS send ----
         self.ws.send_dict(payload)
 
-        # ---- HUD overlay push (local) ----
         hud = getattr(self.cfg, "hud", None)
         if hud:
             hud_payload = dict(payload)

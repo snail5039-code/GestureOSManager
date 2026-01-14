@@ -78,7 +78,7 @@ public class ControlController {
   }
 
   @PostMapping("/mode")
-  public ResponseEntity<?> mode(@RequestParam String mode) {
+  public ResponseEntity<?> mode(@RequestParam(name = "mode") String mode) {
     ModeType m;
     try {
       m = ModeType.valueOf(mode.trim().toUpperCase());
