@@ -3,6 +3,7 @@ import TitleBar from "./components/TitleBar";
 import Dashboard from "./pages/Dashboard";
 import AgentHud from "./components/AgentHud";
 import Rush3DPage from "./pages/Rush3DPage";
+import GamePage from "./pages/GamePage";
 
 const VALID_THEMES = new Set(["dark", "light", "neon", "rose", "devil"]);
 
@@ -83,6 +84,9 @@ export default function App() {
 
         {screen === "rush" && (
           <Rush3DPage status={hudFeed?.status} connected={hudFeed?.connected ?? true} />
+        )}
+        {screen === "gamePage" && (
+          <GamePage status={hudFeed?.status} connected={hudFeed?.connected ?? true} />
         )}
       </main>
 

@@ -182,6 +182,18 @@ export default function TitleBar({
           >
             Rush
           </button>
+          <button
+            type="button"
+            onClick={() => onChangeScreen?.("gamePage")}
+            className={cn(
+              "px-3 py-1 text-xs rounded-md transition",
+              screen === "gamePage"
+                ? "bg-base-300/50 text-base-content"
+                : "opacity-80 hover:bg-base-300/30 hover:opacity-100"
+            )}
+          >
+            GamePage
+          </button>
         </div>
 
         {/* HUD 토글 */}
