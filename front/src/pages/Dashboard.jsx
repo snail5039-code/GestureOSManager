@@ -5,13 +5,22 @@ import { THEME } from "../theme/themeTokens";
 
 const POLL_MS = 500;
 
-const MODE_OPTIONS = ["MOUSE", "KEYBOARD", "PRESENTATION", "DRAW", "RUSH", "VKEY", "DEFAULT"];
+// ✅ 여기서부터 핵심: RUSH -> RUSH_HAND / RUSH_COLOR로 분리
+const MODE_OPTIONS = [
+  "MOUSE",
+  "KEYBOARD",
+  "PRESENTATION",
+  "DRAW",
+  "VKEY",
+  "DEFAULT",
+];
+
 const MODE_LABEL = {
   MOUSE: "마우스",
   KEYBOARD: "키보드",
   PRESENTATION: "프레젠테이션",
   DRAW: "그리기",
-  RUSH: "러쉬",
+  VKEY: "가상키보드",
   DEFAULT: "기본",
 };
 
@@ -54,7 +63,13 @@ function IconStop() {
 }
 function IconRefresh({ spinning }) {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className={cn("opacity-90", spinning && "animate-spin")}>
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      className={cn("opacity-90", spinning && "animate-spin")}
+    >
       <path
         d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6"
         stroke="currentColor"
@@ -210,12 +225,7 @@ function Switch({ t, checked, onChange, disabled }) {
       aria-checked={checked}
       role="switch"
     >
-      <span
-        className={cn(
-          "inline-block h-5 w-5 transform rounded-full bg-white transition",
-          checked ? "translate-x-5" : "translate-x-1"
-        )}
-      />
+      <span className={cn("inline-block h-5 w-5 transform rounded-full bg-white transition", checked ? "translate-x-5" : "translate-x-1")} />
     </button>
   );
 }
@@ -250,8 +260,6 @@ function PointerMiniMap({ t, theme, x, y }) {
   const top = cy === null ? 50 : cy * 100;
 
   const isBright = t._isBright ?? false;
-
-  // ✅ 요구사항: 포인터 네모 영역 흰색 (kuromi도 포함)
   const forceWhiteMap = theme === "rose" || theme === "kuromi";
 
   return (
@@ -329,7 +337,7 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
       serverPreview: typeof s.preview === "boolean" ? s.preview : undefined,
       pointerX: typeof s.pointerX === "number" ? s.pointerX : null,
       pointerY: typeof s.pointerY === "number" ? s.pointerY : null,
-      tracking: typeof s.tracking === "boolean" ? s.tracking : null,
+      tracking: typeof s.tracking === "boolean" ? s.tracking : (typeof s.isTracking === "boolean" ? s.isTracking : null),
     };
   }, [status, mode]);
 
@@ -450,12 +458,16 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
     }
   }, [fetchStatus]);
 
+  // ✅ 모드 바꾸면 바로 되게: 실행이 꺼져 있으면 자동 start 후 mode 변경
   const applyMode = useCallback(
     async (nextMode) => {
       setMode(nextMode);
       setBusy(true);
       setError("");
       try {
+        if (!derived.enabled) {
+          await api.post("/control/start");
+        }
         await api.post("/control/mode", null, { params: { mode: nextMode } });
         await fetchStatus();
       } catch (e) {
@@ -467,7 +479,7 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
         setBusy(false);
       }
     },
-    [fetchStatus]
+    [fetchStatus, derived.enabled]
   );
 
   const setLock = useCallback(
@@ -512,7 +524,6 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
   const canStart = !busy && !derived.enabled;
   const canStop = !busy && !!derived.enabled;
 
-  // ✅ 밝은 테마 판정은 기존대로 유지 (기능 영향 X)
   const isBright = theme === "light" || theme === "rose";
 
   return (
@@ -554,19 +565,11 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
                 "ml-2 inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold ring-1 transition",
                 isBright
                   ? "bg-slate-900/5 text-slate-900 ring-slate-200 hover:bg-slate-900/10"
-                  : cn(
-                      "bg-white/7 ring-white/14 hover:bg-white/12",
-                      t.text // ✅ 테마 텍스트 색 그대로
-                    )
+                  : cn("bg-white/7 ring-white/14 hover:bg-white/12", t.text)
               )}
               title="HUD 켬/끔"
             >
-              <span
-                className={cn(
-                  "h-2 w-2 rounded-full",
-                  hudOn ? "bg-sky-400" : isBright ? "bg-slate-400" : "bg-slate-500"
-                )}
-              />
+              <span className={cn("h-2 w-2 rounded-full", hudOn ? "bg-sky-400" : isBright ? "bg-slate-400" : "bg-slate-500")} />
               HUD {hudOn ? "켬" : "끔"}
             </button>
           </div>
@@ -636,24 +639,8 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
               right={busy ? <Badge t={t} tone="blue">처리 중</Badge> : <Badge t={t} tone="slate">대기</Badge>}
             >
               <div className="grid grid-cols-2 gap-3">
-                <ActionTile
-                  t={t}
-                  tone="green"
-                  icon={<IconPlay />}
-                  title="시작"
-                  desc="Start"
-                  onClick={start}
-                  disabled={!canStart}
-                />
-                <ActionTile
-                  t={t}
-                  tone="red"
-                  icon={<IconStop />}
-                  title="정지"
-                  desc="Stop"
-                  onClick={stop}
-                  disabled={!canStop}
-                />
+                <ActionTile t={t} tone="green" icon={<IconPlay />} title="시작" desc="Start" onClick={start} disabled={!canStart} />
+                <ActionTile t={t} tone="red" icon={<IconStop />} title="정지" desc="Stop" onClick={stop} disabled={!canStop} />
               </div>
 
               <div className={cn("mt-4 rounded-2xl ring-1 p-4 space-y-3", t.panelSoft)}>
@@ -682,12 +669,7 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
                 </div>
               </div>
 
-              <Btn
-                t={t}
-                onClick={fetchStatus}
-                disabled={busy}
-                className="mt-4 flex items-center justify-center gap-2"
-              >
+              <Btn t={t} onClick={fetchStatus} disabled={busy} className="mt-4 flex items-center justify-center gap-2">
                 <IconRefresh spinning={busy} />
                 새로고침
               </Btn>
