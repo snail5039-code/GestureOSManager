@@ -20,6 +20,9 @@ class AgentConfig:
 
     force_cursor_left: bool
 
+    # RUSH input source: HAND | COLOR
+    rush_input: str = "HAND"
+
     # websocket
     ws_url: str = DEFAULT_WS_URL
 
@@ -68,6 +71,18 @@ def parse_cli(argv: Optional[Iterable[str]] = None) -> Tuple[str, AgentConfig]:
             ws_url = a.split("=", 1)[1].strip()
         elif a == "--ws-url" and i + 1 < len(argv):
             ws_url = str(argv[i + 1]).strip()
+
+
+    # rush input selection
+    rush_input = None
+    for i, a in enumerate(argv):
+        if a.startswith("--rush-input="):
+            rush_input = a.split("=", 1)[1].strip().upper()
+        elif a == "--rush-input" and i + 1 < len(argv):
+            rush_input = str(argv[i + 1]).strip().upper()
+    if rush_input not in (None, "HAND", "COLOR"):
+        print("[PY] invalid --rush-input, fallback HAND:", rush_input)
+        rush_input = "HAND"
 
     headless = ("--headless" in args)
     no_ws = ("--no-ws" in args)

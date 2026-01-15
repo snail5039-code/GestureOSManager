@@ -132,6 +132,8 @@ RETICLE_PNG = {
     "PRESENTATION": "ppt.png",
     "KEYBOARD": "keyboard.png",
     "RUSH": "rush.png",
+    "RUSH_HAND": "rush.png",
+    "RUSH_COLOR": "rush.png",
     "VKEY": "keyboard.png",     # vkey 전용 이미지 있으면 바꾸세요
     "DEFAULT": "mouse.png",
 }
@@ -143,6 +145,8 @@ THEME = {
     "PRESENTATION": {"accent": "#60a5fa"},
     "KEYBOARD":     {"accent": "#a78bfa"},
     "RUSH":         {"accent": "#f472b6"},
+    "RUSH_HAND":    {"accent": "#f472b6"},
+    "RUSH_COLOR":   {"accent": "#f472b6"},
     "VKEY":         {"accent": "#34d399"},
     "DEFAULT":      {"accent": "#22c55e"},
 }
@@ -638,7 +642,7 @@ class OverlayHUD:
 
     def _bubble_text(self, st: dict, mode: str, locked: bool) -> str:
         mode_u = str(mode).upper()
-        if mode_u == "RUSH":
+        if mode_u.startswith("RUSH"):
             return ""
 
         bubble = st.get("cursorBubble", None)
