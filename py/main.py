@@ -12,6 +12,8 @@ import gestureos_agent.hud_overlay as ho
 from gestureos_agent.cursor_system import apply_invisible_cursor, restore_system_cursors
 from gestureos_agent.agents.hands_agent import HandsAgent
 
+from gestureos_agent.ws_client import WSClient
+
 
 print("[HUD] hud_overlay file =", ho.__file__, flush=True)
 
@@ -39,18 +41,6 @@ class CfgProxy:
     def __getattr__(self, name):
         return getattr(self._base, name)
 
-    def get(self, key, default=None):
-        b = self._base
-        if isinstance(b, dict):
-            return b.get(key, default)
-        return getattr(b, key, default)
-
-    def __getitem__(self, key):
-        b = self._base
-        if isinstance(b, dict):
-            return b[key]
-        return getattr(b, key)
-
 
 def main():
     agent_kind, cfg = parse_cli()
@@ -64,6 +54,37 @@ def main():
     hud = OverlayHUD(enable=(not no_hud))
     hud.start()
 
+    # ✅ Listen HUD show/hide commands from Spring WS (/ws/hud)
+    #    Front: POST /api/hud/show?enabled=true|false  -> Server broadcasts to /ws/hud
+    #    This client receives {"type":"SET_VISIBLE","enabled":true|false} and toggles the overlay panel.
+    try:
+        _no_ws = cfg.get("no_ws", False) if isinstance(cfg, dict) else getattr(cfg, "no_ws", False)
+    except Exception:
+        _no_ws = False
+
+    if (not _no_ws) and (not no_hud):
+        try:
+            agent_url = getattr(cfg, "ws_url", "ws://127.0.0.1:8080/ws/agent")
+            hud_url = agent_url.replace("/ws/agent", "/ws/hud") if "/ws/agent" in agent_url else agent_url.rstrip("/") + "/ws/hud"
+
+            def _on_hud_cmd(data: dict):
+                try:
+                    typ = str(data.get("type", "")).upper()
+                    if typ == "SET_VISIBLE":
+                        v = data.get("enabled", data.get("visible", True))
+                        hud.set_visible(bool(v))
+                    elif typ == "EXIT":
+                        hud.stop()
+                        os._exit(0)
+                except Exception as e:
+                    print("[HUD_WS] on_command error:", e, flush=True)
+
+            hud_ws = WSClient(hud_url, _on_hud_cmd, enabled=True)
+            hud_ws.start()
+            print("[HUD_WS] connecting:", hud_url, flush=True)
+        except Exception as e:
+            print("[HUD_WS] start failed:", e, flush=True)
+
     # OS 커서 숨기기(원할 때만)
     HIDE_OS_CURSOR = True
     if HIDE_OS_CURSOR and (not no_hud):
@@ -74,12 +95,8 @@ def main():
             print("[CURSOR] hide failed:", e, flush=True)
 
     try:
-        if isinstance(cfg, dict):
-            cfg_for_agent = dict(cfg)
-            cfg_for_agent["hud"] = hud
-        else:
-            cfg_for_agent = CfgProxy(cfg, hud)
-
+        # frozen cfg에 hud를 붙여서 전달
+        cfg_for_agent = CfgProxy(cfg, hud)
         HandsAgent(cfg_for_agent).run()
 
     finally:
