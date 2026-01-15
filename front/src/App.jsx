@@ -7,17 +7,31 @@ import Rush3DPage from "./pages/Rush3DPage";
 const VALID_THEMES = new Set(["dark", "light", "neon", "rose", "devil"]);
 
 export default function App() {
-  // HUD ON/OFF 상태 (기본 ON, 저장)
+  // ✅ WEB HUD(AgentHud) ON/OFF 상태 (기본 ON, 저장)
   const [hudOn, setHudOn] = useState(() => {
     const v = localStorage.getItem("hudOn");
     return v === null ? true : v === "1";
   });
 
+  // ✅ OS HUD(Python Overlay) ON/OFF 상태 (기본 ON, 저장)
+  const [osHudOn, setOsHudOn] = useState(() => {
+    const v = localStorage.getItem("osHudOn");
+    return v === null ? true : v === "1";
+  });
+
+  // ✅ WEB HUD: 저장만 (절대 /api/hud/show 호출하지 않음!)
   useEffect(() => {
     localStorage.setItem("hudOn", hudOn ? "1" : "0");
   }, [hudOn]);
 
+  // ✅ OS HUD: 저장 + 서버 호출 (/api/hud/show)
+  useEffect(() => {
+    localStorage.setItem("osHudOn", osHudOn ? "1" : "0");
+    fetch(`/api/hud/show?enabled=${osHudOn ? "true" : "false"}`, { method: "POST" }).catch(() => {});
+  }, [osHudOn]);
+
   const toggleHud = () => setHudOn((x) => !x);
+  const toggleOsHud = () => setOsHudOn((x) => !x);
 
   // 화면 전환
   const [screen, setScreen] = useState("dashboard");
@@ -62,6 +76,8 @@ export default function App() {
       <TitleBar
         hudOn={hudOn}
         onToggleHud={toggleHud}
+        osHudOn={osHudOn}
+        onToggleOsHud={toggleOsHud}
         screen={screen}
         onChangeScreen={setScreen}
         theme={theme}
@@ -86,6 +102,7 @@ export default function App() {
         )}
       </main>
 
+      {/* ✅ WEB HUD(AgentHud)만 hudOn으로 제어 */}
       {hudOn && (
         <AgentHud
           status={hudFeed?.status}

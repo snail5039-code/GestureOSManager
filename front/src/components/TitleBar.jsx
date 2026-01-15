@@ -1,4 +1,3 @@
-// src/components/TitleBar.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -9,6 +8,8 @@ function cn(...xs) {
 export default function TitleBar({
   hudOn,
   onToggleHud,
+  osHudOn,
+  onToggleOsHud,
   screen,
   onChangeScreen,
   theme,
@@ -184,7 +185,7 @@ export default function TitleBar({
           </button>
         </div>
 
-        {/* HUD 토글 */}
+        {/* ✅ WEB HUD 토글 (AgentHud) */}
         <button
           type="button"
           onClick={() => onToggleHud?.()}
@@ -194,9 +195,24 @@ export default function TitleBar({
               ? "bg-primary/15 ring-primary/25 text-base-content hover:bg-primary/20"
               : "bg-base-100/35 ring-base-300/50 opacity-90 hover:opacity-100 hover:bg-base-100/50"
           )}
-          title="Toggle HUD"
+          title="Toggle WEB HUD"
         >
           HUD: {hudOn ? "ON" : "OFF"}
+        </button>
+
+        {/* ✅ OS HUD 토글 (Python Overlay) */}
+        <button
+          type="button"
+          onClick={() => onToggleOsHud?.()}
+          className={cn(
+            "px-3 py-1 text-xs rounded-lg transition ring-1",
+            osHudOn
+              ? "bg-primary/10 ring-primary/20 text-base-content hover:bg-primary/15"
+              : "bg-base-100/35 ring-base-300/50 opacity-90 hover:opacity-100 hover:bg-base-100/50"
+          )}
+          title="Toggle OS HUD"
+        >
+          OS HUD: {osHudOn ? "ON" : "OFF"}
         </button>
       </div>
 

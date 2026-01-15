@@ -6,6 +6,10 @@
 # - Apply click-through to: widget hwnd + parent hwnd + root/ancestor hwnd + all descendants
 # - Hard fix: WM_NCHITTEST -> HTTRANSPARENT (subclass WndProc)
 # - Extra safety: Tk '-disabled' attribute (very effective on Win10/11)
+#
+# ✅ Added (ONLY what you asked):
+# - Hamburger handle window (clickable) to drag-move HUD (HUD stays click-through)
+# - Show/Hide HUD panel (HUD + handle + tip) while keeping reticle alive
 
 import os
 import threading
@@ -160,7 +164,8 @@ def _hex_dim(color_hex, a):
 class OverlayHUD:
     """
     HUD + Reticle + Tip bubble (ALL modes except RUSH)
-    All windows are click-through.
+    HUD/Reticle/Tip are click-through.
+    Handle is clickable to drag-move HUD.
     """
     _GLOBAL_LOCK = threading.Lock()
     _GLOBAL_STARTED = False
@@ -175,6 +180,16 @@ class OverlayHUD:
         self._phase = 0.0
         self._ct_tick = 0
 
+        # ✅ panel visibility
+        self._panel_visible = True
+
+        # ✅ drag state (handle)
+        self._dragging = False
+        self._drag_mx0 = 0
+        self._drag_my0 = 0
+        self._drag_hud_x0 = 0
+        self._drag_hud_y0 = 0
+
         # virtual screen (multi-monitor)
         self.vx = user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
         self.vy = user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
@@ -186,9 +201,11 @@ class OverlayHUD:
         self._hud_win = None
         self._ret_win = None
         self._tip_win = None
+        self._handle_win = None  # ✅
         self._hud_canvas = None
         self._ret_canvas = None
         self._tip_canvas = None
+        self._handle_canvas = None  # ✅
 
         self.HUD_W, self.HUD_H = 320, 118
         self.RET_S = 48
@@ -196,6 +213,11 @@ class OverlayHUD:
         # Tip bubble
         self.TIP_W, self.TIP_H = 230, 46
         self.TIP_OX, self.TIP_OY = 26, -66  # pointer 기준 offset
+
+        # ✅ Handle geometry
+        self.HANDLE_W, self.HANDLE_H = 30, 26
+        self.HANDLE_PAD_R = 14   # HUD 오른쪽에서 안쪽으로
+        self.HANDLE_PAD_T = 14   # HUD 위쪽에서 아래로
 
         # wndproc hooks (keep refs to prevent GC)
         self._old_wndproc = {}     # hwnd_int -> old_proc_ptr
@@ -210,6 +232,22 @@ class OverlayHUD:
 
         # ensure mutex released on exit (best-effort)
         atexit.register(self.stop)
+
+    # ---------------- public (show/hide) ----------------
+    def set_visible(self, visible: bool):
+        """Hide/Show OS HUD panel (HUD + handle + tip). Reticle stays."""
+        if not self.enable:
+            return
+        try:
+            self._q.put_nowait({"__cmd": "SET_VISIBLE", "visible": bool(visible)})
+        except Exception:
+            pass
+
+    def show_panel(self):
+        self.set_visible(True)
+
+    def hide_panel(self):
+        self.set_visible(False)
 
     # ---------------- single instance ----------------
     def _acquire_single_instance(self) -> bool:
@@ -424,6 +462,44 @@ class OverlayHUD:
             except Exception:
                 pass
 
+    # ✅ handle style (NOT click-through)
+    def _apply_handle_hwnd_style(self, hwnd_int: int):
+        """Handle must be clickable -> NO WS_EX_TRANSPARENT, NO HTTRANSPARENT WndProc."""
+        hwnd_int = _hwnd_int(hwnd_int)
+        if not hwnd_int:
+            return
+        try:
+            hwnd = wintypes.HWND(hwnd_int)
+
+            ex = _get_window_long_ptr(hwnd, GWL_EXSTYLE)
+            ex |= (WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)
+            ex &= (~WS_EX_TRANSPARENT)  # 중요: 클릭 가능해야 함
+            _set_window_long_ptr(hwnd, GWL_EXSTYLE, ex)
+
+            colorkey = wintypes.COLORREF(0x00010101)
+            user32.SetLayeredWindowAttributes(hwnd, colorkey, 0, LWA_COLORKEY)
+
+            user32.SetWindowPos(
+                hwnd, wintypes.HWND(0),
+                0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE
+            )
+        except Exception as e:
+            if HUD_DEBUG:
+                print("[HUD] handle hwnd style failed:", e)
+
+    # ✅ position handle relative to HUD
+    def _position_handle(self):
+        if self._hud_win is None or self._handle_win is None:
+            return
+        try:
+            hx = int(self._hud_win.winfo_x()) + self.HUD_W - self.HANDLE_W - self.HANDLE_PAD_R
+            hy = int(self._hud_win.winfo_y()) + self.HANDLE_PAD_T
+            hx, hy = self._clamp_screen_xy(hx, hy, self.HANDLE_W, self.HANDLE_H)
+            self._handle_win.geometry(f"{self.HANDLE_W}x{self.HANDLE_H}+{hx}+{hy}")
+        except Exception:
+            pass
+
     # ---------------- bubble text helpers ----------------
     @staticmethod
     def _pick_first_str(st: dict, keys):
@@ -581,6 +657,66 @@ class OverlayHUD:
         hud_canvas.pack(fill="both", expand=True)
         self._hud_canvas = hud_canvas
 
+        # ✅ Handle window (clickable)
+        handle = tk.Toplevel(root)
+        self._handle_win = handle
+        handle.overrideredirect(True)
+        handle.attributes("-topmost", True)
+        handle.configure(bg=TRANSPARENT)
+        try:
+            handle.wm_attributes("-transparentcolor", TRANSPARENT)
+        except Exception:
+            pass
+        handle.geometry(f"{self.HANDLE_W}x{self.HANDLE_H}+20+20")
+
+        handle_canvas = tk.Canvas(
+            handle, width=self.HANDLE_W, height=self.HANDLE_H,
+            bd=0, highlightthickness=0, bg=TRANSPARENT
+        )
+        handle_canvas.pack(fill="both", expand=True)
+        self._handle_canvas = handle_canvas
+
+        # Make handle window non-activating toolwindow but CLICKABLE
+        try:
+            handle.update_idletasks()
+            self._apply_handle_hwnd_style(handle.winfo_id())
+        except Exception:
+            pass
+
+        # Bind drag on handle
+        def _on_press(e):
+            self._dragging = True
+            self._drag_mx0 = e.x_root
+            self._drag_my0 = e.y_root
+            try:
+                self._drag_hud_x0 = int(hud.winfo_x())
+                self._drag_hud_y0 = int(hud.winfo_y())
+            except Exception:
+                self._drag_hud_x0 = 20
+                self._drag_hud_y0 = 20
+
+        def _on_drag(e):
+            if not self._dragging:
+                return
+            dx = int(e.x_root - self._drag_mx0)
+            dy = int(e.y_root - self._drag_my0)
+            nx = self._drag_hud_x0 + dx
+            ny = self._drag_hud_y0 + dy
+            nx, ny = self._clamp_screen_xy(nx, ny, self.HUD_W, self.HUD_H)
+            try:
+                hud.geometry(f"{self.HUD_W}x{self.HUD_H}+{nx}+{ny}")
+            except Exception:
+                pass
+            self._position_handle()
+
+        def _on_release(_e):
+            self._dragging = False
+
+        for ww in (handle, handle_canvas):
+            ww.bind("<ButtonPress-1>", _on_press)
+            ww.bind("<B1-Motion>", _on_drag)
+            ww.bind("<ButtonRelease-1>", _on_release)
+
         # Reticle window
         ret = tk.Toplevel(root)
         self._ret_win = ret
@@ -619,14 +755,14 @@ class OverlayHUD:
         tip_canvas.pack(fill="both", expand=True)
         self._tip_canvas = tip_canvas
 
-        # Disable input at Tk level (extra safety)
+        # Disable input at Tk level (extra safety) - keep handle clickable
         for w in (hud, ret, tip):
             try:
                 w.attributes("-disabled", True)
             except Exception:
                 pass
 
-        # Click-through hardening
+        # Click-through hardening (handle 제외!)
         self._apply_click_through(hud)
         self._apply_click_through(ret)
         self._apply_click_through(tip)
@@ -647,13 +783,16 @@ class OverlayHUD:
             )
             self._ret_img_mode = "DEFAULT"
 
+        # initial handle position
+        self._position_handle()
+
         last_t = time.time()
 
         def tick():
             nonlocal last_t
 
             if self._stop.is_set():
-                for w in (hud, ret, tip, root):
+                for w in (hud, handle, ret, tip, root):
                     try:
                         w.destroy()
                     except Exception:
@@ -668,6 +807,12 @@ class OverlayHUD:
                     if isinstance(item, dict) and item.get("__cmd") == "STOP":
                         stop_cmd = True
                         break
+
+                    # ✅ handle show/hide command
+                    if isinstance(item, dict) and item.get("__cmd") == "SET_VISIBLE":
+                        self._panel_visible = bool(item.get("visible", True))
+                        continue
+
                     latest = item
             except Exception:
                 pass
@@ -679,6 +824,11 @@ class OverlayHUD:
 
             if isinstance(latest, dict):
                 self._latest = latest
+                # ✅ also accept payload key based visible flag (optional)
+                if "hudVisible" in latest:
+                    self._panel_visible = bool(latest.get("hudVisible"))
+                elif "panelVisible" in latest:
+                    self._panel_visible = bool(latest.get("panelVisible"))
 
             nowt = time.time()
             dt = max(1e-6, nowt - last_t)
@@ -696,6 +846,11 @@ class OverlayHUD:
                         w.attributes("-disabled", True)
                     except Exception:
                         pass
+                # handle style refresh (keep clickable)
+                try:
+                    self._apply_handle_hwnd_style(handle.winfo_id())
+                except Exception:
+                    pass
 
             root.after(16, tick)
 
@@ -704,6 +859,25 @@ class OverlayHUD:
             root.mainloop()
         except Exception:
             pass
+
+    def _draw_handle(self, accent: str):
+        """Draw hamburger icon (handle canvas)."""
+        hc = self._handle_canvas
+        if hc is None:
+            return
+        hc.delete("all")
+
+        bg = "#0b1222"
+        border = _hex_dim(accent, 0.85)
+        fg = "#E5E7EB"
+
+        # small rounded-ish box
+        hc.create_rectangle(1, 1, self.HANDLE_W - 1, self.HANDLE_H - 1, fill=bg, outline=border, width=2)
+
+        y0 = (self.HANDLE_H // 2) - 6
+        for i in range(3):
+            yy = y0 + i * 6
+            hc.create_line(8, yy, self.HANDLE_W - 8, yy, fill=fg, width=2)
 
     def _render(self):
         st = self._latest if isinstance(self._latest, dict) else {}
@@ -716,39 +890,64 @@ class OverlayHUD:
         fps = float(st.get("fps", 0.0) or 0.0)
         connected = bool(st.get("connected", True))
 
+        # ✅ panel show/hide (HUD + handle + tip)
+        if self._hud_win is not None and self._handle_win is not None:
+            try:
+                if self._panel_visible:
+                    self._hud_win.deiconify()
+                    self._handle_win.deiconify()
+                else:
+                    self._hud_win.withdraw()
+                    self._handle_win.withdraw()
+                    if self._tip_win is not None:
+                        self._tip_win.withdraw()
+            except Exception:
+                pass
+
+        # keep handle attached to HUD even when visible
+        if self._panel_visible:
+            self._position_handle()
+            self._draw_handle(accent)
+
         # ---- HUD panel ----
         c = self._hud_canvas
         if c is None:
             return
-        c.delete("all")
 
-        bg = "#08101f"
-        border = _hex_dim(accent, 0.80)
-        fg = "#E5E7EB"
-        sub = "#9CA3AF"
+        # if hidden, don't waste drawing hud (reticle still works)
+        if self._panel_visible:
+            c.delete("all")
 
-        c.create_rectangle(8, 8, self.HUD_W - 8, self.HUD_H - 8, fill=bg, outline=border, width=2)
-        c.create_rectangle(8, 8, 14, self.HUD_H - 8, fill=accent, outline="")
+            bg = "#08101f"
+            border = _hex_dim(accent, 0.80)
+            fg = "#E5E7EB"
+            sub = "#9CA3AF"
 
-        dot = "#22c55e" if connected else "#ef4444"
-        c.create_oval(20, 18, 28, 26, fill=dot, outline="")
-        c.create_text(34, 22, anchor="w", fill=fg, font=("Segoe UI", 11, "bold"), text=mode)
+            c.create_rectangle(8, 8, self.HUD_W - 8, self.HUD_H - 8, fill=bg, outline=border, width=2)
+            c.create_rectangle(8, 8, 14, self.HUD_H - 8, fill=accent, outline="")
 
-        pill_text = "LOCK" if locked else "OK"
-        pill_fill = "#f59e0b" if locked else _hex_dim(accent, 0.55)
-        c.create_rectangle(self.HUD_W - 86, 14, self.HUD_W - 16, 34, fill=pill_fill, outline="")
-        c.create_text(self.HUD_W - 51, 24, fill="#050a14", font=("Segoe UI", 9, "bold"), text=pill_text)
+            dot = "#22c55e" if connected else "#ef4444"
+            c.create_oval(20, 18, 28, 26, fill=dot, outline="")
+            c.create_text(34, 22, anchor="w", fill=fg, font=("Segoe UI", 11, "bold"), text=mode)
 
-        c.create_text(20, 52, anchor="w", fill=sub, font=("Segoe UI", 9), text=f"GESTURE: {gesture}")
-        c.create_text(20, 70, anchor="w", fill=sub, font=("Segoe UI", 9), text=f"TRACK: {'ON' if tracking else 'OFF'}")
-        c.create_text(self.HUD_W - 20, 70, anchor="e", fill=sub, font=("Segoe UI", 9), text=f"{fps:.1f} FPS")
+            # pill shifted left so it doesn't overlap handle
+            pill_text = "LOCK" if locked else "OK"
+            pill_fill = "#f59e0b" if locked else _hex_dim(accent, 0.55)
+            pill_x1 = self.HUD_W - 16 - (self.HANDLE_W + 10)  # shift left
+            pill_x0 = pill_x1 - 70
+            c.create_rectangle(pill_x0, 14, pill_x1, 34, fill=pill_fill, outline="")
+            c.create_text((pill_x0 + pill_x1)//2, 24, fill="#050a14", font=("Segoe UI", 9, "bold"), text=pill_text)
 
-        base_y = 96
-        for i in range(0, 12):
-            x = 20 + i * 24
-            amp = 6 if tracking else 2
-            y = base_y + math.sin(self._phase * 2.2 + i * 0.55) * amp
-            c.create_line(x, base_y, x + 18, y, fill=_hex_dim(accent, 0.55), width=2)
+            c.create_text(20, 52, anchor="w", fill=sub, font=("Segoe UI", 9), text=f"GESTURE: {gesture}")
+            c.create_text(20, 70, anchor="w", fill=sub, font=("Segoe UI", 9), text=f"TRACK: {'ON' if tracking else 'OFF'}")
+            c.create_text(self.HUD_W - 20, 70, anchor="e", fill=sub, font=("Segoe UI", 9), text=f"{fps:.1f} FPS")
+
+            base_y = 96
+            for i in range(0, 12):
+                x = 20 + i * 24
+                amp = 6 if tracking else 2
+                y = base_y + math.sin(self._phase * 2.2 + i * 0.55) * amp
+                c.create_line(x, base_y, x + 18, y, fill=_hex_dim(accent, 0.55), width=2)
 
         # ---- Reticle / Tip (always follow OS cursor) ----
         if self._ret_win is None or self._ret_canvas is None:
@@ -756,7 +955,6 @@ class OverlayHUD:
 
         osx, osy = self._get_os_cursor_xy()
         if osx is None or osy is None:
-            # extremely rare; if can't get OS cursor, just skip this frame
             return
 
         # Keep reticle window visible always
@@ -800,7 +998,6 @@ class OverlayHUD:
                 tags=("RETICLE_IMG",)
             )
         else:
-            # Only swap image; no duplicates.
             self._ret_canvas.itemconfig(self._ret_img_item, image=img)
 
         self._ret_img_mode = key
@@ -809,6 +1006,14 @@ class OverlayHUD:
         tipw = self._tip_win
         tipc = self._tip_canvas
         if tipw is None or tipc is None:
+            return
+
+        # if panel hidden, keep tip hidden too
+        if not self._panel_visible:
+            try:
+                tipw.withdraw()
+            except Exception:
+                pass
             return
 
         bubble = self._bubble_text(st, mode, locked).strip()
