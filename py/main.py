@@ -1,22 +1,10 @@
+# main.py
 import os
 import sys
 import time
-import math
 import ctypes
+import multiprocessing as mp
 from dataclasses import replace
-
-from gestureos_agent.config import parse_cli
-from gestureos_agent.hud_overlay import OverlayHUD
-import gestureos_agent.hud_overlay as ho
-
-from gestureos_agent.cursor_system import apply_invisible_cursor, restore_system_cursors
-from gestureos_agent.agents.hands_agent import HandsAgent
-
-from gestureos_agent.ws_client import WSClient
-
-
-print("[HUD] hud_overlay file =", ho.__file__, flush=True)
-
 
 def _set_dpi_awareness():
     # Windows DPI scaling에서도 좌표계 일치시키기
@@ -28,10 +16,6 @@ def _set_dpi_awareness():
         except Exception:
             pass
 
-
-_set_dpi_awareness()
-
-
 class CfgProxy:
     """frozen dataclass cfg에도 hud를 '추가로' 제공하기 위한 래퍼"""
     def __init__(self, base, hud):
@@ -41,8 +25,20 @@ class CfgProxy:
     def __getattr__(self, name):
         return getattr(self._base, name)
 
-
 def main():
+    _set_dpi_awareness()
+
+    # ✅ 중요: spawn 자식 프로세스가 main 재-import 할 때 무거운 import를 피하려고
+    #    프로젝트 모듈들은 main() 안에서 import 한다.
+    from gestureos_agent.config import parse_cli
+    from gestureos_agent.hud_overlay import OverlayHUD
+    import gestureos_agent.hud_overlay as ho
+    from gestureos_agent.cursor_system import apply_invisible_cursor, restore_system_cursors
+    from gestureos_agent.agents.hands_agent import HandsAgent
+    from gestureos_agent.ws_client import WSClient
+
+    print("[HUD] hud_overlay file =", ho.__file__, flush=True)
+
     agent_kind, cfg = parse_cli()
 
     # Backward-compat: --agent=color -> start RUSH_COLOR
@@ -52,16 +48,16 @@ def main():
     no_hud = ("--no-hud" in sys.argv)
 
     hud = OverlayHUD(enable=(not no_hud))
-    hud.start()
+    if not no_hud:
+        hud.start()
 
     # ✅ Listen HUD show/hide commands from Spring WS (/ws/hud)
-    #    Front: POST /api/hud/show?enabled=true|false  -> Server broadcasts to /ws/hud
-    #    This client receives {"type":"SET_VISIBLE","enabled":true|false} and toggles the overlay panel.
     try:
         _no_ws = cfg.get("no_ws", False) if isinstance(cfg, dict) else getattr(cfg, "no_ws", False)
     except Exception:
         _no_ws = False
 
+    hud_ws = None
     if (not _no_ws) and (not no_hud):
         try:
             agent_url = getattr(cfg, "ws_url", "ws://127.0.0.1:8080/ws/agent")
@@ -95,18 +91,23 @@ def main():
             print("[CURSOR] hide failed:", e, flush=True)
 
     try:
-        # frozen cfg에 hud를 붙여서 전달
         cfg_for_agent = CfgProxy(cfg, hud)
         HandsAgent(cfg_for_agent).run()
-
     finally:
         if HIDE_OS_CURSOR and (not no_hud):
             try:
                 restore_system_cursors()
             except Exception:
                 pass
-        hud.stop()
-
+        try:
+            hud.stop()
+        except Exception:
+            pass
 
 if __name__ == "__main__":
+    mp.freeze_support()
+    try:
+        mp.set_start_method("spawn", force=True)
+    except Exception:
+        pass
     main()
