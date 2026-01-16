@@ -1,23 +1,33 @@
 package com.example.xrpad
 
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.*
 import android.Manifest
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.google.mediapipe.framework.image.MPImage
@@ -28,6 +38,8 @@ import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker.HandLandmarkerOptions
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import org.json.JSONObject
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -40,17 +52,37 @@ private enum class PointerSource { INDEX_TIP, PALM_CENTER }
 
 class MainActivity : ComponentActivity() {
 
-    // ✅ PC IPv4 / 스트림 URL
-    private val host = "192.168.5.5"
-    private val udpPort = 39500
-    private val streamUrl = "http://192.168.5.5:8081/mjpeg"
+    // =========================================================================
+    // 1) 페어링 기본값 (개발 기본) + 저장된 값이 있으면 덮어씀
+    //    ✅ UDP 기본값은 39500 (요구사항)
+    // =========================================================================
+    private val defaultPairing = PairingConfig(
+        pc = "192.168.5.5",
+        httpPort = 8081,
+        udpPort = 39500,
+        name = "PC"
+    )
 
+    // Compose가 streamUrl을 자동 갱신하도록 pairing을 state로 관리
+    private var pairing by mutableStateOf(defaultPairing)
+
+    // UDP 송신에서 즉시 참조할 “라이브 타겟”
+    @Volatile private var hostLive: String = defaultPairing.pc
+    @Volatile private var udpPortLive: Int = defaultPairing.udpPort
+
+    // 포인터 소스(원하는 값 유지)
     private val pointerSource = PointerSource.INDEX_TIP
 
+    // =========================================================================
+    // 2) UDP 소켓/주소 준비 (네트워크 스레드)
+    // =========================================================================
     private val netExec = Executors.newSingleThreadExecutor()
     private var socket: DatagramSocket? = null
     private var addr: InetAddress? = null
 
+    // =========================================================================
+    // 3) 카메라 권한
+    // =========================================================================
     private var hasCameraPermission by mutableStateOf(false)
     private val requestCameraPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -60,22 +92,86 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // 소켓만 만들어두고, addr은 applyPairing에서 갱신
         netExec.execute {
             socket = DatagramSocket()
-            addr = InetAddress.getByName(host)
         }
 
+        // 카메라 권한 체크
         hasCameraPermission =
             ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
         if (!hasCameraPermission) requestCameraPermission.launch(Manifest.permission.CAMERA)
 
+        // 저장된 페어링이 있으면 적용
+        val saved = PairingPrefs.load(this)
+        if (saved.isValid()) {
+            applyPairing(saved, persist = false)
+        } else {
+            applyPairing(defaultPairing, persist = false)
+        }
+
         setContent {
+            val ctx = LocalContext.current
+            val handler = remember { Handler(Looper.getMainLooper()) }
+
+            // QR 스캔 중이면 HandTrackerEngine을 꺼서 카메라 충돌 방지
+            var scanActive by remember { mutableStateOf(false) }
+
+            // QR 런처: 결과 문자열을 받으면 파싱 후 pairing 적용
+            val qrLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
+                scanActive = false
+
+                val text = result.contents
+                if (text.isNullOrBlank()) return@rememberLauncherForActivityResult
+
+                Log.d("PAIR", "QR=$text")
+
+                val cfg = parsePairing(text)
+                if (cfg != null && cfg.isValid()) {
+                    applyPairing(cfg, persist = true)
+                    Toast.makeText(
+                        ctx,
+                        "페어링 적용: ${cfg.pc}:${cfg.httpPort} / UDP ${cfg.udpPort}",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                } else {
+                    Toast.makeText(ctx, "페어링 QR 형식이 아닙니다.", Toast.LENGTH_SHORT).show()
+                }
+            }
+
+            // 스캔 시작 함수
+            fun startQrScan() {
+                if (!hasCameraPermission) {
+                    requestCameraPermission.launch(Manifest.permission.CAMERA)
+                    return
+                }
+
+                // HandTrackerEngine을 잠깐 내려서 카메라 unbind 되도록 유도
+                scanActive = true
+
+                // 카메라 자원 반납 타이밍 조금 준 다음 스캔 화면 오픈
+                handler.postDelayed({
+                    val opt = ScanOptions()
+                        .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                        .setPrompt("PC 페어링 QR을 스캔하세요")
+                        .setBeepEnabled(false)
+                        .setOrientationLocked(false)
+                    qrLauncher.launch(opt)
+                }, 120)
+            }
+
+            // =========================================================================
+            // 메인 UI
+            // - streamUrl은 pairing 값으로 자동 생성
+            // - PAIR 버튼으로 QR 스캔
+            // - HandTrackerEngine은 scanActive 동안 비활성화
+            // =========================================================================
             XRPadApp(
-                streamUrl = streamUrl,
-                host = host,
-                udpPort = udpPort,
+                streamUrl = pairing.streamUrl(),
                 hasCameraPermission = hasCameraPermission,
                 pointerSource = pointerSource,
+                scanActive = scanActive,
+                onOpenPairing = { startQrScan() },
                 onSend = { x01, y01, gesture, tracking ->
                     sendXR(x01, y01, gesture, tracking)
                 }
@@ -83,6 +179,10 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // =========================================================================
+    // UDP 메시지 송신 (폰 → PC)
+    // - 포트는 항상 udpPortLive (기본 39500, QR로 변경 가능)
+    // =========================================================================
     private fun sendXR(x: Float, y: Float, gesture: String, tracking: Boolean) {
         val msg = JSONObject().apply {
             put("type", "XR_INPUT")
@@ -93,13 +193,60 @@ class MainActivity : ComponentActivity() {
             put("tracking", tracking)
         }.toString()
 
+        // 현재 라이브 타겟
+        val targetPort = udpPortLive
+
         netExec.execute {
             try {
                 val s = socket ?: return@execute
                 val a = addr ?: return@execute
                 val data = msg.toByteArray(Charsets.UTF_8)
-                s.send(DatagramPacket(data, data.size, a, udpPort))
-            } catch (_: Exception) {}
+                s.send(DatagramPacket(data, data.size, a, targetPort))
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    // =========================================================================
+    // pairing 적용: streamUrl / UDP 타겟 변경 + 저장(선택)
+    // =========================================================================
+    private fun applyPairing(cfg: PairingConfig, persist: Boolean) {
+        pairing = cfg
+        hostLive = cfg.pc
+        udpPortLive = cfg.udpPort
+
+        if (persist) PairingPrefs.save(this, cfg)
+
+        // 주소 해석은 네트워크 스레드에서
+        netExec.execute {
+            try {
+                addr = if (cfg.pc.isNotBlank()) InetAddress.getByName(cfg.pc) else null
+            } catch (_: Exception) {
+                addr = null
+            }
+        }
+    }
+
+    // =========================================================================
+    // QR 문자열 파싱
+    // 기대 형식:
+    //   gestureos://pair?pc=192.168.5.5&http=8081&udp=39500&name=KOREAIT
+    // =========================================================================
+    private fun parsePairing(text: String): PairingConfig? {
+        return try {
+            val u = Uri.parse(text)
+            val schemeOk = (u.scheme ?: "").equals("gestureos", ignoreCase = true)
+            val hostOk = (u.host ?: "").equals("pair", ignoreCase = true)
+            if (!schemeOk || !hostOk) return null
+
+            val pc = (u.getQueryParameter("pc") ?: "").trim()
+            val http = (u.getQueryParameter("http") ?: "").toIntOrNull() ?: 0
+            val udp = (u.getQueryParameter("udp") ?: "").toIntOrNull() ?: 0
+            val name = (u.getQueryParameter("name") ?: "PC").trim().ifBlank { "PC" }
+
+            PairingConfig(pc = pc, httpPort = http, udpPort = udp, name = name)
+        } catch (_: Exception) {
+            null
         }
     }
 
@@ -117,6 +264,7 @@ fun StreamScreen(
     pointerY: Float,
     tracking: Boolean
 ) {
+    // 네 프로젝트에 이미 있는 카드보드 스트림 렌더러
     CardboardStreamView(
         streamUrl = streamUrl,
         pointerX = pointerX,
@@ -124,22 +272,26 @@ fun StreamScreen(
         tracking = tracking
     )
 }
+
+/**
+ * 앱 메인(스트림 + 레티클 + 손 추적)
+ * - scanActive=true일 때 손 추적을 꺼서 QR 스캐너와 카메라 충돌을 방지한다.
+ */
 @Composable
 private fun XRPadApp(
     streamUrl: String,
-    host: String,
-    udpPort: Int,
     hasCameraPermission: Boolean,
     pointerSource: PointerSource,
+    scanActive: Boolean,
+    onOpenPairing: () -> Unit,
     onSend: (Float, Float, String, Boolean) -> Unit
 ) {
-    // StreamScreen에 넘길 포인터 상태(레티클)
     var pointerX by remember { mutableStateOf(0.5f) }
     var pointerY by remember { mutableStateOf(0.5f) }
     var tracking by remember { mutableStateOf(false) }
 
     Box(Modifier.fillMaxSize()) {
-        // ✅ 카드보드 스트림 + 레티클
+        // 1) 카드보드 스트림 + 레티클
         StreamScreen(
             streamUrl = streamUrl,
             pointerX = pointerX,
@@ -147,9 +299,16 @@ private fun XRPadApp(
             tracking = tracking,
         )
 
-        // ✅ 카메라 분석(보이지 않게 1dp 투명)
+        // 2) 좌상단 PAIR 버튼 (Material 의존성 없이 BasicText로 구성)
+        PairButton(
+            onClick = onOpenPairing,
+            modifier = Modifier.align(Alignment.TopStart).padding(12.dp)
+        )
+
+        // 3) 손 추적(카메라 분석)
+        //    - scanActive일 땐 disabled → 카메라 unbind로 QR 스캐너에 양보
         HandTrackerEngine(
-            hasCameraPermission = hasCameraPermission,
+            enabled = hasCameraPermission && !scanActive,
             pointerSource = pointerSource,
             onPointer = { x, y, tr ->
                 pointerX = x
@@ -162,8 +321,31 @@ private fun XRPadApp(
 }
 
 @Composable
+private fun PairButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .background(Color(0xAA000000), RoundedCornerShape(12.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+    ) {
+        BasicText(
+            text = "PAIR",
+            style = TextStyle(color = Color.White, fontWeight = FontWeight.Bold)
+        )
+    }
+}
+
+/**
+ * HandTrackerEngine
+ * - enabled=false면 카메라/모델을 전부 내려서(Dispose) QR 스캔 카메라와 충돌 방지
+ * - 기존 너 로직을 최대한 유지하면서 “enabled + providerRef unbind”만 추가
+ */
+@Composable
 private fun HandTrackerEngine(
-    hasCameraPermission: Boolean,
+    enabled: Boolean,
     pointerSource: PointerSource,
     onPointer: (Float, Float, Boolean) -> Unit,
     onSend: (Float, Float, String, Boolean) -> Unit
@@ -171,6 +353,9 @@ private fun HandTrackerEngine(
     val ctx = LocalContext.current
     val mainExecutor = remember { ContextCompat.getMainExecutor(ctx) }
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
+
+    // provider를 기억해뒀다가 dispose에서 unbindAll()로 카메라 반납
+    var providerRef by remember { mutableStateOf<ProcessCameraProvider?>(null) }
 
     // =========================
     // 튜닝 (원래 마우스 느낌)
@@ -272,9 +457,10 @@ private fun HandTrackerEngine(
 
     // =========================
     // MediaPipe HandLandmarker
+    // - enabled=false면 null로 내려서 dispose 유도
     // =========================
-    val landmarker: HandLandmarker? = remember(hasCameraPermission) {
-        if (!hasCameraPermission) return@remember null
+    val landmarker: HandLandmarker? = remember(enabled) {
+        if (!enabled) return@remember null
         try {
             val base = BaseOptions.builder()
                 .setModelAssetPath("hand_landmarker.task")
@@ -292,12 +478,18 @@ private fun HandTrackerEngine(
         }
     }
 
-    DisposableEffect(Unit) {
+    // enabled 상태로 들어왔을 때만 effect가 생기고,
+    // enabled=false로 빠지면 컴포지션에서 사라지며 onDispose가 실행됨.
+    DisposableEffect(enabled) {
         onDispose {
+            try { providerRef?.unbindAll() } catch (_: Exception) {}
             try { landmarker?.close() } catch (_: Exception) {}
             try { analysisExecutor.shutdown() } catch (_: Exception) {}
         }
     }
+
+    // 카메라 권한/모델 준비 안 됐으면 종료
+    if (!enabled || landmarker == null) return
 
     fun sendEventNow(x: Float, y: Float, gesture: String) {
         val now = System.currentTimeMillis()
@@ -429,10 +621,7 @@ private fun HandTrackerEngine(
         }
     }
 
-    // 카메라 권한/모델 준비 안 됐으면 종료
-    if (!hasCameraPermission || landmarker == null) return
-
-    // ✅ 화면엔 안 보이게 PreviewView를 1dp 투명으로만 둠(카메라 파이프라인 유지용)
+    // ✅ 화면엔 안 보이게 PreviewView를 1dp 투명으로 둠(카메라 파이프라인 유지용)
     AndroidView(
         modifier = Modifier.size(1.dp).alpha(0f),
         factory = { viewCtx ->
@@ -441,6 +630,7 @@ private fun HandTrackerEngine(
             val providerFuture = ProcessCameraProvider.getInstance(viewCtx)
             providerFuture.addListener({
                 val provider = providerFuture.get()
+                providerRef = provider // dispose에서 unbindAll 가능하게 저장
 
                 val preview = Preview.Builder().build().also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
