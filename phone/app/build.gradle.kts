@@ -56,6 +56,8 @@ dependencies {
     implementation("androidx.camera:camera-view:1.3.4")
     implementation("com.google.mediapipe:tasks-vision:0.10.14")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+    implementation("com.google.zxing:core:3.5.3")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

@@ -31,6 +31,7 @@ export default function TitleBar({
   onChangeScreen,
   theme,
   setTheme,
+  onOpenPairing,
 
   // ✅ 추가: Dashboard 폴링 결과를 여기로 올려서 표시
   agentStatus, // { connected:boolean, locked:boolean, mode:string, modeText?:string }
@@ -91,7 +92,10 @@ export default function TitleBar({
     const width = Math.max(180, r.width + 24);
 
     const desiredLeft = r.right - width;
-    const left = Math.max(margin, Math.min(desiredLeft, window.innerWidth - width - margin));
+    const left = Math.max(
+      margin,
+      Math.min(desiredLeft, window.innerWidth - width - margin)
+    );
     const top = Math.min(r.bottom + margin, window.innerHeight - margin);
 
     setPos({ top, left, width });
@@ -225,7 +229,10 @@ export default function TitleBar({
 
         {/* ✅ 여기: 연결/잠금/모드만 살려서 위쪽으로 */}
         <div className="ml-2 flex items-center gap-1.5">
-          <StatusChip tone={connected ? "ok" : "bad"} title="에이전트 연결 상태">
+          <StatusChip
+            tone={connected ? "ok" : "bad"}
+            title="에이전트 연결 상태"
+          >
             {connected ? "연결됨" : "끊김"}
           </StatusChip>
           <StatusChip tone={locked ? "bad" : "ok"} title="제스처 잠금 상태">
@@ -235,6 +242,21 @@ export default function TitleBar({
             모드: {modeText}
           </StatusChip>
         </div>
+
+        <button
+          type="button"
+          onClick={() => onOpenPairing?.()}
+          className={cn(
+            "ml-2 px-3 py-1 text-xs rounded-lg ring-1",
+            "bg-base-100/35 ring-base-300/50",
+            "transition-all duration-150",
+            "hover:bg-base-100/55 hover:-translate-y-[1px] hover:shadow-md",
+            "active:translate-y-0 active:shadow-none"
+          )}
+          title="폰 페어링 QR"
+        >
+          휴대폰 연결
+        </button>
 
         {/* WEB HUD 토글 */}
         <button
@@ -268,7 +290,10 @@ export default function TitleBar({
       </div>
 
       {/* RIGHT */}
-      <div className="ml-auto flex items-center gap-2" style={{ WebkitAppRegion: "no-drag" }}>
+      <div
+        className="ml-auto flex items-center gap-2"
+        style={{ WebkitAppRegion: "no-drag" }}
+      >
         <button
           ref={btnRef}
           type="button"
@@ -289,13 +314,25 @@ export default function TitleBar({
         {ThemePopover}
 
         <div className="flex items-center gap-2">
-          <button className="w-10 h-8 rounded-md hover:bg-base-300/40" onClick={onMin} title="Minimize">
+          <button
+            className="w-10 h-8 rounded-md hover:bg-base-300/40"
+            onClick={onMin}
+            title="Minimize"
+          >
             —
           </button>
-          <button className="w-10 h-8 rounded-md hover:bg-base-300/40" onClick={onMax} title="Maximize">
+          <button
+            className="w-10 h-8 rounded-md hover:bg-base-300/40"
+            onClick={onMax}
+            title="Maximize"
+          >
             □
           </button>
-          <button className="w-10 h-8 rounded-md hover:bg-error/25" onClick={onClose} title="Close">
+          <button
+            className="w-10 h-8 rounded-md hover:bg-error/25"
+            onClick={onClose}
+            title="Close"
+          >
             ×
           </button>
         </div>

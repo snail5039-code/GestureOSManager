@@ -3,6 +3,7 @@ import TitleBar from "./components/TitleBar";
 import Dashboard from "./pages/Dashboard";
 import AgentHud from "./components/AgentHud";
 import Rush3DPage from "./pages/Rush3DPage";
+import PairingQrModal from "./components/PairingQrModal";
 
 const VALID_THEMES = new Set(["dark", "light", "neon", "rose", "devil"]);
 
@@ -41,6 +42,14 @@ export default function App() {
   // Dashboard에서 올라오는 HUD 표시용 데이터
   const [hudFeed, setHudFeed] = useState(null);
 
+  const [pairOpen, setPairOpen] = useState(false);
+  const [pairing, setPairing] = useState(() => ({
+    pc: "",
+    httpPort: 8081,
+    udpPort: 5005,
+    name: "PC",
+  }));
+
   // Dashboard의 액션(함수들)을 ref에 저장
   const hudActionsRef = useRef({});
 
@@ -58,6 +67,20 @@ export default function App() {
     }
     _setTheme(v);
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/pairing")
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((data) => {
+        if (cancelled || !data) return;
+        setPairing((prev) => ({ ...prev, ...data }));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // ✅ DaisyUI + html attribute 적용 + localStorage 저장
   useEffect(() => {
@@ -95,11 +118,13 @@ export default function App() {
         theme={theme}
         setTheme={setTheme}
         agentStatus={agentStatus} // ✅ 추가
+        onOpenPairing={() => setPairOpen(true)}
       />
-
       <main
         className={
-          screen === "dashboard" ? "flex-1 overflow-auto" : "flex-1 overflow-hidden"
+          screen === "dashboard"
+            ? "flex-1 overflow-auto"
+            : "flex-1 overflow-hidden"
         }
       >
         <div className={screen === "dashboard" ? "block" : "hidden"}>
@@ -121,7 +146,6 @@ export default function App() {
           />
         )}
       </main>
-
       {/* ✅ WEB HUD(AgentHud)만 hudOn으로 제어 */}
       {hudOn && (
         <AgentHud
@@ -130,7 +154,9 @@ export default function App() {
           modeOptions={hudFeed?.modeOptions}
           onSetMode={(m) => hudActionsRef.current.applyMode?.(m)}
           onEnableToggle={(next) =>
-            next ? hudActionsRef.current.start?.() : hudActionsRef.current.stop?.()
+            next
+              ? hudActionsRef.current.start?.()
+              : hudActionsRef.current.stop?.()
           }
           onPreviewToggle={() => hudActionsRef.current.togglePreview?.()}
           onLockToggle={(nextLocked) => {
@@ -141,6 +167,12 @@ export default function App() {
           onRequestHide={() => setHudOn(false)}
         />
       )}
+
+      <PairingQrModal
+        open={pairOpen}
+        onClose={() => setPairOpen(false)}
+        pairing={pairing}
+      />
     </div>
   );
 }
