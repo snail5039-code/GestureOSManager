@@ -89,7 +89,7 @@ MODE_COOLDOWN_SEC = 1.2
 # Confirm: PINCH_INDEX hold
 # Cancel : FIST hold
 # =============================================================================
-PALETTE_OPEN_HOLD    = 0.65
+PALETTE_OPEN_HOLD    = 0.35
 PALETTE_CONFIRM_HOLD = 0.18
 PALETTE_CANCEL_HOLD  = 0.45
 
