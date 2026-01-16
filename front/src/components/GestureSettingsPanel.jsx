@@ -33,6 +33,7 @@ const MODE_CONFIG = {
       },
     ],
   },
+
   KEYBOARD: {
     label: "키보드",
     groups: [
@@ -67,6 +68,7 @@ const MODE_CONFIG = {
       },
     ],
   },
+
   PRESENTATION: {
     label: "PPT",
     groups: [
@@ -127,13 +129,9 @@ function setIn(obj, path, value) {
   return root;
 }
 
-/**
- * GestureSettingsPanel
- * - embedded=true  : 팝오버/모달 등에 넣기 좋은 컴팩트 레이아웃
- * - embedded=false : 기존 Settings 페이지용 레이아웃
- */
 export default function GestureSettingsPanel({ theme, embedded = false, onRequestClose }) {
   const t = THEME[theme] || THEME.dark;
+
   const [mode, setMode] = useState("MOUSE");
   const [settings, setSettings] = useState({ version: 1, bindings: {} });
   const bindings = settings?.bindings || {};
@@ -143,6 +141,8 @@ export default function GestureSettingsPanel({ theme, embedded = false, onReques
 
   // ✅ 저장/리셋 결과 모달
   const [result, setResult] = useState(null); // { tone:'ok'|'warn'|'error', title, text }
+
+  const activeConf = MODE_CONFIG[mode];
 
   const load = async () => {
     setBusy(true);
@@ -161,10 +161,49 @@ export default function GestureSettingsPanel({ theme, embedded = false, onReques
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const activeConf = MODE_CONFIG[mode];
+  const save = async () => {
+    setBusy(true);
+    try {
+      const body = { version: settings.version || 1, bindings: settings.bindings || {} };
+      const { data } = await api.post("/settings", body);
+      if (data?.settings) setSettings(data.settings);
 
+      setResult({
+        tone: data?.pushed ? "ok" : "warn",
+        title: "저장 완료",
+        text: data?.pushed
+          ? "저장한 설정이 에이전트에 적용됐어요."
+          : "저장은 됐지만 에이전트 적용이 실패했어요. (연결 상태 확인)",
+      });
+    } catch (e) {
+      setResult({ tone: "error", title: "저장 실패", text: "저장 중 오류가 발생했어요. 잠시 후 다시 시도해 주세요." });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const reset = async () => {
+    setBusy(true);
+    try {
+      const { data } = await api.post("/settings/reset");
+      if (data?.settings) setSettings(data.settings);
+
+      setResult({
+        tone: data?.pushed ? "ok" : "warn",
+        title: "리셋 완료",
+        text: data?.pushed
+          ? "기본값으로 리셋하고 에이전트에 적용했어요."
+          : "리셋은 됐지만 에이전트 적용이 실패했어요. (연결 상태 확인)",
+      });
+    } catch (e) {
+      setResult({ tone: "error", title: "리셋 실패", text: "리셋 중 오류가 발생했어요. 잠시 후 다시 시도해 주세요." });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // 중복 체크는 같은 그룹 안에서만
   const groupGestureIndex = useMemo(() => {
-    // 중복 체크는 '같은 그룹' 안에서만
     const idx = new Map();
     for (const g of activeConf.groups) {
       const map = new Map();
@@ -219,48 +258,7 @@ export default function GestureSettingsPanel({ theme, embedded = false, onReques
     setConflict(null);
   };
 
-  const save = async () => {
-    setBusy(true);
-    try {
-      const body = { version: settings.version || 1, bindings: settings.bindings || {} };
-      const { data } = await api.post("/settings", body);
-      if (data?.settings) setSettings(data.settings);
-
-      setResult({
-        tone: data?.pushed ? "ok" : "warn",
-        title: "저장 완료",
-        text: data?.pushed
-          ? "저장한 설정이 에이전트에 적용됐어요."
-          : "저장은 됐지만 에이전트 적용이 실패했어요. (연결 상태 확인)",
-      });
-    } catch (e) {
-      setResult({ tone: "error", title: "저장 실패", text: "저장 중 오류가 발생했어요. 잠시 후 다시 시도해 주세요." });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const reset = async () => {
-    setBusy(true);
-    try {
-      const { data } = await api.post("/settings/reset");
-      if (data?.settings) setSettings(data.settings);
-
-      setResult({
-        tone: data?.pushed ? "ok" : "warn",
-        title: "리셋 완료",
-        text: data?.pushed
-          ? "기본값으로 리셋하고 에이전트에 적용했어요."
-          : "리셋은 됐지만 에이전트 적용이 실패했어요. (연결 상태 확인)",
-      });
-    } catch (e) {
-      setResult({ tone: "error", title: "리셋 실패", text: "리셋 중 오류가 발생했어요. 잠시 후 다시 시도해 주세요." });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // ✅ 레이아웃: embedded일 때는 “본문 스크롤 + 하단 고정 버튼”
+  // embedded일 때: 본문 스크롤 + 하단 고정 버튼
   const rootCls = embedded ? "p-3 h-[80vh] max-h-[80vh] flex flex-col" : "p-5 max-w-5xl mx-auto";
   const bodyScrollCls = embedded ? "flex-1 overflow-auto pr-1" : "";
 
@@ -271,11 +269,16 @@ export default function GestureSettingsPanel({ theme, embedded = false, onReques
         <div>
           <div className={cn(embedded ? "text-lg" : "text-xl", "font-semibold")}>모션(제스처) 세팅</div>
           <div className={cn("text-sm opacity-70", embedded && "text-[12px]")}>
-            액션별로 제스처를 바꿀 수 있어요. 중복이면 경고가 떠요.
+            액션별로 제스처를 바꿀 수 있어요
           </div>
         </div>
 
+        {/* ✅ 오른쪽 상단: 리셋 + 닫기 */}
         <div className="flex items-center gap-2">
+          <button className={cn("btn btn-sm btn-ghost")} onClick={reset} disabled={busy} title="기본값으로 리셋">
+            리셋
+          </button>
+
           {embedded && (
             <button
               className={cn("btn btn-sm btn-ghost")}
@@ -402,7 +405,7 @@ export default function GestureSettingsPanel({ theme, embedded = false, onReques
         {embedded ? <div className="h-3" /> : null}
       </div>
 
-      {/* ✅ Footer: 큰 저장 버튼 (항상 하단) */}
+      {/* ✅ Footer: 저장 버튼만 가운데 (절반 너비, 높이 줄임) */}
       <div
         className={cn(
           "mt-4",
@@ -411,21 +414,20 @@ export default function GestureSettingsPanel({ theme, embedded = false, onReques
               "pt-3 pb-3 -mx-3 px-3"
         )}
       >
-        <div className="flex items-center gap-2">
-          <button className={cn("btn", "border border-base-300/70 bg-base-100/30 hover:bg-base-100/45")} onClick={reset} disabled={busy}>
-            리셋
-          </button>
-
+        <div className="flex justify-center">
           <button
-            className={cn("btn btn-primary btn-lg flex-1")}
+            className={cn(
+              "btn btn-primary",
+              "w-1/2 max-w-[360px] min-w-[220px]",
+              "h-10 min-h-0"
+            )}
             onClick={save}
             disabled={busy}
             title="저장하고 에이전트에 즉시 적용"
           >
-            {busy ? "처리 중..." : "저장 + 적용"}
+            {busy ? "처리 중..." : "저장"}
           </button>
         </div>
-        <div className="mt-1 text-[11px] opacity-60">저장하면 설정이 즉시 에이전트에 반영돼요.</div>
       </div>
 
       {/* conflict modal */}
@@ -463,7 +465,7 @@ export default function GestureSettingsPanel({ theme, embedded = false, onReques
         </div>
       </div>
 
-      {/* ✅ result modal (저장/리셋 완료 창) */}
+      {/* result modal */}
       <input type="checkbox" className="modal-toggle" checked={!!result} onChange={() => setResult(null)} />
       <div className="modal">
         <div className="modal-box">
