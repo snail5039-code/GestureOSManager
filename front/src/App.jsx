@@ -49,7 +49,7 @@ export default function App() {
     localStorage.setItem("theme", theme);
 
     if (theme === "devil") {
-      document.body.style.cursor = "url('/cursor/devil.png') 16 16, auto";
+      document.body.style.cursor = "crosshair";
     } else {
       document.body.style.cursor = "auto";
     }
