@@ -18,3 +18,9 @@ spring:
 logging:
   level:
     com.example.gestureOSManager: info
+
+gestureos:
+  pairing:
+    httpPort: 8081
+    udpPort: 39500
+    name: ${COMPUTERNAME:PC}

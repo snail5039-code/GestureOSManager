@@ -39,5 +39,5 @@ def mjpeg():
     return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
 if __name__ == "__main__":
-    # Windows 방화벽에서 8081 허용 필요할 수 있음
+    # Windows 방화벽에서 8080 허용 필요할 수 있음
     app.run(host="0.0.0.0", port=8081, threaded=True)
