@@ -1,15 +1,8 @@
 # gestureos_agent/hud_overlay.py
 # Windows only: Always-on-top transparent HUD overlay (click-through)
 # - HUD (top-left) + Reticle (follows OS cursor) + Tip bubble (follows OS cursor)
-# - Tip bubble: ALL modes EXCEPT RUSH (RUSH = no bubble)
-# - Bubble text style: "MODE • action"
-# - Apply click-through to: widget hwnd + parent hwnd + root/ancestor hwnd + all descendants
-# - Hard fix: WM_NCHITTEST -> HTTRANSPARENT (subclass WndProc)
-# - Extra safety: Tk '-disabled' attribute (very effective on Win10/11)
-#
-# ✅ Added (ONLY what you asked):
-# - Hamburger handle window (clickable) to drag-move HUD (HUD stays click-through)
-# - Show/Hide HUD panel (HUD + handle + tip) while keeping reticle alive
+# - Separate MODE palette window (click-through) with hover by OS cursor position
+# - Handle window is clickable to drag-move HUD (HUD stays click-through)
 
 import os
 import threading
@@ -60,6 +53,12 @@ kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWS
 kernel32.GetLastError.restype = wintypes.DWORD
 kernel32.CloseHandle.restype = wintypes.BOOL
 
+HUD_DEBUG = False
+
+# IMPORTANT: must match colorkey used in SetLayeredWindowAttributes
+TRANSPARENT = "#010101"
+
+
 # ---- 64-bit safe: Get/SetWindowLongPtr fallback ----
 def _get_window_long_ptr(hwnd, idx):
     if hasattr(user32, "GetWindowLongPtrW"):
@@ -70,6 +69,7 @@ def _get_window_long_ptr(hwnd, idx):
     user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
     return user32.GetWindowLongW(hwnd, idx)
 
+
 def _set_window_long_ptr(hwnd, idx, value):
     if hasattr(user32, "SetWindowLongPtrW"):
         user32.SetWindowLongPtrW.restype = ctypes.c_ssize_t
@@ -79,8 +79,8 @@ def _set_window_long_ptr(hwnd, idx, value):
     user32.SetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_long]
     return user32.SetWindowLongW(hwnd, idx, ctypes.c_long(value))
 
+
 def _hwnd_int(x) -> int:
-    """HWND -> int (robust)"""
     try:
         if isinstance(x, int):
             return x
@@ -91,6 +91,7 @@ def _hwnd_int(x) -> int:
             return int(x)
         except Exception:
             return 0
+
 
 # APIs
 user32.SetLayeredWindowAttributes.restype = wintypes.BOOL
@@ -118,6 +119,7 @@ user32.CallWindowProcW.argtypes = [
 
 WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
 
+
 # ---- Reticle image assets (mode -> png) ----
 ASSET_DIR = os.path.join(os.path.dirname(__file__), "assets", "reticle")
 RETICLE_PNG = {
@@ -128,7 +130,7 @@ RETICLE_PNG = {
     "RUSH": "rush.png",
     "RUSH_HAND": "rush.png",
     "RUSH_COLOR": "rush.png",
-    "VKEY": "keyboard.png",     # vkey 전용 이미지 있으면 바꾸세요
+    "VKEY": "keyboard.png",
     "DEFAULT": "mouse.png",
 }
 
@@ -145,19 +147,20 @@ THEME = {
     "DEFAULT":      {"accent": "#22c55e"},
 }
 
-HUD_DEBUG = False
-TRANSPARENT = "#010101"
 
 def _mode_of(status: dict) -> str:
     m = str(status.get("mode", "DEFAULT")).upper()
     return m if m in THEME else "DEFAULT"
+
 
 def _hex_dim(color_hex, a):
     color_hex = str(color_hex).lstrip("#")
     r = int(color_hex[0:2], 16)
     g = int(color_hex[2:4], 16)
     b = int(color_hex[4:6], 16)
-    r = int(r * a); g = int(g * a); b = int(b * a)
+    r = max(0, min(255, int(r * a)))
+    g = max(0, min(255, int(g * a)))
+    b = max(0, min(255, int(b * a)))
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
@@ -166,6 +169,7 @@ class OverlayHUD:
     HUD + Reticle + Tip bubble (ALL modes except RUSH)
     HUD/Reticle/Tip are click-through.
     Handle is clickable to drag-move HUD.
+    Separate MODE palette overlay (click-through), hover by OS cursor.
     """
     _GLOBAL_LOCK = threading.Lock()
     _GLOBAL_STARTED = False
@@ -180,10 +184,10 @@ class OverlayHUD:
         self._phase = 0.0
         self._ct_tick = 0
 
-        # ✅ panel visibility
+        # panel visibility
         self._panel_visible = True
 
-        # ✅ drag state (handle)
+        # drag state (handle)
         self._dragging = False
         self._drag_mx0 = 0
         self._drag_my0 = 0
@@ -201,23 +205,38 @@ class OverlayHUD:
         self._hud_win = None
         self._ret_win = None
         self._tip_win = None
-        self._handle_win = None  # ✅
+        self._handle_win = None
+
         self._hud_canvas = None
         self._ret_canvas = None
         self._tip_canvas = None
-        self._handle_canvas = None  # ✅
+        self._handle_canvas = None
 
+        # MODE palette window
+        self._menu_win = None
+        self._menu_canvas = None
+        self._menu_active = False
+        self._menu_hover = None          # "MOUSE"/"KEYBOARD"/"DRAW"/"PPT"/None
+        self._menu_center = None         # (screen_x, screen_y)
+
+        # geometry
         self.HUD_W, self.HUD_H = 320, 118
         self.RET_S = 48
 
-        # Tip bubble
         self.TIP_W, self.TIP_H = 230, 46
-        self.TIP_OX, self.TIP_OY = 26, -66  # pointer 기준 offset
+        self.TIP_OX, self.TIP_OY = 26, -66
 
-        # ✅ Handle geometry
         self.HANDLE_W, self.HANDLE_H = 30, 26
-        self.HANDLE_PAD_R = 14   # HUD 오른쪽에서 안쪽으로
-        self.HANDLE_PAD_T = 14   # HUD 위쪽에서 아래로
+        self.HANDLE_PAD_R = 14
+        self.HANDLE_PAD_T = 14
+
+        # ✅ 메뉴 창 크기(요소 잘림 방지용 마진 충분히)
+        self.MENU_W, self.MENU_H = 760, 460
+        # ✅ 전체 창 투명도(요소만 떠보이게)
+        self.MENU_ALPHA = 0.78
+
+        # ✅ IronMan 스타일 고정 색(원하면 이 한 줄만 바꿔)
+        self.MENU_CYAN = "#19e6ff"
 
         # wndproc hooks (keep refs to prevent GC)
         self._old_wndproc = {}     # hwnd_int -> old_proc_ptr
@@ -228,14 +247,13 @@ class OverlayHUD:
         self._ret_img_item = None
         self._ret_img_mode = None
 
+        # single-instance mutex
         self._mutex = None
 
-        # ensure mutex released on exit (best-effort)
         atexit.register(self.stop)
 
-    # ---------------- public (show/hide) ----------------
+    # ---------------- public (HUD panel show/hide) ----------------
     def set_visible(self, visible: bool):
-        """Hide/Show OS HUD panel (HUD + handle + tip). Reticle stays."""
         if not self.enable:
             return
         try:
@@ -249,15 +267,43 @@ class OverlayHUD:
     def hide_panel(self):
         self.set_visible(False)
 
+    # ---------------- public (MODE palette show/hide) ----------------
+    def set_menu(self, active: bool, center_xy=None, hover: str = None):
+        if not self.enable:
+            return
+        payload = {"__cmd": "SET_MENU", "active": bool(active)}
+        if center_xy is not None:
+            try:
+                x, y = center_xy
+                payload["center"] = (int(x), int(y))
+            except Exception:
+                pass
+        if hover is not None:
+            payload["hover"] = str(hover).upper()
+        try:
+            self._q.put_nowait(payload)
+        except Exception:
+            pass
+
+    def show_menu(self, center_xy=None):
+        self.set_menu(True, center_xy=center_xy)
+
+    def hide_menu(self):
+        self.set_menu(False)
+
+    def is_menu_active(self) -> bool:
+        return bool(self._menu_active)
+
+    def get_menu_hover(self):
+        return self._menu_hover
+
     # ---------------- single instance ----------------
     def _acquire_single_instance(self) -> bool:
-        """프로세스 여러 개 떠도 HUD는 1개만."""
         if self._mutex is not None:
             return True
 
         h = kernel32.CreateMutexW(None, True, HUD_MUTEX_NAME)
         if not h:
-            # fail-open (개발 편의)
             return True
 
         if kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
@@ -297,16 +343,14 @@ class OverlayHUD:
                 if HUD_DEBUG:
                     print("[HUD] reticle load failed:", mode, path, e, flush=True)
 
-    # ---------------- public ----------------
+    # ---------------- public lifecycle ----------------
     def start(self):
         if not self.enable:
             return
 
-        # cross-process single instance
         if not self._acquire_single_instance():
             return
 
-        # in-process single instance
         with OverlayHUD._GLOBAL_LOCK:
             if OverlayHUD._GLOBAL_STARTED:
                 return
@@ -362,7 +406,6 @@ class OverlayHUD:
         return (int(pt.x), int(pt.y))
 
     def _iter_related_hwnds(self, hwnd_int: int):
-        """yield hwnd + parent + root ancestor (dedup)"""
         seen = set()
         base = _hwnd_int(hwnd_int)
         if base:
@@ -388,7 +431,6 @@ class OverlayHUD:
             pass
 
     def _install_httransparent_wndproc(self, hwnd_int: int):
-        """WM_NCHITTEST -> HTTRANSPARENT 강제."""
         hwnd_int = _hwnd_int(hwnd_int)
         if not hwnd_int:
             return
@@ -415,7 +457,7 @@ class OverlayHUD:
 
         except Exception as e:
             if HUD_DEBUG:
-                print("[HUD] _install_httransparent_wndproc failed:", e)
+                print("[HUD] _install_httransparent_wndproc failed:", e, flush=True)
 
     def _apply_click_through_hwnd(self, hwnd_int: int):
         for hid in self._iter_related_hwnds(hwnd_int):
@@ -426,7 +468,7 @@ class OverlayHUD:
                 ex |= (WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)
                 _set_window_long_ptr(hwnd, GWL_EXSTYLE, ex)
 
-                colorkey = wintypes.COLORREF(0x00010101)
+                colorkey = wintypes.COLORREF(0x00010101)  # matches TRANSPARENT
                 user32.SetLayeredWindowAttributes(hwnd, colorkey, 0, LWA_COLORKEY)
 
                 user32.SetWindowPos(
@@ -439,7 +481,7 @@ class OverlayHUD:
 
             except Exception as e:
                 if HUD_DEBUG:
-                    print("[HUD] apply_click_through_hwnd failed:", e)
+                    print("[HUD] apply_click_through_hwnd failed:", e, flush=True)
 
     def _walk_widgets(self, w):
         yield w
@@ -462,9 +504,8 @@ class OverlayHUD:
             except Exception:
                 pass
 
-    # ✅ handle style (NOT click-through)
     def _apply_handle_hwnd_style(self, hwnd_int: int):
-        """Handle must be clickable -> NO WS_EX_TRANSPARENT, NO HTTRANSPARENT WndProc."""
+        """Handle must be clickable -> NO WS_EX_TRANSPARENT."""
         hwnd_int = _hwnd_int(hwnd_int)
         if not hwnd_int:
             return
@@ -473,7 +514,7 @@ class OverlayHUD:
 
             ex = _get_window_long_ptr(hwnd, GWL_EXSTYLE)
             ex |= (WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)
-            ex &= (~WS_EX_TRANSPARENT)  # 중요: 클릭 가능해야 함
+            ex &= (~WS_EX_TRANSPARENT)
             _set_window_long_ptr(hwnd, GWL_EXSTYLE, ex)
 
             colorkey = wintypes.COLORREF(0x00010101)
@@ -486,9 +527,8 @@ class OverlayHUD:
             )
         except Exception as e:
             if HUD_DEBUG:
-                print("[HUD] handle hwnd style failed:", e)
+                print("[HUD] handle hwnd style failed:", e, flush=True)
 
-    # ✅ position handle relative to HUD
     def _position_handle(self):
         if self._hud_win is None or self._handle_win is None:
             return
@@ -657,7 +697,7 @@ class OverlayHUD:
         hud_canvas.pack(fill="both", expand=True)
         self._hud_canvas = hud_canvas
 
-        # ✅ Handle window (clickable)
+        # Handle window (clickable)
         handle = tk.Toplevel(root)
         self._handle_win = handle
         handle.overrideredirect(True)
@@ -676,7 +716,6 @@ class OverlayHUD:
         handle_canvas.pack(fill="both", expand=True)
         self._handle_canvas = handle_canvas
 
-        # Make handle window non-activating toolwindow but CLICKABLE
         try:
             handle.update_idletasks()
             self._apply_handle_hwnd_style(handle.winfo_id())
@@ -755,8 +794,35 @@ class OverlayHUD:
         tip_canvas.pack(fill="both", expand=True)
         self._tip_canvas = tip_canvas
 
+        # MODE palette window (click-through)
+        menu = tk.Toplevel(root)
+        self._menu_win = menu
+        menu.overrideredirect(True)
+        menu.attributes("-topmost", True)
+        menu.configure(bg=TRANSPARENT)
+        try:
+            menu.wm_attributes("-transparentcolor", TRANSPARENT)
+        except Exception:
+            pass
+
+        # ✅ glass 느낌: 전체 창 알파
+        try:
+            menu.attributes("-alpha", self.MENU_ALPHA)
+        except Exception:
+            pass
+
+        menu.geometry(f"{self.MENU_W}x{self.MENU_H}+{self.vx}+{self.vy}")
+        menu.withdraw()
+
+        menu_canvas = tk.Canvas(
+            menu, width=self.MENU_W, height=self.MENU_H,
+            bd=0, highlightthickness=0, bg=TRANSPARENT
+        )
+        menu_canvas.pack(fill="both", expand=True)
+        self._menu_canvas = menu_canvas
+
         # Disable input at Tk level (extra safety) - keep handle clickable
-        for w in (hud, ret, tip):
+        for w in (hud, ret, tip, menu):
             try:
                 w.attributes("-disabled", True)
             except Exception:
@@ -766,11 +832,12 @@ class OverlayHUD:
         self._apply_click_through(hud)
         self._apply_click_through(ret)
         self._apply_click_through(tip)
+        self._apply_click_through(menu)
 
         # Load images AFTER Tk init
         self._load_reticle_images()
 
-        # Create reticle image item ONCE (no accumulation)
+        # Create reticle image item ONCE
         img0 = self._ret_imgs.get("DEFAULT")
         if img0 is None and self._ret_imgs:
             img0 = next(iter(self._ret_imgs.values()), None)
@@ -792,7 +859,7 @@ class OverlayHUD:
             nonlocal last_t
 
             if self._stop.is_set():
-                for w in (hud, handle, ret, tip, root):
+                for w in (hud, handle, ret, tip, menu, root):
                     try:
                         w.destroy()
                     except Exception:
@@ -808,9 +875,16 @@ class OverlayHUD:
                         stop_cmd = True
                         break
 
-                    # ✅ handle show/hide command
                     if isinstance(item, dict) and item.get("__cmd") == "SET_VISIBLE":
                         self._panel_visible = bool(item.get("visible", True))
+                        continue
+
+                    if isinstance(item, dict) and item.get("__cmd") == "SET_MENU":
+                        self._menu_active = bool(item.get("active", False))
+                        if "hover" in item:
+                            self._menu_hover = item.get("hover", None)
+                        if "center" in item:
+                            self._menu_center = item.get("center", None)
                         continue
 
                     latest = item
@@ -824,7 +898,6 @@ class OverlayHUD:
 
             if isinstance(latest, dict):
                 self._latest = latest
-                # ✅ also accept payload key based visible flag (optional)
                 if "hudVisible" in latest:
                     self._panel_visible = bool(latest.get("hudVisible"))
                 elif "panelVisible" in latest:
@@ -840,13 +913,12 @@ class OverlayHUD:
             # Periodically re-apply click-through (some environments lose it)
             self._ct_tick += 1
             if (self._ct_tick % 60) == 0:
-                for w in (hud, ret, tip):
+                for w in (hud, ret, tip, menu):
                     self._apply_click_through(w)
                     try:
                         w.attributes("-disabled", True)
                     except Exception:
                         pass
-                # handle style refresh (keep clickable)
                 try:
                     self._apply_handle_hwnd_style(handle.winfo_id())
                 except Exception:
@@ -861,7 +933,6 @@ class OverlayHUD:
             pass
 
     def _draw_handle(self, accent: str):
-        """Draw hamburger icon (handle canvas)."""
         hc = self._handle_canvas
         if hc is None:
             return
@@ -871,7 +942,6 @@ class OverlayHUD:
         border = _hex_dim(accent, 0.85)
         fg = "#E5E7EB"
 
-        # small rounded-ish box
         hc.create_rectangle(1, 1, self.HANDLE_W - 1, self.HANDLE_H - 1, fill=bg, outline=border, width=2)
 
         y0 = (self.HANDLE_H // 2) - 6
@@ -879,6 +949,133 @@ class OverlayHUD:
             yy = y0 + i * 6
             hc.create_line(8, yy, self.HANDLE_W - 8, yy, fill=fg, width=2)
 
+    # ---------------- MENU: XR / IronMan HUD style ----------------
+    def _render_menu_holo(self, mc: tk.Canvas, osx: int, osy: int):
+        """
+        - No big rectangle frame
+        - Floating holographic rings + nodes
+        - Hover by circle hit-test (prevents edge clipping issues)
+        - Options: MOUSE / KEYBOARD / DRAW / PPT (OTHER removed)
+        """
+        mc.delete("all")
+
+        W, H = self.MENU_W, self.MENU_H
+        cyan = self.MENU_CYAN
+        cyan_dim = _hex_dim(cyan, 0.55)
+        cyan_low = _hex_dim(cyan, 0.25)
+        text_fg = "#E6FEFF"
+
+        # helpers (fake glow by drawing twice)
+        def glow_oval(x0, y0, x1, y1, col, w=2):
+            mc.create_oval(x0, y0, x1, y1, outline=_hex_dim(col, 0.25), width=w + 6)
+            mc.create_oval(x0, y0, x1, y1, outline=_hex_dim(col, 0.45), width=w + 3)
+            mc.create_oval(x0, y0, x1, y1, outline=col, width=w)
+
+        def glow_arc(x0, y0, x1, y1, start, extent, col, w=2):
+            mc.create_arc(x0, y0, x1, y1, start=start, extent=extent, style="arc",
+                          outline=_hex_dim(col, 0.25), width=w + 6)
+            mc.create_arc(x0, y0, x1, y1, start=start, extent=extent, style="arc",
+                          outline=_hex_dim(col, 0.45), width=w + 3)
+            mc.create_arc(x0, y0, x1, y1, start=start, extent=extent, style="arc",
+                          outline=col, width=w)
+
+        def glow_line(x0, y0, x1, y1, col, w=2):
+            mc.create_line(x0, y0, x1, y1, fill=_hex_dim(col, 0.25), width=w + 6)
+            mc.create_line(x0, y0, x1, y1, fill=_hex_dim(col, 0.45), width=w + 3)
+            mc.create_line(x0, y0, x1, y1, fill=col, width=w)
+
+        # subtle floating dots (cheap)
+        # keep it light to avoid CPU
+        base = 18
+        step = 52
+        phase = self._phase
+        for yy in range(base, H - base, step):
+            for xx in range(base, W - base, step):
+                a = 0.12 + 0.10 * (0.5 + 0.5 * math.sin(phase * 1.2 + (xx + yy) * 0.02))
+                col = _hex_dim(cyan, a)
+                mc.create_oval(xx, yy, xx + 2, yy + 2, fill=col, outline="")
+
+        # center hub
+        cx, cy = W // 2, H // 2
+        r0 = 64
+        glow_oval(cx - r0, cy - r0, cx + r0, cy + r0, cyan, w=2)
+
+        # segmented arcs around center
+        rr = 115
+        for k in range(6):
+            st = (k * 60) + (phase * 18.0) % 360
+            glow_arc(cx - rr, cy - rr, cx + rr, cy + rr, start=st, extent=22, col=cyan_dim, w=2)
+
+        rr2 = 155
+        for k in range(10):
+            st = (k * 36) - (phase * 24.0) % 360
+            glow_arc(cx - rr2, cy - rr2, cx + rr2, cy + rr2, start=st, extent=12, col=cyan_low, w=2)
+
+        mc.create_text(cx, cy, fill=text_fg, font=("Segoe UI", 14, "bold"), text="MODE")
+
+        # nodes (OTHER 제거)
+        # place with generous margins to avoid clipping
+        R = min(W, H) * 0.33
+        node_r = 52
+
+        items = [
+            ("DRAW",     "그리기",   cx,           cy - R),
+            ("MOUSE",    "마우스",   cx - R,       cy),
+            ("KEYBOARD", "키보드",   cx + R,       cy),
+            ("PPT",      "PPT",      cx,           cy + R),
+        ]
+
+        # menu window top-left on screen -> cursor local
+        hover = None
+        try:
+            mw = self._menu_win
+            mwx = int(mw.winfo_x())
+            mwy = int(mw.winfo_y())
+            lx = int(osx - mwx)
+            ly = int(osy - mwy)
+
+            for key, _label, bx, by in items:
+                dx = lx - bx
+                dy = ly - by
+                if (dx * dx + dy * dy) <= (node_r * node_r):
+                    hover = key
+                    break
+        except Exception:
+            hover = None
+
+        self._menu_hover = hover
+
+        # draw node links + node rings
+        for key, label, bx, by in items:
+            is_hover = (hover == key)
+
+            # link line
+            glow_line(cx, cy, bx, by, cyan_low, w=2)
+
+            # node ring
+            col = cyan if is_hover else cyan_dim
+            w = 3 if is_hover else 2
+            glow_oval(bx - node_r, by - node_r, bx + node_r, by + node_r, col, w=w)
+
+            # node inner segments
+            for k in range(4):
+                st = (k * 90) + (phase * 20.0 if is_hover else phase * 10.0)
+                glow_arc(bx - node_r + 8, by - node_r + 8, bx + node_r - 8, by + node_r - 8,
+                         start=st, extent=20, col=_hex_dim(col, 0.65), w=2)
+
+            # label
+            mc.create_text(
+                bx, by,
+                fill=("#021318" if is_hover else text_fg),
+                font=("Segoe UI", 12, "bold"),
+                text=label
+            )
+
+        # bottom hint (작게, 테두리 없이)
+        hint = "V_SIGN(양손 홀드) 열기  •  PINCH 확정  •  FIST 취소"
+        mc.create_text(W // 2, H - 20, fill=_hex_dim(cyan, 0.35), font=("Segoe UI", 10), text=hint)
+
+    # ---------------- render main ----------------
     def _render(self):
         st = self._latest if isinstance(self._latest, dict) else {}
         mode = _mode_of(st)
@@ -890,7 +1087,7 @@ class OverlayHUD:
         fps = float(st.get("fps", 0.0) or 0.0)
         connected = bool(st.get("connected", True))
 
-        # ✅ panel show/hide (HUD + handle + tip)
+        # HUD panel show/hide (HUD + handle + tip)
         if self._hud_win is not None and self._handle_win is not None:
             try:
                 if self._panel_visible:
@@ -904,18 +1101,13 @@ class OverlayHUD:
             except Exception:
                 pass
 
-        # keep handle attached to HUD even when visible
         if self._panel_visible:
             self._position_handle()
             self._draw_handle(accent)
 
-        # ---- HUD panel ----
+        # HUD panel draw
         c = self._hud_canvas
-        if c is None:
-            return
-
-        # if hidden, don't waste drawing hud (reticle still works)
-        if self._panel_visible:
+        if c is not None and self._panel_visible:
             c.delete("all")
 
             bg = "#08101f"
@@ -930,10 +1122,9 @@ class OverlayHUD:
             c.create_oval(20, 18, 28, 26, fill=dot, outline="")
             c.create_text(34, 22, anchor="w", fill=fg, font=("Segoe UI", 11, "bold"), text=mode)
 
-            # pill shifted left so it doesn't overlap handle
             pill_text = "LOCK" if locked else "OK"
             pill_fill = "#f59e0b" if locked else _hex_dim(accent, 0.55)
-            pill_x1 = self.HUD_W - 16 - (self.HANDLE_W + 10)  # shift left
+            pill_x1 = self.HUD_W - 16 - (self.HANDLE_W + 10)
             pill_x0 = pill_x1 - 70
             c.create_rectangle(pill_x0, 14, pill_x1, 34, fill=pill_fill, outline="")
             c.create_text((pill_x0 + pill_x1)//2, 24, fill="#050a14", font=("Segoe UI", 9, "bold"), text=pill_text)
@@ -949,66 +1140,77 @@ class OverlayHUD:
                 y = base_y + math.sin(self._phase * 2.2 + i * 0.55) * amp
                 c.create_line(x, base_y, x + 18, y, fill=_hex_dim(accent, 0.55), width=2)
 
-        # ---- Reticle / Tip (always follow OS cursor) ----
-        if self._ret_win is None or self._ret_canvas is None:
-            return
-
+        # need OS cursor
         osx, osy = self._get_os_cursor_xy()
         if osx is None or osy is None:
             return
 
-        # Keep reticle window visible always
-        try:
-            self._ret_win.deiconify()
-        except Exception:
-            pass
-
-        gx = osx - self.RET_S // 2
-        gy = osy - self.RET_S // 2
-        gx, gy = self._clamp_screen_xy(gx, gy, self.RET_S, self.RET_S)
-
-        try:
-            self._ret_win.geometry(f"{self.RET_S}x{self.RET_S}+{gx}+{gy}")
-        except Exception:
-            pass
-
-        # Choose image for mode
-        key = mode if mode in self._ret_imgs else "DEFAULT"
-        img = self._ret_imgs.get(key) or self._ret_imgs.get("DEFAULT")
-
-        # If asset missing, hide reticle to avoid broken state
-        if img is None:
+        # Reticle (always follow OS cursor)
+        if self._ret_win is not None and self._ret_canvas is not None:
             try:
-                self._ret_win.withdraw()
+                self._ret_win.deiconify()
             except Exception:
                 pass
-            if self._tip_win is not None:
+
+            gx = osx - self.RET_S // 2
+            gy = osy - self.RET_S // 2
+            gx, gy = self._clamp_screen_xy(gx, gy, self.RET_S, self.RET_S)
+            try:
+                self._ret_win.geometry(f"{self.RET_S}x{self.RET_S}+{gx}+{gy}")
+            except Exception:
+                pass
+
+            key = mode if mode in self._ret_imgs else "DEFAULT"
+            img = self._ret_imgs.get(key) or self._ret_imgs.get("DEFAULT")
+
+            if img is None:
                 try:
-                    self._tip_win.withdraw()
+                    self._ret_win.withdraw()
                 except Exception:
                     pass
-            return
+            else:
+                if self._ret_img_item is None:
+                    self._ret_img_item = self._ret_canvas.create_image(
+                        self.RET_S // 2, self.RET_S // 2,
+                        image=img, anchor="center",
+                        tags=("RETICLE_IMG",)
+                    )
+                else:
+                    self._ret_canvas.itemconfig(self._ret_img_item, image=img)
+                self._ret_img_mode = key
 
-        # IMPORTANT: DO NOT create new images every frame.
-        # Create ONCE and itemconfig() thereafter -> prevents overlap/accumulation.
-        if self._ret_img_item is None:
-            self._ret_img_item = self._ret_canvas.create_image(
-                self.RET_S // 2, self.RET_S // 2,
-                image=img, anchor="center",
-                tags=("RETICLE_IMG",)
-            )
-        else:
-            self._ret_canvas.itemconfig(self._ret_img_item, image=img)
+        # MODE palette (independent of HUD panel)
+        mw = self._menu_win
+        mc = self._menu_canvas
+        if mw is not None and mc is not None:
+            try:
+                if self._menu_active:
+                    if self._menu_center is None:
+                        scx = self.vx + self.vw // 2
+                        scy = self.vy + self.vh // 2
+                    else:
+                        scx, scy = self._menu_center
 
-        self._ret_img_mode = key
+                    x = int(scx - self.MENU_W // 2)
+                    y = int(scy - self.MENU_H // 2)
+                    x, y = self._clamp_screen_xy(x, y, self.MENU_W, self.MENU_H)
 
-        # ---- Tip bubble ----
+                    mw.geometry(f"{self.MENU_W}x{self.MENU_H}+{x}+{y}")
+                    mw.deiconify()
+                    mw.lift()
+
+                    self._render_menu_holo(mc, osx, osy)
+                else:
+                    mw.withdraw()
+            except Exception:
+                pass
+
+        # Tip bubble
         tipw = self._tip_win
         tipc = self._tip_canvas
         if tipw is None or tipc is None:
             return
 
-        # if panel hidden, keep tip hidden too
         if not self._panel_visible:
             try:
                 tipw.withdraw()
@@ -1029,10 +1231,8 @@ class OverlayHUD:
         except Exception:
             pass
 
-        px = osx - self.vx
-        py = osy - self.vy
-        tx = self.vx + px + self.TIP_OX
-        ty = self.vy + py + self.TIP_OY
+        tx = osx + self.TIP_OX
+        ty = osy + self.TIP_OY
         tx, ty = self._clamp_screen_xy(tx, ty, self.TIP_W, self.TIP_H)
 
         try:
@@ -1051,9 +1251,7 @@ class OverlayHUD:
         x1 = self.TIP_W - pad
         y1 = self.TIP_H - pad - tail_h
 
-        # body
         tipc.create_rectangle(x0, y0, x1, y1, fill=tip_bg, outline=tip_border, width=2)
-        # tail
         tail_x = x0 + 18
         tipc.create_polygon(
             tail_x, y1,
@@ -1061,9 +1259,24 @@ class OverlayHUD:
             tail_x + 6, y1 + tail_h,
             fill=tip_bg, outline=tip_border, width=2
         )
-        # text
         tipc.create_text(
             (x0 + x1) // 2, (y0 + y1) // 2,
             fill=tip_fg, font=("Segoe UI", 10, "bold"),
             text=bubble
         )
+
+
+if __name__ == "__main__":
+    # 개발 테스트용
+    hud = OverlayHUD(enable=True)
+    hud.start()
+    time.sleep(0.5)
+    hud.show_menu()
+
+    try:
+        while True:
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        pass
+
+    hud.stop()
