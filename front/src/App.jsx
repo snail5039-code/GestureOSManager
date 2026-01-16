@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import TitleBar from "./components/TitleBar";
 import Dashboard from "./pages/Dashboard";
 import AgentHud from "./components/AgentHud";
@@ -27,7 +27,9 @@ export default function App() {
   // ✅ OS HUD: 저장 + 서버 호출 (/api/hud/show)
   useEffect(() => {
     localStorage.setItem("osHudOn", osHudOn ? "1" : "0");
-    fetch(`/api/hud/show?enabled=${osHudOn ? "true" : "false"}`, { method: "POST" }).catch(() => {});
+    fetch(`/api/hud/show?enabled=${osHudOn ? "true" : "false"}`, {
+      method: "POST",
+    }).catch(() => {});
   }, [osHudOn]);
 
   const toggleHud = () => setHudOn((x) => !x);
@@ -71,6 +73,16 @@ export default function App() {
     console.log("data-theme =", theme);
   }, [theme]);
 
+  // ✅ TitleBar에 올릴 "연결/잠금/모드" 미니 상태
+  const agentStatus = useMemo(() => {
+    return {
+      connected: !!hudFeed?.connected,
+      locked: !!hudFeed?.locked,
+      mode: hudFeed?.mode ?? "DEFAULT",
+      modeText: hudFeed?.modeText ?? undefined, // TitleBar에서 modeText 우선 사용
+    };
+  }, [hudFeed]);
+
   return (
     <div data-theme={theme} className="h-screen flex flex-col overflow-hidden">
       <TitleBar
@@ -82,9 +94,14 @@ export default function App() {
         onChangeScreen={setScreen}
         theme={theme}
         setTheme={setTheme}
+        agentStatus={agentStatus} // ✅ 추가
       />
 
-      <main className={screen === "dashboard" ? "flex-1 overflow-auto" : "flex-1 overflow-hidden"}>
+      <main
+        className={
+          screen === "dashboard" ? "flex-1 overflow-auto" : "flex-1 overflow-hidden"
+        }
+      >
         <div className={screen === "dashboard" ? "block" : "hidden"}>
           <Dashboard
             hudOn={hudOn}
@@ -98,7 +115,10 @@ export default function App() {
         </div>
 
         {screen === "rush" && (
-          <Rush3DPage status={hudFeed?.status} connected={hudFeed?.connected ?? true} />
+          <Rush3DPage
+            status={hudFeed?.status}
+            connected={hudFeed?.connected ?? true}
+          />
         )}
       </main>
 
@@ -109,10 +129,13 @@ export default function App() {
           connected={hudFeed?.connected ?? true}
           modeOptions={hudFeed?.modeOptions}
           onSetMode={(m) => hudActionsRef.current.applyMode?.(m)}
-          onEnableToggle={(next) => (next ? hudActionsRef.current.start?.() : hudActionsRef.current.stop?.())}
+          onEnableToggle={(next) =>
+            next ? hudActionsRef.current.start?.() : hudActionsRef.current.stop?.()
+          }
           onPreviewToggle={() => hudActionsRef.current.togglePreview?.()}
           onLockToggle={(nextLocked) => {
-            if (hudActionsRef.current.setLock) return hudActionsRef.current.setLock(nextLocked);
+            if (hudActionsRef.current.setLock)
+              return hudActionsRef.current.setLock(nextLocked);
             return hudActionsRef.current.lockToggle?.();
           }}
           onRequestHide={() => setHudOn(false)}

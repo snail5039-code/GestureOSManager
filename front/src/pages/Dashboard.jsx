@@ -5,15 +5,7 @@ import { THEME } from "../theme/themeTokens";
 
 const POLL_MS = 500;
 
-// ✅ 여기서부터 핵심: RUSH -> RUSH_HAND / RUSH_COLOR로 분리
-const MODE_OPTIONS = [
-  "MOUSE",
-  "KEYBOARD",
-  "PRESENTATION",
-  "DRAW",
-  "VKEY",
-  "DEFAULT",
-];
+const MODE_OPTIONS = ["MOUSE", "KEYBOARD", "PRESENTATION", "DRAW", "VKEY", "DEFAULT"];
 
 const MODE_LABEL = {
   MOUSE: "마우스",
@@ -219,8 +211,8 @@ function Switch({ t, checked, onChange, disabled }) {
         checked
           ? "bg-sky-500/25 ring-sky-300/70"
           : isBright
-            ? "bg-slate-200 ring-slate-300"
-            : "bg-slate-800/70 ring-white/12"
+          ? "bg-slate-200 ring-slate-300"
+          : "bg-slate-800/70 ring-white/12"
       )}
       aria-checked={checked}
       role="switch"
@@ -237,12 +229,12 @@ function StatTile({ t, label, value, tone = "slate" }) {
     tone === "green"
       ? isBright ? "ring-emerald-300/70" : "ring-emerald-400/25"
       : tone === "blue"
-        ? isBright ? "ring-sky-300/70" : "ring-sky-400/25"
-        : tone === "yellow"
-          ? isBright ? "ring-amber-300/70" : "ring-amber-400/25"
-          : tone === "red"
-            ? isBright ? "ring-rose-300/70" : "ring-rose-400/25"
-            : isBright ? "ring-slate-200" : "ring-white/12";
+      ? isBright ? "ring-sky-300/70" : "ring-sky-400/25"
+      : tone === "yellow"
+      ? isBright ? "ring-amber-300/70" : "ring-amber-400/25"
+      : tone === "red"
+      ? isBright ? "ring-rose-300/70" : "ring-rose-400/25"
+      : isBright ? "ring-slate-200" : "ring-white/12";
 
   return (
     <div className={cn("rounded-xl ring-1 p-3 overflow-hidden", t.panelSoft, ring)}>
@@ -277,8 +269,8 @@ function PointerMiniMap({ t, theme, x, y }) {
           forceWhiteMap
             ? "bg-white ring-violet-200"
             : isBright
-              ? "bg-white ring-slate-200"
-              : "bg-slate-900/35 ring-white/12"
+            ? "bg-white ring-slate-200"
+            : "bg-slate-900/35 ring-white/12"
         )}
       >
         <div className="absolute inset-0 opacity-[0.18]">
@@ -297,7 +289,7 @@ function PointerMiniMap({ t, theme, x, y }) {
 /* =========================
    Dashboard
 ========================= */
-export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions, theme = "dark" } = {}) {
+export default function Dashboard({ onHudState, onHudActions, theme = "dark" } = {}) {
   const [status, setStatus] = useState(null);
   const [mode, setMode] = useState("MOUSE");
   const [loading, setLoading] = useState(true);
@@ -458,7 +450,6 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
     }
   }, [fetchStatus]);
 
-  // ✅ 모드 바꾸면 바로 되게: 실행이 꺼져 있으면 자동 start 후 mode 변경
   const applyMode = useCallback(
     async (nextMode) => {
       setMode(nextMode);
@@ -505,9 +496,17 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
     onHudActions?.({ start, stop, applyMode, togglePreview, fetchStatus, setLock });
   }, [onHudActions, start, stop, applyMode, togglePreview, fetchStatus, setLock]);
 
+  // ✅ TitleBar에서 쓰게: 연결/잠금/모드까지 올려줌
   useEffect(() => {
-    onHudState?.({ status, connected: derived.connected, modeOptions: MODE_OPTIONS });
-  }, [onHudState, status, derived.connected]);
+    onHudState?.({
+      status,
+      connected: derived.connected,
+      locked: derived.locked,
+      mode: derived.mode,
+      modeText: view.modeText,
+      modeOptions: MODE_OPTIONS,
+    });
+  }, [onHudState, status, derived.connected, derived.locked, derived.mode, view.modeText]);
 
   const copyRaw = useCallback(async () => {
     try {
@@ -520,7 +519,6 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
     }
   }, [status]);
 
-  const topOk = !error;
   const canStart = !busy && !derived.enabled;
   const canStop = !busy && !!derived.enabled;
 
@@ -535,51 +533,17 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
         <div className={cn("absolute inset-0 bg-[size:60px_60px]", t.grid)} />
       </div>
 
-      {/* Topbar */}
-      <div className={cn("sticky top-0 z-20 border-b backdrop-blur", t.topbarFx)}>
-        <div className="mx-auto max-w-[1200px] px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div
-              className={cn(
-                "h-9 w-9 rounded-2xl ring-1 grid place-items-center",
-                isBright ? "bg-sky-500/10 ring-sky-300/60" : "bg-sky-400/10 ring-sky-400/20"
-              )}
-            >
-              <span className={cn("font-bold text-sm", isBright ? "text-slate-900" : "text-sky-200")}>G</span>
-            </div>
-            <div className={cn("text-base font-bold tracking-tight", t.text)}>GestureOSManager</div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            {topOk ? <Badge t={t} tone="green">정상</Badge> : <Badge t={t} tone="red">오류</Badge>}
-            <Badge t={t} tone={derived.enabled ? "green" : "slate"}>{view.enabledText}</Badge>
-            <Badge t={t} tone={derived.connected ? "blue" : "red"}>{view.connText}</Badge>
-            <Badge t={t} tone={derived.locked ? "yellow" : "slate"}>{view.lockText}</Badge>
-            <Badge t={t} tone={preview ? "blue" : "slate"}>{preview ? "프리뷰" : "노프리뷰"}</Badge>
-            <Badge t={t} tone="slate">모드: {view.modeText}</Badge>
-
-            <button
-              type="button"
-              onClick={onToggleHud}
-              className={cn(
-                "ml-2 inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold ring-1 transition",
-                isBright
-                  ? "bg-slate-900/5 text-slate-900 ring-slate-200 hover:bg-slate-900/10"
-                  : cn("bg-white/7 ring-white/14 hover:bg-white/12", t.text)
-              )}
-              title="HUD 켬/끔"
-            >
-              <span className={cn("h-2 w-2 rounded-full", hudOn ? "bg-sky-400" : isBright ? "bg-slate-400" : "bg-slate-500")} />
-              HUD {hudOn ? "켬" : "끔"}
-            </button>
-          </div>
-        </div>
-      </div>
+      {/* ✅ 기존 sticky Topbar(조잡한 상태바) 삭제됨 */}
 
       {/* Content */}
       <div className="relative mx-auto max-w-[1200px] px-6 py-6 space-y-5">
         {error ? (
-          <div className={cn("rounded-2xl ring-1 px-5 py-4 text-sm", isBright ? "bg-rose-50 ring-rose-200 text-slate-900" : "bg-rose-950/30 ring-rose-900/60 text-rose-100")}>
+          <div
+            className={cn(
+              "rounded-2xl ring-1 px-5 py-4 text-sm",
+              isBright ? "bg-rose-50 ring-rose-200 text-slate-900" : "bg-rose-950/30 ring-rose-900/60 text-rose-100"
+            )}
+          >
             {error}
           </div>
         ) : null}
@@ -605,30 +569,6 @@ export default function Dashboard({ hudOn, onToggleHud, onHudState, onHudActions
                     </option>
                   ))}
                 </select>
-
-                <div className="flex flex-wrap gap-2">
-                  {MODE_OPTIONS.map((m) => {
-                    const active = (derived.mode ?? mode) === m;
-                    return (
-                      <button
-                        key={m}
-                        onClick={() => applyMode(m)}
-                        disabled={busy}
-                        className={cn(
-                          "px-3 py-1 rounded-full text-xs font-semibold ring-1 transition",
-                          active
-                            ? isBright
-                              ? "bg-sky-500/12 text-slate-900 ring-sky-300/70"
-                              : "bg-sky-500/14 text-slate-100 ring-sky-400/25"
-                            : cn(t.chip, t.text2),
-                          busy && "opacity-50 cursor-not-allowed"
-                        )}
-                      >
-                        {MODE_LABEL[m] ?? m}
-                      </button>
-                    );
-                  })}
-                </div>
               </div>
             </Card>
 
