@@ -87,6 +87,30 @@ export default function App() {
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem("theme", theme);
 
+    if (theme === "dark") {
+      document.body.style.cursor = "crosshair";
+    } else {
+      document.body.style.cursor = "auto";
+    }
+
+    if (theme === "light") {
+      document.body.style.cursor = "crosshair";
+    } else {
+      document.body.style.cursor = "auto";
+    }
+
+    if (theme === "neon") {
+      document.body.style.cursor = "crosshair";
+    } else {
+      document.body.style.cursor = "auto";
+    }
+    
+    if (theme === "rose") {
+      document.body.style.cursor = "crosshair";
+    } else {
+      document.body.style.cursor = "auto";
+    }
+
     if (theme === "devil") {
       document.body.style.cursor = "crosshair";
     } else {
