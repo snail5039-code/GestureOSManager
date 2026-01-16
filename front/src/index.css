@@ -34,7 +34,7 @@ html[data-theme="light"] body,
 html[data-theme="light"] body * {
   cursor: url("/cursor/light.png") 2 2, auto !important;
 }
-
+   
 html[data-theme="neon"],
 html[data-theme="neon"] body,
 html[data-theme="neon"] body * {
