@@ -5,6 +5,23 @@ function cn(...xs) {
   return xs.filter(Boolean).join(" ");
 }
 
+function StatusChip({ tone = "neutral", children, title }) {
+  const base =
+    "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] leading-none ring-1 select-none";
+  const toneCls =
+    tone === "ok"
+      ? "bg-emerald-500/12 ring-emerald-400/25 text-base-content"
+      : tone === "bad"
+      ? "bg-rose-500/12 ring-rose-400/25 text-base-content"
+      : "bg-base-100/35 ring-base-300/50 text-base-content opacity-95";
+
+  return (
+    <span className={cn(base, toneCls)} title={title}>
+      {children}
+    </span>
+  );
+}
+
 export default function TitleBar({
   hudOn,
   onToggleHud,
@@ -14,6 +31,9 @@ export default function TitleBar({
   onChangeScreen,
   theme,
   setTheme,
+
+  // ✅ 추가: Dashboard 폴링 결과를 여기로 올려서 표시
+  agentStatus, // { connected:boolean, locked:boolean, mode:string, modeText?:string }
 }) {
   const onMin = () => window.managerWin?.minimize?.();
   const onMax = () => window.managerWin?.toggleMaximize?.();
@@ -30,12 +50,32 @@ export default function TitleBar({
     []
   );
 
+  const MODE_LABEL = useMemo(
+    () => ({
+      MOUSE: "마우스",
+      KEYBOARD: "키보드",
+      PRESENTATION: "프레젠테이션",
+      DRAW: "그리기",
+      RUSH: "러쉬",
+      VKEY: "가상키보드",
+      DEFAULT: "기본",
+    }),
+    []
+  );
+
   const currentThemeLabel =
     THEME_PRESETS.find((t) => t.id === theme)?.label ?? theme ?? "dark";
 
+  const connected = !!agentStatus?.connected;
+  const locked = !!agentStatus?.locked;
+  const modeText =
+    agentStatus?.modeText ??
+    MODE_LABEL?.[agentStatus?.mode] ??
+    agentStatus?.mode ??
+    "-";
+
   // =========================
   // Theme Select Popover (Portal)
-  // - overflow-hidden에 안 잘리게 fixed + portal
   // =========================
   const [open, setOpen] = useState(false);
   const btnRef = useRef(null);
@@ -50,7 +90,6 @@ export default function TitleBar({
     const margin = 8;
     const width = Math.max(180, r.width + 24);
 
-    // 오른쪽 정렬 느낌으로: 버튼 right에 맞춰서 팝오버 배치
     const desiredLeft = r.right - width;
     const left = Math.max(margin, Math.min(desiredLeft, window.innerWidth - width - margin));
     const top = Math.min(r.bottom + margin, window.innerHeight - margin);
@@ -81,7 +120,6 @@ export default function TitleBar({
     window.addEventListener("mousedown", onDown);
     window.addEventListener("keydown", onKey);
     window.addEventListener("resize", onResize);
-    // 스크롤 컨테이너가 뭘지 몰라서 capture로 받음
     window.addEventListener("scroll", onScroll, true);
 
     return () => {
@@ -149,14 +187,14 @@ export default function TitleBar({
       style={{ WebkitAppRegion: "no-drag" }}
       onDoubleClick={onMax}
     >
-      {/* LEFT: Logo + Title + Tabs + HUD */}
+      {/* LEFT */}
       <div className="flex items-center gap-3">
         <div className="w-6 h-6 rounded-md bg-base-300/40 ring-1 ring-base-300/60 flex items-center justify-center text-xs font-bold">
           GA
         </div>
         <span className="font-semibold text-sm">Gesture Agent Manager</span>
 
-        {/* 화면 전환 탭 */}
+        {/* Tabs */}
         <div className="ml-2 flex items-center gap-1 bg-base-100/40 ring-1 ring-base-300/50 p-1 rounded-lg">
           <button
             type="button"
@@ -185,12 +223,25 @@ export default function TitleBar({
           </button>
         </div>
 
-        {/* ✅ WEB HUD 토글 (AgentHud) */}
+        {/* ✅ 여기: 연결/잠금/모드만 살려서 위쪽으로 */}
+        <div className="ml-2 flex items-center gap-1.5">
+          <StatusChip tone={connected ? "ok" : "bad"} title="에이전트 연결 상태">
+            {connected ? "연결됨" : "끊김"}
+          </StatusChip>
+          <StatusChip tone={locked ? "bad" : "ok"} title="제스처 잠금 상태">
+            {locked ? "잠금" : "해제"}
+          </StatusChip>
+          <StatusChip tone="neutral" title="현재 모드">
+            모드: {modeText}
+          </StatusChip>
+        </div>
+
+        {/* WEB HUD 토글 */}
         <button
           type="button"
           onClick={() => onToggleHud?.()}
           className={cn(
-            "ml-1 px-3 py-1 text-xs rounded-lg transition ring-1",
+            "ml-2 px-3 py-1 text-xs rounded-lg transition ring-1",
             hudOn
               ? "bg-primary/15 ring-primary/25 text-base-content hover:bg-primary/20"
               : "bg-base-100/35 ring-base-300/50 opacity-90 hover:opacity-100 hover:bg-base-100/50"
@@ -200,7 +251,7 @@ export default function TitleBar({
           HUD: {hudOn ? "ON" : "OFF"}
         </button>
 
-        {/* ✅ OS HUD 토글 (Python Overlay) */}
+        {/* OS HUD 토글 */}
         <button
           type="button"
           onClick={() => onToggleOsHud?.()}
@@ -216,12 +267,8 @@ export default function TitleBar({
         </button>
       </div>
 
-      {/* RIGHT: Theme select + Window controls */}
-      <div
-        className="ml-auto flex items-center gap-2"
-        style={{ WebkitAppRegion: "no-drag" }}
-      >
-        {/* ✅ Theme Select (Portal Popover) */}
+      {/* RIGHT */}
+      <div className="ml-auto flex items-center gap-2" style={{ WebkitAppRegion: "no-drag" }}>
         <button
           ref={btnRef}
           type="button"
@@ -241,27 +288,14 @@ export default function TitleBar({
 
         {ThemePopover}
 
-        {/* Window Controls */}
         <div className="flex items-center gap-2">
-          <button
-            className="w-10 h-8 rounded-md hover:bg-base-300/40"
-            onClick={onMin}
-            title="Minimize"
-          >
+          <button className="w-10 h-8 rounded-md hover:bg-base-300/40" onClick={onMin} title="Minimize">
             —
           </button>
-          <button
-            className="w-10 h-8 rounded-md hover:bg-base-300/40"
-            onClick={onMax}
-            title="Maximize"
-          >
+          <button className="w-10 h-8 rounded-md hover:bg-base-300/40" onClick={onMax} title="Maximize">
             □
           </button>
-          <button
-            className="w-10 h-8 rounded-md hover:bg-error/25"
-            onClick={onClose}
-            title="Close"
-          >
+          <button className="w-10 h-8 rounded-md hover:bg-error/25" onClick={onClose} title="Close">
             ×
           </button>
         </div>
