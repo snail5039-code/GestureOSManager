@@ -1,4 +1,8 @@
+# file: py/gestureos_agent/modes/keyboard.py
+from __future__ import annotations
+
 from dataclasses import dataclass, field
+from typing import Dict, Optional
 
 import pyautogui
 
@@ -6,14 +10,24 @@ pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0
 
 
+def _pick_token(gesture: str, mapping: Dict[str, str], order: list[str]) -> Optional[str]:
+    for tok in order:
+        if gesture == mapping.get(tok):
+            return tok
+    return None
+
+
 @dataclass
 class KeyboardHandler:
     """KEYBOARD mode 입력(연발 억제 버전)
 
-    정책:
-    - 화살표/백스페이스도 기본은 "단발 1회"만 발동
-    - 같은 제스처를 충분히 오래 유지(repeat_start_sec)했을 때만 느린 반복(repeat_sec) 허용
+    기본 정책:
+    - 화살표/백스페이스도 기본은 단발 1회만 발동
+    - 같은 토큰을 길게 들고 있을 때만 느린 반복 허용
     - SPACE/ENTER/ESC 는 단발(armed + cooldown)
+
+    ✅ 추가: 사용자 설정 바인딩 지원
+    - settings.bindings.KEYBOARD.BASE/FN/FN_HOLD 를 통해 제스처를 변경 가능
     """
 
     stable_frames: int = 3
@@ -37,7 +51,6 @@ class KeyboardHandler:
         }
     )
 
-    # 모든 토큰에 쿨다운을 줘서 손떨림/토큰 흔들림으로 인한 연속 발동 억제
     cooldown_sec: dict = field(
         default_factory=lambda: {
             "LEFT": 0.22,
@@ -55,15 +68,12 @@ class KeyboardHandler:
     streak: int = 0
     token_start_ts: float = 0.0
 
-    # one-shot gating
     armed: bool = True
 
-    # repeat gating
     pressed_once: bool = False
     repeat_start_ts: float = 0.0
     last_repeat_ts: float = 0.0
 
-    # per-token cooldown tracking
     last_fire_map: dict = field(
         default_factory=lambda: {
             "LEFT": 0.0,
@@ -114,39 +124,37 @@ class KeyboardHandler:
         cursor_gesture: str,
         got_other: bool,
         other_gesture: str,
+        bindings: dict | None = None,
     ):
         if not can_inject:
             self.reset()
             return
 
-        # FN(mod) layer: other hand PINCH_INDEX briefly enables
-        if got_other and other_gesture == "PINCH_INDEX":
+        bindings = bindings or {}
+        base_map: Dict[str, str] = dict(bindings.get("BASE") or {})
+        fn_map: Dict[str, str] = dict(bindings.get("FN") or {})
+        fn_hold: str = str(bindings.get("FN_HOLD") or "PINCH_INDEX").upper()
+
+        # FN(mod) layer: other hand gesture briefly enables
+        if got_other and other_gesture == fn_hold:
             self.mod_until = t + self.mod_grace_sec
         mod_active = t < self.mod_until
 
         token = None
 
-        # FN layer
-        if mod_active and got_cursor:
-            if cursor_gesture == "FIST":
-                token = "BACKSPACE"
-            elif cursor_gesture == "OPEN_PALM":
-                token = "SPACE"
-            elif cursor_gesture == "PINCH_INDEX":
-                token = "ENTER"
-            elif cursor_gesture == "V_SIGN":
-                token = "ESC"
-
-        # base layer
-        if token is None and got_cursor:
-            if cursor_gesture == "FIST":
-                token = "LEFT"
-            elif cursor_gesture == "V_SIGN":
-                token = "RIGHT"
-            elif cursor_gesture == "PINCH_INDEX":
-                token = "UP"
-            elif cursor_gesture == "OPEN_PALM":
-                token = "DOWN"
+        if got_cursor:
+            if mod_active:
+                token = _pick_token(
+                    cursor_gesture,
+                    fn_map,
+                    ["BACKSPACE", "SPACE", "ENTER", "ESC"],
+                )
+            if token is None:
+                token = _pick_token(
+                    cursor_gesture,
+                    base_map,
+                    ["LEFT", "RIGHT", "UP", "DOWN"],
+                )
 
         # no token => re-arm and clear repeat state
         if token is None:
