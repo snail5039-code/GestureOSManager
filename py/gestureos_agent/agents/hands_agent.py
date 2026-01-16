@@ -24,7 +24,7 @@ from ..modes.rush_lr import RushLRPicker
 from ..modes.rush_color import ColorStickTracker
 
 # =============================================================================
-# OS cursor -> virtual screen normalized (0~1) for HUD reticle alignment
+# OS cursor helpers
 # =============================================================================
 class _POINT(ctypes.Structure):
     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
@@ -61,6 +61,19 @@ def _get_os_cursor_norm01():
         return (None, None)
 
 
+def _get_os_cursor_xy():
+    if os.name != "nt":
+        return (None, None)
+    try:
+        user32 = ctypes.windll.user32
+        pt = _POINT()
+        if not user32.GetCursorPos(ctypes.byref(pt)):
+            return (None, None)
+        return (int(pt.x), int(pt.y))
+    except Exception:
+        return (None, None)
+
+
 # tracking loss handling
 LOSS_GRACE_SEC = 0.30
 HARD_LOSS_SEC = 0.55
@@ -69,6 +82,24 @@ REACQUIRE_BLOCK_SEC = 0.12
 # NEXT_MODE event (locked + both OPEN_PALM hold)
 MODE_HOLD_SEC = 0.8
 MODE_COOLDOWN_SEC = 1.2
+
+# =============================================================================
+# Mode Palette (OS overlay menu) - "modal state" (A안)
+# Trigger: both hands V_SIGN hold
+# Confirm: PINCH_INDEX hold
+# Cancel : FIST hold
+# =============================================================================
+PALETTE_OPEN_HOLD    = 0.65
+PALETTE_CONFIRM_HOLD = 0.18
+PALETTE_CANCEL_HOLD  = 0.45
+
+PALETTE_MAP = {
+    "MOUSE": "MOUSE",
+    "KEYBOARD": "KEYBOARD",
+    "DRAW": "DRAW",
+    "PPT": "PRESENTATION",
+    "OTHER": "MOUSE",  # 필요하면 "DEFAULT"로 변경 가능
+}
 
 
 def _lm_to_payload(lm):
@@ -144,9 +175,6 @@ class HandsAgent:
 
         # rush handlers
         self.rush_lr = RushLRPicker()
-        # (너가 올린 hands_agent.py 전체 코드 그대로…)
-        # 중간에 self.rush_color 초기화 부분만 아래처럼 되어 있어야 함:
-
         self.rush_color = ColorStickTracker(
             s_min=int(os.getenv("RUSH_COLOR_S_MIN", "60")),
             v_min=int(os.getenv("RUSH_COLOR_V_MIN", "60")),
@@ -156,12 +184,6 @@ class HandsAgent:
             debug=(os.getenv("RUSH_COLOR_DEBUG", "0") == "1"),
         )
 
-        # -----------------------------------------------------------------
-        # 아래는 네가 업로드한 hands_agent.py “전체”를 그대로 출력한 것.
-        # 위 초기화 블록이 반영된 버전으로 교체해서 써.
-        # -----------------------------------------------------------------
-
-
         # tracking loss
         self.last_seen_ts = 0.0
         self.last_cursor_lm = None
@@ -169,9 +191,18 @@ class HandsAgent:
         self.last_cursor_gesture = "NONE"
         self.reacquire_until = 0.0
 
-        # mode menu next_mode
+        # NEXT_MODE hold
         self.mode_hold_start = None
         self.last_mode_event_ts = 0.0
+
+        # ---- Palette modal state ----
+        self.palette_active = False
+        self.palette_open_start = None
+        self.palette_confirm_start = None
+        self.palette_cancel_start = None
+
+        # HUD tip bubble override
+        self.cursor_bubble = None
 
         # preview window
         self.window_open = False
@@ -203,7 +234,6 @@ class HandsAgent:
     def _on_command(self, data: dict):
         typ = data.get("type")
 
-        # 디버그(지금 단계에서 매우 중요)
         if typ in ("SET_MODE", "ENABLE", "DISABLE", "SET_PREVIEW"):
             print("[PY] cmd:", data, flush=True)
 
@@ -293,10 +323,102 @@ class HandsAgent:
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         return cap
 
+    # ---------- palette modal ----------
+    def _update_palette_modal(
+        self,
+        t: float,
+        got_cursor: bool,
+        got_other: bool,
+        cursor_gesture: str,
+        other_gesture: str,
+        cursor_cx: float,
+        cursor_cy: float,
+    ) -> bool:
+        """
+        Returns True if palette is active (and normal mode side-effects must be blocked).
+        """
+        self.cursor_bubble = None
+        hud = getattr(self.cfg, "hud", None)
+
+        if not hud:
+            # HUD가 없으면 팔레트 기능 자체 비활성
+            self.palette_active = False
+            self.palette_open_start = None
+            self.palette_confirm_start = None
+            self.palette_cancel_start = None
+            return False
+
+        # open trigger: both V_SIGN hold
+        if (not self.palette_active) and self.enabled and got_other and (cursor_gesture == "V_SIGN") and (other_gesture == "V_SIGN"):
+            if self.palette_open_start is None:
+                self.palette_open_start = t
+            if (t - self.palette_open_start) >= PALETTE_OPEN_HOLD:
+                self.palette_active = True
+                self.palette_open_start = None
+                self.palette_confirm_start = None
+                self.palette_cancel_start = None
+
+                cx, cy = _get_os_cursor_xy()
+                if cx is not None and cy is not None:
+                    hud.show_menu(center_xy=(cx, cy))
+                else:
+                    hud.show_menu()
+
+                # 혹시 다운/드래그 남아있으면 제거
+                self._reset_side_effects()
+        else:
+            self.palette_open_start = None
+
+        if not self.palette_active:
+            return False
+
+        # palette active: hover + confirm/cancel
+        hover = hud.get_menu_hover()  # "MOUSE"/"KEYBOARD"/"DRAW"/"PPT"/"OTHER"/None
+        self.cursor_bubble = f"MENU • {hover or '...'} (PINCH=확정, FIST=취소)"
+
+        # allow cursor move (OPEN_PALM) only for selecting items
+        no_inject = bool(getattr(self.cfg, "no_inject", False))
+        if (not no_inject) and (t >= self.reacquire_until) and got_cursor and (cursor_gesture == "OPEN_PALM"):
+            ux, uy = self.control.map_control_to_screen(cursor_cx, cursor_cy)
+            ex, ey = self.control.apply_ema(ux, uy)
+            self.control.move_cursor(ex, ey, t)
+
+        # confirm
+        if (cursor_gesture == "PINCH_INDEX") and hover:
+            if self.palette_confirm_start is None:
+                self.palette_confirm_start = t
+            if (t - self.palette_confirm_start) >= PALETTE_CONFIRM_HOLD:
+                picked = PALETTE_MAP.get(str(hover).upper(), "MOUSE")
+                self.apply_set_mode(picked)
+
+                hud.hide_menu()
+                self.palette_active = False
+                self.palette_confirm_start = None
+                self.palette_cancel_start = None
+                self._reset_side_effects()
+        else:
+            self.palette_confirm_start = None
+
+        # cancel
+        if cursor_gesture == "FIST":
+            if self.palette_cancel_start is None:
+                self.palette_cancel_start = t
+            if (t - self.palette_cancel_start) >= PALETTE_CANCEL_HOLD:
+                hud.hide_menu()
+                self.palette_active = False
+                self.palette_confirm_start = None
+                self.palette_cancel_start = None
+                self._reset_side_effects()
+        else:
+            self.palette_cancel_start = None
+
+        return bool(self.palette_active)
+
     # ---------- main loop ----------
     def run(self):
         print("[PY] running:", os.path.abspath(__file__), flush=True)
-        print("[PY] WS_URL:", getattr(self.cfg, "ws_url", ""), "(disabled)" if getattr(self.cfg, "no_ws", False) else "", flush=True)
+        print("[PY] WS_URL:", getattr(self.cfg, "ws_url", ""),
+              "(disabled)" if getattr(self.cfg, "no_ws", False) else "", flush=True)
 
         cap = self._open_camera()
         self.ws.start()
@@ -355,7 +477,7 @@ class HandsAgent:
                     cursor_lm = hands_list[0][1]
 
                 if len(hands_list) >= 2:
-                    for label, lm in hands_list:
+                    for _label, lm in hands_list:
                         if lm is not cursor_lm:
                             other_lm = lm
                             break
@@ -389,19 +511,33 @@ class HandsAgent:
 
             mode_u = str(self.mode).upper()
 
-            # UI menu (HUD)
-            _ = self.ui_menu.update(
+            # ============================================================
+            # (A안) Palette modal state 업데이트 (최우선)
+            # ============================================================
+            block_by_palette = self._update_palette_modal(
                 t=t,
-                enabled=self.enabled,
-                mode=self.mode,
+                got_cursor=got_cursor,
+                got_other=got_other,
                 cursor_gesture=cursor_gesture,
                 other_gesture=other_gesture,
-                got_other=got_other,
-                send_event=lambda name, payload: self.send_event(name, payload),
+                cursor_cx=cursor_cx,
+                cursor_cy=cursor_cy,
             )
 
-            # NEXT_MODE when locked: both OPEN_PALM hold
-            if self.enabled and self.locked and got_other and (cursor_gesture == "OPEN_PALM") and (other_gesture == "OPEN_PALM"):
+            # UI menu (HUD) - 팔레트 열려있으면 기존 UI 메뉴는 멈춤
+            if not block_by_palette:
+                _ = self.ui_menu.update(
+                    t=t,
+                    enabled=self.enabled,
+                    mode=self.mode,
+                    cursor_gesture=cursor_gesture,
+                    other_gesture=other_gesture,
+                    got_other=got_other,
+                    send_event=lambda name, payload: self.send_event(name, payload),
+                )
+
+            # NEXT_MODE when locked: both OPEN_PALM hold (팔레트 중엔 막기)
+            if (not block_by_palette) and self.enabled and self.locked and got_other and (cursor_gesture == "OPEN_PALM") and (other_gesture == "OPEN_PALM"):
                 if self.mode_hold_start is None:
                     self.mode_hold_start = t
                 if (t - self.mode_hold_start) >= MODE_HOLD_SEC and t >= (self.last_mode_event_ts + MODE_COOLDOWN_SEC):
@@ -411,8 +547,8 @@ class HandsAgent:
             else:
                 self.mode_hold_start = None
 
-            # LOCK only in MOUSE
-            if mode_u == "MOUSE":
+            # LOCK only in MOUSE (팔레트 중엔 막기)
+            if (not block_by_palette) and mode_u == "MOUSE":
                 self.locked = self.mouse_lock.update(
                     t=t,
                     cursor_gesture=cursor_gesture,
@@ -451,9 +587,21 @@ class HandsAgent:
                 can_kb_inject = False
                 can_ppt_inject = False
 
-            # pointer move
+            # ============================================================
+            # Palette active면 "기존 동작" 모두 차단
+            # (메뉴 이동은 _update_palette_modal()에서만 허용)
+            # ============================================================
+            if block_by_palette:
+                can_mouse_inject = False
+                can_draw_inject = False
+                can_kb_inject = False
+                can_ppt_inject = False
+                can_vkey_detect = False
+                can_vkey_click = False
+
+            # pointer move (기존 로직은 팔레트 중엔 막기)
             can_pointer_inject = (can_mouse_inject or can_draw_inject or can_ppt_inject)
-            if can_pointer_inject and got_cursor:
+            if (not block_by_palette) and can_pointer_inject and got_cursor:
                 do_move = False
                 if mode_u == "MOUSE":
                     do_move = (cursor_gesture == "OPEN_PALM") or (self.mouse_click.dragging and cursor_gesture == "PINCH_INDEX")
@@ -467,41 +615,52 @@ class HandsAgent:
                     ex, ey = self.control.apply_ema(ux, uy)
                     self.control.move_cursor(ex, ey, t)
 
-            # mouse actions
+            # mouse actions (팔레트 중엔 막기)
             if mode_u == "MOUSE":
-                self.mouse_click.update(t, cursor_gesture, can_mouse_inject)
-                self.mouse_right.update(t, cursor_gesture, can_mouse_inject)
+                self.mouse_click.update(t, cursor_gesture, can_mouse_inject and (not block_by_palette))
+                self.mouse_right.update(t, cursor_gesture, can_mouse_inject and (not block_by_palette))
             else:
                 self.mouse_click.update(t, cursor_gesture, False)
                 self.mouse_right.update(t, cursor_gesture, False)
 
             # draw
             if mode_u == "DRAW":
-                self.draw.update_draw(t, cursor_gesture, can_draw_inject)
-                self.draw.update_selection_shortcuts(t, cursor_gesture, other_gesture, got_other, can_draw_inject)
+                if not block_by_palette:
+                    self.draw.update_draw(t, cursor_gesture, can_draw_inject)
+                    self.draw.update_selection_shortcuts(t, cursor_gesture, other_gesture, got_other, can_draw_inject)
+                else:
+                    self.draw.reset()
             else:
                 self.draw.reset()
 
             # presentation
             if mode_u == "PRESENTATION":
-                self.ppt.update(t, can_ppt_inject, got_cursor, cursor_gesture, got_other, other_gesture)
+                if not block_by_palette:
+                    self.ppt.update(t, can_ppt_inject, got_cursor, cursor_gesture, got_other, other_gesture)
+                else:
+                    self.ppt.reset()
             else:
                 self.ppt.reset()
 
             # scroll (mouse only)
             scroll_active = False
-            if can_mouse_inject and got_other:
+            if (not block_by_palette) and can_mouse_inject and got_other:
                 self.mouse_scroll.update(t, other_gesture == "FIST", other_cy, True)
                 scroll_active = (other_gesture == "FIST")
             else:
                 self.mouse_scroll.update(t, False, 0.5, False)
 
             # keyboard
-            self.kb.update(t, can_kb_inject, got_cursor, cursor_gesture, got_other, other_gesture)
+            if not block_by_palette:
+                self.kb.update(t, can_kb_inject, got_cursor, cursor_gesture, got_other, other_gesture)
+            else:
+                self.kb.reset()
 
             # vkey
-            if mode_u == "VKEY":
+            if mode_u == "VKEY" and (not block_by_palette):
                 self.vkey.update(t, can_vkey_click, cursor_lm, self.control.map_control_to_screen)
+            elif mode_u == "VKEY":
+                self.vkey.reset()
 
             # send status
             self._send_status(
@@ -533,7 +692,7 @@ class HandsAgent:
                 lp = _pack_xy(rush_left)
                 rp = _pack_xy(rush_right)
 
-                line1 = f"mode={mode_u} enabled={self.enabled} locked={self.locked} cur={cursor_gesture} oth={other_gesture}"
+                line1 = f"mode={mode_u} enabled={self.enabled} locked={self.locked} cur={cursor_gesture} oth={other_gesture} palette={self.palette_active}"
                 cv2.putText(frame, line1, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
 
                 if lp is not None:
@@ -577,7 +736,7 @@ class HandsAgent:
         payload = {
             "type": "STATUS",
             "enabled": bool(self.enabled),
-            "mode": mode_u,  # ✅ 절대 RUSH로 뭉개지 말 것 (RUSH_HAND/RUSH_COLOR 그대로)
+            "mode": mode_u,
             "locked": bool(self.locked),
             "preview": bool(self.preview),
 
@@ -598,7 +757,11 @@ class HandsAgent:
             "connected": bool(self.ws.connected),
         }
 
-        # 러쉬 입력 타입 제공(서버/프론트 표시용)
+        # ✅ HUD bubble override (menu text)
+        if getattr(self, "cursor_bubble", None):
+            payload["cursorBubble"] = str(self.cursor_bubble)
+
+        # rush input type
         if mode_u.startswith("RUSH"):
             payload["rushInput"] = "COLOR" if mode_u == "RUSH_COLOR" else "HAND"
 
