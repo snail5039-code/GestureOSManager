@@ -40,7 +40,7 @@ html[data-theme="neon"] body,
 html[data-theme="neon"] body * {
   cursor: url("/cursor/neon.png") 2 2, auto !important;
 }
-
+  
 html[data-theme="rose"],
 html[data-theme="rose"] body,
 html[data-theme="rose"] body * {
