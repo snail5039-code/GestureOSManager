@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import TitleBar from "./components/TitleBar";
 import Dashboard from "./pages/Dashboard";
+import Settings from "./pages/Settings";
 import AgentHud from "./components/AgentHud";
 import Rush3DPage from "./pages/Rush3DPage";
 import PairingQrModal from "./components/PairingQrModal";
@@ -122,9 +123,7 @@ export default function App() {
       />
       <main
         className={
-          screen === "dashboard"
-            ? "flex-1 overflow-auto"
-            : "flex-1 overflow-hidden"
+          screen === "rush" ? "flex-1 overflow-hidden" : "flex-1 overflow-auto"
         }
       >
         <div className={screen === "dashboard" ? "block" : "hidden"}>
@@ -145,6 +144,8 @@ export default function App() {
             connected={hudFeed?.connected ?? true}
           />
         )}
+
+        {screen === "settings" && <Settings theme={theme} />}
       </main>
       {/* ✅ WEB HUD(AgentHud)만 hudOn으로 제어 */}
       {hudOn && (

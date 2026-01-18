@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import GestureSettingsPanel from "./GestureSettingsPanel";
 
 function cn(...xs) {
   return xs.filter(Boolean).join(" ");
@@ -83,6 +84,14 @@ export default function TitleBar({
   const popRef = useRef(null);
   const [pos, setPos] = useState({ top: 48, left: 0, width: 220 });
 
+  // =========================
+  // Settings Popover (Gear)
+  // =========================
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const gearBtnRef = useRef(null);
+  const settingsPopRef = useRef(null);
+  const [settingsPos, setSettingsPos] = useState({ top: 48, left: 0, width: 640 });
+
   const calcPos = () => {
     const el = btnRef.current;
     if (!el) return;
@@ -99,6 +108,24 @@ export default function TitleBar({
     const top = Math.min(r.bottom + margin, window.innerHeight - margin);
 
     setPos({ top, left, width });
+  };
+
+  const calcSettingsPos = () => {
+    const el = gearBtnRef.current;
+    if (!el) return;
+
+    const r = el.getBoundingClientRect();
+    const margin = 10;
+    // 화면이 작을 때도 넘치지 않게 clamp
+    const ideal = Math.min(760, Math.max(380, Math.round(window.innerWidth * 0.62)));
+    const width = Math.max(320, Math.min(ideal, window.innerWidth - margin * 2));
+
+    // 오른쪽 정렬 느낌(기어 버튼 기준으로)
+    const desiredLeft = r.right - width;
+    const left = Math.max(margin, Math.min(desiredLeft, window.innerWidth - width - margin));
+    const top = Math.min(r.bottom + margin, window.innerHeight - margin);
+
+    setSettingsPos({ top, left, width });
   };
 
   useEffect(() => {
@@ -133,6 +160,39 @@ export default function TitleBar({
       window.removeEventListener("scroll", onScroll, true);
     };
   }, [open]);
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+    calcSettingsPos();
+
+    const onDown = (e) => {
+      const t = e.target;
+      const btn = gearBtnRef.current;
+      const pop = settingsPopRef.current;
+      if (!btn || !pop) return;
+      if (btn.contains(t) || pop.contains(t)) return;
+      setSettingsOpen(false);
+    };
+
+    const onKey = (e) => {
+      if (e.key === "Escape") setSettingsOpen(false);
+    };
+
+    const onResize = () => calcSettingsPos();
+    const onScroll = () => calcSettingsPos();
+
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("resize", onResize);
+    window.addEventListener("scroll", onScroll, true);
+
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("scroll", onScroll, true);
+    };
+  }, [settingsOpen]);
 
   const ThemePopover = open
     ? createPortal(
@@ -175,6 +235,34 @@ export default function TitleBar({
               );
             })}
           </ul>
+        </div>,
+        document.body
+      )
+    : null;
+
+  const SettingsPopover = settingsOpen
+    ? createPortal(
+        <div
+          ref={settingsPopRef}
+          style={{
+            position: "fixed",
+            top: settingsPos.top,
+            left: settingsPos.left,
+            width: settingsPos.width,
+            zIndex: 99999,
+          }}
+          className={cn(
+            "rounded-2xl shadow-2xl ring-1",
+            "bg-base-200/90 text-base-content border border-base-300/60",
+            "backdrop-blur",
+            "overflow-hidden"
+          )}
+        >
+          <GestureSettingsPanel
+            theme={theme}
+            embedded
+            onRequestClose={() => setSettingsOpen(false)}
+          />
         </div>,
         document.body
       )
@@ -225,6 +313,8 @@ export default function TitleBar({
           >
             Rush
           </button>
+
+          {/* 설정은 오른쪽 기어(⚙)로 이동 */}
         </div>
 
         {/* ✅ 여기: 연결/잠금/모드만 살려서 위쪽으로 */}
@@ -290,10 +380,53 @@ export default function TitleBar({
       </div>
 
       {/* RIGHT */}
-      <div
-        className="ml-auto flex items-center gap-2"
-        style={{ WebkitAppRegion: "no-drag" }}
-      >
+      <div className="ml-auto flex items-center gap-2" style={{ WebkitAppRegion: "no-drag" }}>
+        {/* Settings (Gear) */}
+        <button
+          ref={gearBtnRef}
+          type="button"
+          onClick={() => {
+            // 둘 다 열릴 필요 없음
+            setOpen(false);
+            setSettingsOpen((v) => !v);
+          }}
+          className={cn(
+            "btn btn-sm rounded-lg",
+            "bg-base-100/35 border border-base-300/60",
+            "hover:bg-base-100/55",
+            "text-base-content"
+          )}
+          aria-expanded={settingsOpen}
+          title="제스처 설정"
+        >
+          <span className="inline-flex items-center gap-2">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+              className="opacity-80"
+            >
+              <path
+                d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"
+                stroke="currentColor"
+                strokeWidth="1.8"
+              />
+              <path
+                d="M19.4 15a8.3 8.3 0 0 0 .1-6l-2.1-.8a6.8 6.8 0 0 0-1.2-2.1l1-2a8.3 8.3 0 0 0-5.2-2.2l-.7 2.2a6.7 6.7 0 0 0-2.4 0L8.2 1.9A8.3 8.3 0 0 0 3 4.1l1 2a6.8 6.8 0 0 0-1.2 2.1L.7 9a8.3 8.3 0 0 0 .1 6l2.1.8a6.8 6.8 0 0 0 1.2 2.1l-1 2A8.3 8.3 0 0 0 8.2 22l.7-2.2a6.7 6.7 0 0 0 2.4 0L12 22a8.3 8.3 0 0 0 5.2-2.2l-1-2a6.8 6.8 0 0 0 1.2-2.1l2-.7Z"
+                stroke="currentColor"
+                strokeWidth="1.2"
+                strokeLinejoin="round"
+                opacity="0.9"
+              />
+            </svg>
+            <span className="text-xs font-semibold">설정</span>
+          </span>
+        </button>
+
+        {SettingsPopover}
+
         <button
           ref={btnRef}
           type="button"

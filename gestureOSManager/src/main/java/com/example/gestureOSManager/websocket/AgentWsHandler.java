@@ -9,6 +9,7 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 import com.example.gestureOSManager.dto.AgentStatus;
 import com.example.gestureOSManager.dto.ModeType;
 import com.example.gestureOSManager.service.ControlService;
+import com.example.gestureOSManager.service.SettingsService;
 import com.example.gestureOSManager.service.StatusService;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -26,6 +27,7 @@ public class AgentWsHandler extends TextWebSocketHandler {
   private final StatusService statusService;
   private final ControlService controlService;
   private final HudWsHandler hudWsHandler;
+  private final SettingsService settingsService;
 
   private static final List<ModeType> CYCLE =
       List.of(ModeType.MOUSE, ModeType.PRESENTATION, ModeType.DRAW);
@@ -40,18 +42,26 @@ public class AgentWsHandler extends TextWebSocketHandler {
       AgentSessionRegistry sessions,
       StatusService statusService,
       ControlService controlService,
-      HudWsHandler hudWsHandler
+      HudWsHandler hudWsHandler,
+      SettingsService settingsService
   ) {
     this.sessions = sessions;
     this.statusService = statusService;
     this.controlService = controlService;
     this.hudWsHandler = hudWsHandler;
+    this.settingsService = settingsService;
   }
 
   @Override
   public void afterConnectionEstablished(WebSocketSession session) {
     sessions.set(session);
     log.info("[WS] Agent connected: {} open={}", session.getId(), session.isOpen());
+
+    // Push latest saved settings to agent on connect (best-effort)
+    try {
+      controlService.updateSettings(settingsService.getSettings());
+    } catch (Exception ignore) {
+    }
   }
 
   @Override
