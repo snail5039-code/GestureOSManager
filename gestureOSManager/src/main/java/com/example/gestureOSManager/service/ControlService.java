@@ -1,6 +1,7 @@
 package com.example.gestureOSManager.service;
 
 import java.util.List;
+import java.util.Map;
 import org.springframework.stereotype.Service;
 import com.example.gestureOSManager.dto.AgentCommand;
 import com.example.gestureOSManager.dto.ModeType;
@@ -37,6 +38,14 @@ public class ControlService {
     System.out.println("[SPRING] setMode(" + mode + ") isConnected=" + sessions.isConnected());
     log.info("[CTRL] registryRef={}", System.identityHashCode(sessions));
     return send(AgentCommand.ofMode(mode));
+  }
+
+  /**
+   * Push runtime settings to the Python agent (e.g., gesture bindings).
+   */
+  public boolean updateSettings(Map<String, Object> settings) {
+    if (settings == null) settings = Map.of();
+    return send(AgentCommand.ofSettings(settings));
   }
 
   private boolean send(Object cmd) {
