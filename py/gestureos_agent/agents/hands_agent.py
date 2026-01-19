@@ -15,14 +15,35 @@ from ..gestures import palm_center, classify_gesture
 from ..control import ControlMapper
 from ..ws_client import WSClient
 
-from ..modes.mouse import MouseClickDrag, MouseRightClick, MouseScroll, MouseLockToggle
-from ..modes.keyboard import KeyboardHandler
-from ..modes.draw import DrawHandler
-from ..modes.presentation import PresentationHandler
-from ..modes.vkey import VKeyHandler
-from ..modes.ui_menu import UIModeMenu
-from ..modes.rush_lr import RushLRPicker
-from ..modes.rush_color import ColorStickTracker
+# =============================================================================
+# SAFE imports for modes (import 실패해도 NameError로 죽지 않게)
+# =============================================================================
+_MODE_IMPORT_ERRS = []
+
+def _safe_import(path: str, name: str):
+    try:
+        mod = __import__(path, fromlist=[name])
+        return getattr(mod, name)
+    except Exception as e:
+        _MODE_IMPORT_ERRS.append((f"{path}.{name}", repr(e)))
+        return None
+
+# mouse
+MouseClickDrag   = _safe_import("gestureos_agent.modes.mouse", "MouseClickDrag")
+MouseRightClick  = _safe_import("gestureos_agent.modes.mouse", "MouseRightClick")
+MouseScroll      = _safe_import("gestureos_agent.modes.mouse", "MouseScroll")
+MouseLockToggle  = _safe_import("gestureos_agent.modes.mouse", "MouseLockToggle")
+
+# keyboard / draw / ppt / vkey
+KeyboardHandler      = _safe_import("gestureos_agent.modes.keyboard", "KeyboardHandler")
+DrawHandler          = _safe_import("gestureos_agent.modes.draw", "DrawHandler")
+PresentationHandler  = _safe_import("gestureos_agent.modes.presentation", "PresentationHandler")
+VKeyHandler          = _safe_import("gestureos_agent.modes.vkey", "VKeyHandler")
+
+# ui menu / rush
+UIModeMenu       = _safe_import("gestureos_agent.modes.ui_menu", "UIModeMenu")
+RushLRPicker     = _safe_import("gestureos_agent.modes.rush_lr", "RushLRPicker")
+ColorStickTracker = _safe_import("gestureos_agent.modes.rush_color", "ColorStickTracker")
 
 from ..bindings import DEFAULT_SETTINGS, deep_copy, merge_settings, get_binding
 
@@ -133,6 +154,10 @@ class HandsAgent:
     def __init__(self, cfg: AgentConfig):
         self.cfg = cfg
 
+        # import 에러 로그 1회 출력
+        if _MODE_IMPORT_ERRS:
+            print("[MODE_IMPORT_ERRS]", _MODE_IMPORT_ERRS, flush=True)
+
         self.enabled = bool(getattr(cfg, "start_enabled", False))
 
         # ---- initial mode ----
@@ -163,25 +188,24 @@ class HandsAgent:
             move_interval_sec=(1.0 / max(1e-6, float(getattr(cfg, "move_hz", 60.0)))),
         )
 
-        # mode handlers
-        self.mouse_click = MouseClickDrag()
-        self.mouse_right = MouseRightClick()
-        self.mouse_scroll = MouseScroll()
-        self.mouse_lock = MouseLockToggle()
+        # mode handlers (None guard)
+        self.mouse_click = MouseClickDrag() if MouseClickDrag else None
+        self.mouse_right = MouseRightClick() if MouseRightClick else None
+        self.mouse_scroll = MouseScroll() if MouseScroll else None
+        self.mouse_lock = MouseLockToggle() if MouseLockToggle else None
 
-        self.kb = KeyboardHandler()
-        self.draw = DrawHandler()
-        self.ppt = PresentationHandler()
-        self.vkey = VKeyHandler()
+        self.kb = KeyboardHandler() if KeyboardHandler else None
+        self.draw = DrawHandler() if DrawHandler else None
+        self.ppt = PresentationHandler() if PresentationHandler else None
+        self.vkey = VKeyHandler() if VKeyHandler else None
 
-        self.ui_menu = UIModeMenu()
+        self.ui_menu = UIModeMenu() if UIModeMenu else None
 
         # ---- user settings (gesture bindings) ----
-        # Server(Sprint Boot) can push UPDATE_SETTINGS anytime.
         self.settings: dict = deep_copy(DEFAULT_SETTINGS)
 
         # rush handlers
-        self.rush_lr = RushLRPicker()
+        self.rush_lr = RushLRPicker() if RushLRPicker else None
         self.rush_color = ColorStickTracker(
             s_min=int(os.getenv("RUSH_COLOR_S_MIN", "60")),
             v_min=int(os.getenv("RUSH_COLOR_V_MIN", "60")),
@@ -189,7 +213,7 @@ class HandsAgent:
             use_bgr_fallback=(os.getenv("RUSH_COLOR_BGR_FALLBACK", "1") == "1"),
             flip_mirror=(os.getenv("RUSH_COLOR_FLIP", "0") == "1"),
             debug=(os.getenv("RUSH_COLOR_DEBUG", "0") == "1"),
-        )
+        ) if ColorStickTracker else None
 
         # tracking loss
         self.last_seen_ts = 0.0
@@ -265,14 +289,14 @@ class HandsAgent:
 
     # ---------- mode + state ----------
     def _reset_side_effects(self):
-        self.mouse_click.reset()
-        self.mouse_right.reset()
-        self.mouse_scroll.reset()
+        if self.mouse_click: self.mouse_click.reset()
+        if self.mouse_right: self.mouse_right.reset()
+        if self.mouse_scroll: self.mouse_scroll.reset()
 
-        self.kb.reset()
-        self.draw.reset()
-        self.ppt.reset()
-        self.vkey.reset()
+        if self.kb: self.kb.reset()
+        if self.draw: self.draw.reset()
+        if self.ppt: self.ppt.reset()
+        if self.vkey: self.vkey.reset()
 
     def apply_settings(self, incoming: dict):
         """Apply user settings pushed from server.
@@ -283,7 +307,6 @@ class HandsAgent:
         """
         try:
             self.settings = merge_settings(self.settings, incoming)
-            # side-effect handlers can keep running; bindings are read live
             print("[PY] apply_settings -> version", self.settings.get("version"), flush=True)
         except Exception as e:
             print("[PY] apply_settings failed:", e, flush=True)
@@ -309,22 +332,27 @@ class HandsAgent:
         self.control.reset_ema()
 
         if self.mode == "DRAW" and nm != "DRAW":
-            self.draw.reset()
+            if self.draw: self.draw.reset()
 
         if nm != "MOUSE":
-            self.mouse_click.reset()
-            self.mouse_right.reset()
-            self.mouse_scroll.reset()
+            if self.mouse_click: self.mouse_click.reset()
+            if self.mouse_right: self.mouse_right.reset()
+            if self.mouse_scroll: self.mouse_scroll.reset()
 
         if nm in ("KEYBOARD", "PRESENTATION", "DRAW", "RUSH_HAND", "RUSH_COLOR", "VKEY"):
             self.locked = False
 
-        self.kb.reset()
-        self.ppt.reset()
-        self.draw.reset()
-        self.vkey.reset()
+        if self.kb: self.kb.reset()
+        if self.ppt: self.ppt.reset()
+        if self.draw: self.draw.reset()
+        if self.vkey: self.vkey.reset()
 
-        if nm == "VKEY":
+        if nm == "VKEY" and self.vkey:
+            try:
+                self.vkey.on_enter()
+            except Exception as e:
+                print("[VKEY] on_enter failed:", repr(e), flush=True)
+
             try:
                 self.vkey.open_windows_osk()
             except Exception:
@@ -481,10 +509,12 @@ class HandsAgent:
                     hands_list.append((label, lm))
 
             # rush left/right packs (hands-based default)
-            rush_left, rush_right = self.rush_lr.pick(t, hands_list)
+            rush_left, rush_right = (None, None)
+            if self.rush_lr:
+                rush_left, rush_right = self.rush_lr.pick(t, hands_list)
 
             # RUSH_COLOR: override with HSV stick tracking
-            if str(self.mode).upper() == "RUSH_COLOR":
+            if str(self.mode).upper() == "RUSH_COLOR" and self.rush_color:
                 try:
                     rush_left, rush_right = self.rush_color.process(frame, t)
                 except Exception as e:
@@ -549,8 +579,8 @@ class HandsAgent:
                 cursor_cy=cursor_cy,
             )
 
-            # UI menu (HUD) - 팔레트 열려있으면 기존 UI 메뉴는 멈춤
-            if not block_by_palette:
+            # UI menu (HUD)
+            if (not block_by_palette) and self.ui_menu:
                 _ = self.ui_menu.update(
                     t=t,
                     enabled=self.enabled,
@@ -583,7 +613,7 @@ class HandsAgent:
             ppt_bindings = ((self.settings.get("bindings") or {}).get("PRESENTATION") or {})
 
             # LOCK only in MOUSE (팔레트 중엔 막기)
-            if (not block_by_palette) and mode_u == "MOUSE":
+            if (not block_by_palette) and mode_u == "MOUSE" and self.mouse_lock:
                 self.locked = self.mouse_lock.update(
                     t=t,
                     cursor_gesture=cursor_gesture,
@@ -596,7 +626,8 @@ class HandsAgent:
                     toggle_gesture=mouse_lock_g,
                 )
             else:
-                self.mouse_lock.reset()
+                if self.mouse_lock:
+                    self.mouse_lock.reset()
 
             # injection permissions
             no_inject = bool(getattr(self.cfg, "no_inject", False))
@@ -604,8 +635,8 @@ class HandsAgent:
             can_draw_inject  = self.enabled and (mode_u == "DRAW") and (t >= self.reacquire_until) and (not self.locked) and (not no_inject)
             can_kb_inject    = self.enabled and (mode_u == "KEYBOARD") and (t >= self.reacquire_until) and (not self.locked) and (not no_inject)
             can_ppt_inject   = self.enabled and (mode_u == "PRESENTATION") and (t >= self.reacquire_until) and (not self.locked) and (not no_inject)
-            can_vkey_detect  = self.enabled and (mode_u == "VKEY") and (t >= self.reacquire_until) and (not self.locked)
-            can_vkey_click   = can_vkey_detect and (not no_inject)
+            can_vkey_detect  = self.enabled and (mode_u == "VKEY")
+            can_vkey_click   = can_vkey_detect
 
             # RUSH disables OS inject
             if mode_u.startswith("RUSH"):
@@ -618,15 +649,13 @@ class HandsAgent:
 
             # VKEY uses only vkey
             if mode_u == "VKEY":
+                self.locked = False
                 can_mouse_inject = False
                 can_draw_inject = False
                 can_kb_inject = False
                 can_ppt_inject = False
 
-            # ============================================================
-            # Palette active면 "기존 동작" 모두 차단
-            # (메뉴 이동은 _update_palette_modal()에서만 허용)
-            # ============================================================
+            # Palette active면 기존 동작 모두 차단
             if block_by_palette:
                 can_mouse_inject = False
                 can_draw_inject = False
@@ -635,14 +664,16 @@ class HandsAgent:
                 can_vkey_detect = False
                 can_vkey_click = False
 
-            # pointer move (기존 로직은 팔레트 중엔 막기)
+            # pointer move
             can_pointer_inject = (can_mouse_inject or can_draw_inject or can_ppt_inject)
             if (not block_by_palette) and can_pointer_inject and got_cursor:
                 do_move = False
                 if mode_u == "MOUSE":
-                    do_move = (cursor_gesture == mouse_move_g) or (self.mouse_click.dragging and cursor_gesture == mouse_click_g)
+                    dragging = bool(getattr(self.mouse_click, "dragging", False)) if self.mouse_click else False
+                    do_move = (cursor_gesture == mouse_move_g) or (dragging and cursor_gesture == mouse_click_g)
                 elif mode_u == "DRAW":
-                    do_move = (cursor_gesture in ("OPEN_PALM", "PINCH_INDEX")) or self.draw.down
+                    down = bool(getattr(self.draw, "down", False)) if self.draw else False
+                    do_move = (cursor_gesture in ("OPEN_PALM", "PINCH_INDEX")) or down
                 elif mode_u == "PRESENTATION":
                     do_move = (cursor_gesture == "OPEN_PALM")
 
@@ -651,63 +682,72 @@ class HandsAgent:
                     ex, ey = self.control.apply_ema(ux, uy)
                     self.control.move_cursor(ex, ey, t)
 
-            # mouse actions (팔레트 중엔 막기)
+            # mouse actions
             if mode_u == "MOUSE":
-                self.mouse_click.update(
-                    t,
-                    cursor_gesture,
-                    can_mouse_inject and (not block_by_palette),
-                    click_gesture=mouse_click_g,
-                )
-                self.mouse_right.update(
-                    t,
-                    cursor_gesture,
-                    can_mouse_inject and (not block_by_palette),
-                    gesture=mouse_right_g,
-                )
+                if self.mouse_click:
+                    self.mouse_click.update(
+                        t,
+                        cursor_gesture,
+                        can_mouse_inject and (not block_by_palette),
+                        click_gesture=mouse_click_g,
+                    )
+                if self.mouse_right:
+                    self.mouse_right.update(
+                        t,
+                        cursor_gesture,
+                        can_mouse_inject and (not block_by_palette),
+                        gesture=mouse_right_g,
+                    )
             else:
-                self.mouse_click.update(t, cursor_gesture, False, click_gesture=mouse_click_g)
-                self.mouse_right.update(t, cursor_gesture, False, gesture=mouse_right_g)
+                if self.mouse_click:
+                    self.mouse_click.update(t, cursor_gesture, False, click_gesture=mouse_click_g)
+                if self.mouse_right:
+                    self.mouse_right.update(t, cursor_gesture, False, gesture=mouse_right_g)
 
             # draw
-            if mode_u == "DRAW":
+            if mode_u == "DRAW" and self.draw:
                 if not block_by_palette:
                     self.draw.update_draw(t, cursor_gesture, can_draw_inject)
                     self.draw.update_selection_shortcuts(t, cursor_gesture, other_gesture, got_other, can_draw_inject)
                 else:
                     self.draw.reset()
             else:
-                self.draw.reset()
+                if self.draw:
+                    self.draw.reset()
 
             # presentation
-            if mode_u == "PRESENTATION":
+            if mode_u == "PRESENTATION" and self.ppt:
                 if not block_by_palette:
                     self.ppt.update(t, can_ppt_inject, got_cursor, cursor_gesture, got_other, other_gesture, bindings=ppt_bindings)
                 else:
                     self.ppt.reset()
             else:
-                self.ppt.reset()
+                if self.ppt:
+                    self.ppt.reset()
 
             # scroll (mouse only)
             scroll_active = False
-            if (not block_by_palette) and can_mouse_inject and got_other:
+            if (not block_by_palette) and can_mouse_inject and got_other and self.mouse_scroll:
                 sa = (other_gesture == mouse_scroll_hold_g)
                 self.mouse_scroll.update(t, sa, other_cy, True)
                 scroll_active = sa
             else:
-                self.mouse_scroll.update(t, False, 0.5, False)
+                if self.mouse_scroll:
+                    self.mouse_scroll.update(t, False, 0.5, False)
 
             # keyboard
-            if not block_by_palette:
+            if (not block_by_palette) and self.kb:
                 self.kb.update(t, can_kb_inject, got_cursor, cursor_gesture, got_other, other_gesture, bindings=kb_bindings)
             else:
-                self.kb.reset()
+                if self.kb:
+                    self.kb.reset()
 
             # vkey
-            if mode_u == "VKEY" and (not block_by_palette):
-                self.vkey.update(t, can_vkey_click, cursor_lm, self.control.map_control_to_screen)
-            elif mode_u == "VKEY":
-                self.vkey.reset()
+            if mode_u == "VKEY" and (not block_by_palette) and self.enabled and self.vkey:
+                self.vkey.update(t, can_vkey_click, cursor_lm, cursor_gesture)
+            elif mode_u == "VKEY" and (not self.enabled):
+                if self.vkey:
+                    self.vkey.reset()
 
             # send status
             self._send_status(
@@ -800,7 +840,7 @@ class HandsAgent:
             "cursorLandmarks": _lm_to_payload(cursor_lm),
             "otherLandmarks": _lm_to_payload(other_lm),
 
-            "tapSeq": int(getattr(self.vkey, "tap_seq", 0)),
+            "tapSeq": int(getattr(self.vkey, "tap_seq", 0)) if self.vkey else 0,
             "connected": bool(self.ws.connected),
         }
 
