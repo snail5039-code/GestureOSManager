@@ -116,7 +116,7 @@ export default function App() {
     } else {
       document.body.style.cursor = "auto";
     }
-
+  
     console.log("data-theme =", theme);
   }, [theme]);
 
