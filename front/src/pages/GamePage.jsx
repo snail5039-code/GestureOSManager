@@ -12,10 +12,9 @@ const MODELS_LIST = {
   straight: "/models/Straight.glb",
   uppercut: "/models/Uppercut.glb"
 };
-
 const DRACO_URL = "https://www.gstatic.com/draco/versioned/decoders/1.5.5/";
 
-function BoxerScene({ activeKey, headX, onReturnToBase, onHitJudge }) {
+function BoxerScene({ activeKey, headX, onReturnToBase, onHitJudge, isShaking, gameState }) {
   const m0 = useGLTF(MODELS_LIST.base, DRACO_URL);
   const m1 = useGLTF(MODELS_LIST.hook, DRACO_URL);
   const m2 = useGLTF(MODELS_LIST.punch_l, DRACO_URL);
@@ -30,40 +29,44 @@ function BoxerScene({ activeKey, headX, onReturnToBase, onHitJudge }) {
   useEffect(() => {
     if (!m0.scene) return;
     mixerRef.current = new THREE.AnimationMixer(m0.scene);
-    const handleFinished = () => onReturnToBase();
+    const handleFinished = () => { isHitProcessed.current = false; onReturnToBase(); };
     mixerRef.current.addEventListener("finished", handleFinished);
 
     const gltfMap = { base: m0, hook: m1, punch_l: m2, punch_r: m3, straight: m4, uppercut: m5 };
     Object.keys(gltfMap).forEach((key) => {
-      const data = gltfMap[key];
-      if (data?.animations?.[0]) {
-        const action = mixerRef.current.clipAction(data.animations[0]);
-        action.setEffectiveTimeScale(1.8);
+      if (gltfMap[key]?.animations?.[0]) {
+        const action = mixerRef.current.clipAction(gltfMap[key].animations[0]);
+        action.setEffectiveTimeScale(gameState === "ATTACK_CHANCE" ? 0.6 : 1.8);
         if (key !== "base") { action.setLoop(THREE.LoopOnce); action.clampWhenFinished = true; }
         actionsRef.current[key] = action;
       }
     });
     actionsRef.current["base"]?.play();
     return () => mixerRef.current?.removeEventListener("finished", handleFinished);
-  }, [m0, m1, m2, m3, m4, m5]);
+  }, [m0, gameState]);
 
   useEffect(() => {
-    isHitProcessed.current = false;
-    const actions = actionsRef.current;
-    Object.keys(actions).forEach(key => {
-      if (key === activeKey) actions[key].reset().fadeIn(0.1).play();
-      else actions[key].fadeOut(0.1);
+    if (activeKey !== "base") isHitProcessed.current = false;
+    Object.keys(actionsRef.current).forEach(key => {
+      const action = actionsRef.current[key];
+      if (!action) return;
+      if (key === activeKey) action.reset().fadeIn(0.1).play();
+      else action.fadeOut(0.1);
     });
   }, [activeKey]);
 
   useFrame((state, delta) => {
-    mixerRef.current?.update(delta);
-    if (activeKey !== "base" && !isHitProcessed.current) {
+    if (mixerRef.current) mixerRef.current.update(delta);
+    if (activeKey !== "base" && !isHitProcessed.current && gameState === "DEFENSE") {
       const action = actionsRef.current[activeKey];
-      if (action && action.time > action.getClip().duration * 0.6) {
+      if (action && action.time > action.getClip().duration * 0.5) {
         isHitProcessed.current = true;
-        onHitJudge();
+        onHitJudge(activeKey);
       }
+    }
+    if (isShaking) {
+      state.camera.position.x += (Math.random() - 0.5) * 0.15;
+      state.camera.position.y += (Math.random() - 0.5) * 0.15;
     }
     if (m0.scene) m0.scene.position.x = THREE.MathUtils.lerp(m0.scene.position.x, -headX * 2.5, 0.15);
   });
@@ -72,65 +75,118 @@ function BoxerScene({ activeKey, headX, onReturnToBase, onHitJudge }) {
 }
 
 export default function GamePage() {
-  const [hp, setHp] = useState(100);
+  const [playerHp, setPlayerHp] = useState(9);
+  const [enemyHp, setEnemyHp] = useState(100);
+  const [attackGauge, setAttackGauge] = useState(0);
   const [activeKey, setActiveKey] = useState("base");
-  const [motion, setMotion] = useState({ x: 0, z: 0 });
-  const [msg, setMsg] = useState("READY");
+  const [motion, setMotion] = useState({ x: 0, z: 0, dir: "none" });
+  const [gameState, setGameState] = useState("DEFENSE");
+  const [gameMsg, setGameMsg] = useState("READY");
+  const [isShaking, setIsShaking] = useState(false);
   const socketRef = useRef();
 
   useEffect(() => {
-    // ✅ Invalid frame header 방지를 위해 websocket 전송방식 강제
     socketRef.current = io("http://127.0.0.1:65432", { transports: ["websocket"] });
     socketRef.current.on("motion", (data) => {
-      setMotion({ x: data.x || 0, z: data.z || 0 });
+      setMotion(data);
+      // ✅ 찬스타임일 때 공격 명령이 오면 handlePlayerAttack 실행
+      if (gameState === "ATTACK_CHANCE" && data.dir !== "none") {
+        handlePlayerAttack(data.dir);
+      }
     });
     return () => socketRef.current.disconnect();
-  }, []);
+  }, [gameState]);
+
+  // 찬스타임 5초 타임아웃
+  useEffect(() => {
+    if (gameState === "ATTACK_CHANCE") {
+      const timer = setTimeout(() => {
+        if (gameState === "ATTACK_CHANCE") {
+          setGameState("DEFENSE");
+          setAttackGauge(0);
+          setGameMsg("TIME OVER!");
+        }
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [gameState]);
 
   useEffect(() => {
-    if (activeKey !== "base") return;
+    if (gameState !== "DEFENSE" || activeKey !== "base") return;
     const timer = setTimeout(() => {
-      const attacks = ["hook", "straight", "punch_l", "punch_r", "uppercut"];
+      const attacks = ["punch_l", "punch_r", "straight", "hook", "uppercut"];
       setActiveKey(attacks[Math.floor(Math.random() * attacks.length)]);
-    }, 2500);
+    }, 2000);
     return () => clearTimeout(timer);
-  }, [activeKey]);
+  }, [activeKey, gameState]);
 
-  const handleHitJudge = () => {
-    // ✅ 가드 판정 기준을 0.01로 극단적으로 낮춤 (조금만 반응해도 가드)
-    const isGuarded = motion.z > 0.01;
-    const isDodged = Math.abs(motion.x) > 0.22;
+  const handlePlayerAttack = (punchType) => {
+    // 펀치 인식 즉시 상태 변경하여 중복 타격 및 교착 상태 방지
+    const damages = { jab: 20, straight: 30, uppercut: 60 };
+    const damage = damages[punchType] || 25;
 
-    if (isGuarded) {
-      setMsg("🛡️ GUARD SUCCESS!");
-    } else if (isDodged) {
-      setMsg("💨 DODGE!");
-    } else {
-      setHp(p => Math.max(0, p - 10));
-      setMsg("💥 HIT!");
+    setEnemyHp(prev => Math.max(0, prev - damage));
+    setGameState("DEFENSE"); // ✅ 즉시 상태 전환
+    setAttackGauge(0);
+    setGameMsg(`👊 ${punchType.toUpperCase()} SUCCESS!`);
+    setIsShaking(true);
+    setTimeout(() => setIsShaking(false), 200);
+
+    if (enemyHp - damage <= 0) {
+      setGameState("WIN");
+      setGameMsg("🏆 K.O. VICTORY!");
     }
-    setTimeout(() => setMsg(""), 800);
+  };
+
+  const handleEnemyAttackJudge = (attackType) => {
+    if (gameState !== "DEFENSE") return;
+    const isDodged = Math.abs(motion.x) > 0.22;
+    const isGuarded = motion.z >= 0.8;
+
+    if (isDodged || isGuarded) {
+      setAttackGauge(prev => {
+        const next = Math.min(100, prev + (isDodged ? 35 : 15));
+        if (next >= 100) {
+          setGameState("ATTACK_CHANCE");
+          setGameMsg("🔥 CHANCE TIME! 🔥");
+        }
+        return next;
+      });
+      setGameMsg(isDodged ? "💨 DODGE!" : "🛡️ GUARD!");
+      setTimeout(() => setActiveKey("base"), 100);
+    } else {
+      setGameMsg("💥 HIT!");
+      setIsShaking(true);
+      setTimeout(() => setIsShaking(false), 200);
+      setPlayerHp(prev => {
+        const next = Math.max(0, prev - 1);
+        if (next === 0) setGameState("GAME_OVER");
+        return next;
+      });
+      setTimeout(() => setActiveKey("base"), 100);
+    }
   };
 
   return (
-    <div style={{ width: "100vw", height: "100vh", background: "#000", position: "relative", overflow: "hidden" }}>
-      <div style={{ position: "absolute", top: 20, width: "100%", textAlign: "center", color: "white", zIndex: 10 }}>
-        <h1>HP: {hp} | Z: {motion.z.toFixed(3)}</h1>
-        <h2 style={{ color: msg === "💥 HIT!" ? "red" : "#00ff00" }}>{msg}</h2>
+    <div style={{ width: "100vw", height: "100vh", position: "relative", overflow: "hidden", backgroundImage: "url('/models/Background.png')", backgroundSize: "cover", backgroundColor: "#000" }}>
+      <div style={{ position: "absolute", inset: 0, zIndex: 5, pointerEvents: "none", background: `radial-gradient(circle, transparent 30%, rgba(255,0,0,${isShaking ? 0.3 : 0}))` }} />
+      <div style={{ position: "absolute", top: 30, width: "100%", textAlign: "center", color: "white", zIndex: 10 }}>
+        <div style={{ width: "400px", height: "16px", background: "#222", margin: "0 auto", borderRadius: "10px", border: "2px solid #fff", overflow: "hidden" }}>
+          <div style={{ width: `${enemyHp}%`, height: "100%", background: "linear-gradient(90deg, #f00, #ff416c)", transition: "width 0.4s" }} />
+        </div>
+        <h1 style={{ fontSize: "80px", fontWeight: "900", textShadow: "4px 4px 10px #000" }}>{gameMsg}</h1>
+        <div style={{ width: "500px", height: "20px", background: "#111", border: "2px solid #555", margin: "0 auto", borderRadius: "10px", overflow: "hidden" }}>
+          <div style={{ width: `${attackGauge}%`, height: "100%", background: attackGauge >= 100 ? "cyan" : "deepskyblue", transition: "width 0.2s" }} />
+        </div>
       </div>
-
       <Canvas>
         <Suspense fallback={null}>
           <PerspectiveCamera makeDefault position={[0, 1.5, 4.5]} />
           <Environment preset="city" />
-          <BoxerScene activeKey={activeKey} headX={motion.x} onReturnToBase={() => setActiveKey("base")} onHitJudge={handleHitJudge} />
+          <BoxerScene activeKey={activeKey} headX={motion.x} onReturnToBase={() => setActiveKey("base")} onHitJudge={handleEnemyAttackJudge} isShaking={isShaking} gameState={gameState} />
+          <Preload all />
         </Suspense>
       </Canvas>
-
-      {/* 가드 시각적 표시 */}
-      {motion.z > 0.01 && (
-        <div style={{ position: "absolute", inset: 0, border: "20px solid #00e5ff", pointerEvents: "none", zIndex: 5 }} />
-      )}
     </div>
   );
 }
