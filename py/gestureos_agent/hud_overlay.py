@@ -150,21 +150,6 @@ user32.CallWindowProcW.argtypes = [
 
 WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
 
-
-# ---- Reticle image assets (mode -> png) ----
-ASSET_DIR = os.path.join(os.path.dirname(__file__), "assets", "reticle")
-RETICLE_PNG = {
-    "MOUSE": "mouse.png",
-    "DRAW": "draw.png",
-    "PRESENTATION": "ppt.png",
-    "KEYBOARD": "keyboard.png",
-    "RUSH": "rush.png",
-    "RUSH_HAND": "rush.png",
-    "RUSH_COLOR": "rush.png",
-    "VKEY": "keyboard.png",
-    "DEFAULT": "mouse.png",
-}
-
 # ---- Theme per mode (HUD colors) ----
 THEME = {
     "MOUSE":        {"accent": "#22c55e"},
@@ -232,18 +217,15 @@ class OverlayHUD:
         # tk objects
         self._root = None
         self._hud_win = None
-        self._ret_win = None
         self._tip_win = None
         self._handle_win = None
 
         self._hud_canvas = None
-        self._ret_canvas = None
         self._tip_canvas = None
         self._handle_canvas = None
 
         # geometry
         self.HUD_W, self.HUD_H = 320, 118
-        self.RET_S = 48
 
         self.TIP_W, self.TIP_H = 260, 46
         self.TIP_OX, self.TIP_OY = 26, -66
@@ -255,11 +237,6 @@ class OverlayHUD:
         # wndproc hooks
         self._old_wndproc = {}
         self._new_wndproc_ref = {}
-
-        # reticle images
-        self._ret_imgs = {}
-        self._ret_img_item = None
-        self._ret_img_mode = None
 
         # single-instance mutex
         self._mutex = None
@@ -462,18 +439,6 @@ class OverlayHUD:
             self._qt_last_opacity = 0.82
             self._qt_send({"type": "OPACITY", "value": 0.82})
 
-    # ---------------- assets ----------------
-    def _load_reticle_images(self):
-        self._ret_imgs = {}
-        for mode, fn in RETICLE_PNG.items():
-            path = os.path.join(ASSET_DIR, fn)
-            if not os.path.exists(path):
-                continue
-            try:
-                img = tk.PhotoImage(file=path)
-                self._ret_imgs[mode] = img
-            except Exception:
-                pass
 
     # ---------------- lifecycle ----------------
     def start(self):
@@ -887,25 +852,6 @@ class OverlayHUD:
             ww.bind("<B1-Motion>", _on_drag)
             ww.bind("<ButtonRelease-1>", _on_release)
 
-        # Reticle window
-        ret = tk.Toplevel(root)
-        self._ret_win = ret
-        ret.overrideredirect(True)
-        ret.attributes("-topmost", True)
-        ret.configure(bg=TRANSPARENT)
-        try:
-            ret.wm_attributes("-transparentcolor", TRANSPARENT)
-        except Exception:
-            pass
-        ret.geometry(f"{self.RET_S}x{self.RET_S}+{self.vx}+{self.vy}")
-
-        ret_canvas = tk.Canvas(
-            ret, width=self.RET_S, height=self.RET_S,
-            bd=0, highlightthickness=0, bg=TRANSPARENT
-        )
-        ret_canvas.pack(fill="both", expand=True)
-        self._ret_canvas = ret_canvas
-
         # Tip window
         tip = tk.Toplevel(root)
         self._tip_win = tip
@@ -926,7 +872,7 @@ class OverlayHUD:
         self._tip_canvas = tip_canvas
 
         # Disable input at Tk level (extra safety) - keep handle clickable
-        for w in (hud, ret, tip):
+        for w in (hud, tip):
             try:
                 w.attributes("-disabled", True)
             except Exception:
@@ -934,23 +880,7 @@ class OverlayHUD:
 
         # Click-through hardening (handle 제외!)
         self._apply_click_through(hud)
-        self._apply_click_through(ret)
         self._apply_click_through(tip)
-
-        # Load images AFTER Tk init
-        self._load_reticle_images()
-
-        # Create reticle image item ONCE
-        img0 = self._ret_imgs.get("DEFAULT")
-        if img0 is None and self._ret_imgs:
-            img0 = next(iter(self._ret_imgs.values()), None)
-        if img0 is not None:
-            self._ret_img_item = ret_canvas.create_image(
-                self.RET_S // 2, self.RET_S // 2,
-                image=img0, anchor="center",
-                tags=("RETICLE_IMG",)
-            )
-            self._ret_img_mode = "DEFAULT"
 
         self._position_handle()
         last_t = time.time()
@@ -959,7 +889,7 @@ class OverlayHUD:
             nonlocal last_t
 
             if self._stop.is_set():
-                for w in (hud, handle, ret, tip, root):
+                for w in (hud, handle, tip, root):
                     try:
                         w.destroy()
                     except Exception:
@@ -1015,7 +945,7 @@ class OverlayHUD:
             # Periodically re-apply click-through (some environments lose it)
             self._ct_tick += 1
             if (self._ct_tick % 60) == 0:
-                for w in (hud, ret, tip):
+                for w in (hud, tip):
                     self._apply_click_through(w)
                     try:
                         w.attributes("-disabled", True)
@@ -1122,40 +1052,6 @@ class OverlayHUD:
 
         # ---- Qt menu sync (active/center/mode) ----
         self._qt_sync(active=self._menu_active, center_xy=self._menu_center, mode=mode)
-
-        # Reticle
-        if self._ret_win is not None and self._ret_canvas is not None:
-            try:
-                self._ret_win.deiconify()
-            except Exception:
-                pass
-
-            gx = osx - self.RET_S // 2
-            gy = osy - self.RET_S // 2
-            gx, gy = self._clamp_screen_xy(gx, gy, self.RET_S, self.RET_S)
-            try:
-                self._ret_win.geometry(f"{self.RET_S}x{self.RET_S}+{gx}+{gy}")
-            except Exception:
-                pass
-
-            key = mode if mode in self._ret_imgs else "DEFAULT"
-            img = self._ret_imgs.get(key) or self._ret_imgs.get("DEFAULT")
-
-            if img is None:
-                try:
-                    self._ret_win.withdraw()
-                except Exception:
-                    pass
-            else:
-                if self._ret_img_item is None:
-                    self._ret_img_item = self._ret_canvas.create_image(
-                        self.RET_S // 2, self.RET_S // 2,
-                        image=img, anchor="center",
-                        tags=("RETICLE_IMG",)
-                    )
-                else:
-                    self._ret_canvas.itemconfig(self._ret_img_item, image=img)
-                self._ret_img_mode = key
 
         # Tip bubble
         tipw = self._tip_win
