@@ -300,7 +300,18 @@ export default function TitleBar({
           >
             Dashboard
           </button>
-
+          <button
+            type="button"
+            onClick={() => onChangeScreen?.("train")}
+            className={cn(
+              "px-3 py-1 text-xs rounded-md transition",
+              screen === "train"
+                ? "bg-base-300/50 text-base-content"
+                : "opacity-80 hover:bg-base-300/30 hover:opacity-100"
+            )}
+          >
+            Training
+          </button>
           <button
             type="button"
             onClick={() => onChangeScreen?.("rush")}

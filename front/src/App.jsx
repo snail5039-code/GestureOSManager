@@ -5,6 +5,7 @@ import Settings from "./pages/Settings";
 import AgentHud from "./components/AgentHud";
 import Rush3DPage from "./pages/Rush3DPage";
 import PairingQrModal from "./components/PairingQrModal";
+import TrainingLab from "./pages/TrainingLab";
 
 const VALID_THEMES = new Set(["dark", "light", "neon", "rose", "devil"]);
 
@@ -121,11 +122,13 @@ export default function App() {
         agentStatus={agentStatus} // ✅ 추가
         onOpenPairing={() => setPairOpen(true)}
       />
+
       <main
         className={
           screen === "rush" ? "flex-1 overflow-hidden" : "flex-1 overflow-auto"
         }
       >
+        {/* Dashboard */}
         <div className={screen === "dashboard" ? "block" : "hidden"}>
           <Dashboard
             hudOn={hudOn}
@@ -138,6 +141,7 @@ export default function App() {
           />
         </div>
 
+        {/* Rush */}
         {screen === "rush" && (
           <Rush3DPage
             status={hudFeed?.status}
@@ -145,8 +149,13 @@ export default function App() {
           />
         )}
 
+        {/* Settings */}
         {screen === "settings" && <Settings theme={theme} />}
+
+        {/* ✅ Training Lab (추가된 부분) */}
+        {screen === "train" && <TrainingLab theme={theme} />}
       </main>
+
       {/* ✅ WEB HUD(AgentHud)만 hudOn으로 제어 */}
       {hudOn && (
         <AgentHud
@@ -155,9 +164,7 @@ export default function App() {
           modeOptions={hudFeed?.modeOptions}
           onSetMode={(m) => hudActionsRef.current.applyMode?.(m)}
           onEnableToggle={(next) =>
-            next
-              ? hudActionsRef.current.start?.()
-              : hudActionsRef.current.stop?.()
+            next ? hudActionsRef.current.start?.() : hudActionsRef.current.stop?.()
           }
           onPreviewToggle={() => hudActionsRef.current.togglePreview?.()}
           onLockToggle={(nextLocked) => {

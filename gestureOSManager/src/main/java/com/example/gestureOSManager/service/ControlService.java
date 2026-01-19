@@ -64,4 +64,24 @@ public class ControlService {
   public boolean setPreview(boolean enabled) {
 	  return send(AgentCommand.preview(enabled));
 	}
+  
+  // =========================
+  // ✅ Training commands
+  // =========================
+  public boolean trainCapture(String hand, String label, double seconds, int hz) {
+    return send(AgentCommand.trainCapture(hand, label, seconds, hz));
+  }
+
+  public boolean trainTrain() {
+    return send(AgentCommand.trainTrain());
+  }
+
+  public boolean trainEnable(boolean enabled) {
+    return send(AgentCommand.trainEnable(enabled));
+  }
+
+  public boolean trainReset() {
+    return send(AgentCommand.trainReset());
+  }
+
 }
