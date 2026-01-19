@@ -94,6 +94,10 @@ public class AgentStatus {
   private Double rightPointerY;
   private Boolean rightTracking;
   private String rightGesture;
+  private String learnProfile;
+  private List<String> learnProfiles;
+  
+
 
   public static AgentStatus empty() {
     return AgentStatus.builder().build();

@@ -2,10 +2,28 @@ import os
 import json
 import time
 import math
+import shutil
 from typing import Dict, List, Optional, Tuple, Any
 
-MODEL_PATH = os.path.join(os.getenv("TEMP", "."), "GestureOS_learner.json")
+# 프로필별 모델 저장 폴더
+_BASE_DIR = os.path.join(os.getenv("TEMP", "."), "GestureOS_learner_profiles")
+os.makedirs(_BASE_DIR, exist_ok=True)
+
 MAX_SAMPLES_PER_LABEL = 600
+
+
+def _sanitize_profile(name: str) -> str:
+    s = (name or "").strip().lower()
+    if not s:
+        return "default"
+    out = []
+    for ch in s:
+        if ch.isalnum() or ch in ("-", "_"):
+            out.append(ch)
+        else:
+            out.append("-")
+    s = "".join(out).strip("-")
+    return s or "default"
 
 
 def _l2(a: List[float], b: List[float]) -> float:
@@ -17,9 +35,17 @@ def _l2(a: List[float], b: List[float]) -> float:
 
 
 class ProtoLearner:
-    def __init__(self, model_path: str = MODEL_PATH):
-        self.model_path = model_path
+    """
+    Prototype(centroid) learner.
+    - profile 별로 model 파일 분리 저장
+    - train() 직전에 자동 백업(.bak) 1개 저장
+    - rollback() 으로 직전 모델 복구
+    """
 
+    def __init__(self, profile: str = "default"):
+        self.profile: str = _sanitize_profile(profile)
+
+        # 전역 토글(모드 바뀌어도 유지되는 게 사용자 경험 좋음)
         self.enabled: bool = False
         self.min_samples: int = 10
         self.min_conf: float = 0.55
@@ -36,8 +62,24 @@ class ProtoLearner:
         # capture state
         self.capture: Optional[dict] = None
 
+        # load profile model
         self.load()
 
+    # ---------- path helpers ----------
+    def _model_path(self, profile: Optional[str] = None) -> str:
+        p = _sanitize_profile(profile or self.profile)
+        return os.path.join(_BASE_DIR, f"{p}.json")
+
+    def _bak_path(self, profile: Optional[str] = None) -> str:
+        return self._model_path(profile) + ".bak"
+
+    def has_backup(self) -> bool:
+        try:
+            return os.path.exists(self._bak_path())
+        except Exception:
+            return False
+
+    # ---------- core ----------
     def extract(self, lm) -> Optional[List[float]]:
         """lm: [(x,y,z), ...] length 21"""
         if not lm or len(lm) != 21:
@@ -82,7 +124,22 @@ class ProtoLearner:
             out[hand] = {lab: len(vs) for lab, vs in mp.items()}
         return out
 
+    def _backup_before_train(self):
+        """
+        Train 직전 1회 백업.
+        (save()마다 백업하면 reset/enable에도 .bak 덮여서 의미 없어짐)
+        """
+        try:
+            src = self._model_path()
+            if os.path.exists(src):
+                shutil.copyfile(src, self._bak_path())
+        except Exception:
+            pass
+
     def train(self):
+        # ✅ 롤백용 백업
+        self._backup_before_train()
+
         self.model = {"cursor": {}, "other": {}}
 
         for hand, mp in self.samples.items():
@@ -147,6 +204,7 @@ class ProtoLearner:
 
         return best_label, float(best_score)
 
+    # ---------- capture ----------
     def start_capture(self, hand: str, label: str, seconds: float = 2.0, hz: int = 15):
         hand = "cursor" if hand != "other" else "other"
         hz = max(1, int(hz))
@@ -189,6 +247,37 @@ class ProtoLearner:
         if ok:
             self.capture["collected"] = int(self.capture.get("collected", 0)) + 1
 
+    # ---------- profile ----------
+    def set_profile(self, profile: str):
+        p = _sanitize_profile(profile)
+        if p == self.profile:
+            return
+        # 현재 프로필 모델 저장(안전)
+        self.save()
+        # 샘플은 프로필별로 분리하고 싶으면 여기서 초기화(추천)
+        self.samples = {"cursor": {}, "other": {}}
+        self.capture = None
+        self.last_pred = None
+
+        self.profile = p
+        self.load()
+
+    # ---------- rollback ----------
+    def rollback(self) -> bool:
+        """
+        직전 train 직전(.bak)으로 되돌림.
+        """
+        try:
+            bak = self._bak_path()
+            if not os.path.exists(bak):
+                return False
+            shutil.copyfile(bak, self._model_path())
+            self.load()
+            return True
+        except Exception:
+            return False
+
+    # ---------- reset/save/load ----------
     def reset(self):
         self.samples = {"cursor": {}, "other": {}}
         self.model = {"cursor": {}, "other": {}}
@@ -200,25 +289,27 @@ class ProtoLearner:
     def save(self):
         try:
             obj = {
+                "profile": self.profile,
                 "enabled": bool(self.enabled),
                 "min_samples": int(self.min_samples),
                 "min_conf": float(self.min_conf),
                 "last_train_ts": self.last_train_ts,
-                "counts": self.counts(),
-                "model": self.model,  # centroid만 저장 (samples는 안 저장)
+                "model": self.model,
             }
-            with open(self.model_path, "w", encoding="utf-8") as f:
+            with open(self._model_path(), "w", encoding="utf-8") as f:
                 json.dump(obj, f, ensure_ascii=False)
         except Exception:
             pass
 
     def load(self):
         try:
-            if not os.path.exists(self.model_path):
+            path = self._model_path()
+            if not os.path.exists(path):
                 return
-            with open(self.model_path, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 obj = json.load(f)
-            self.enabled = bool(obj.get("enabled", False))
+            # enabled는 전역처럼 쓰고싶으면 여기서 로드 안 하도록 바꿔도 됨.
+            self.enabled = bool(obj.get("enabled", self.enabled))
             self.min_samples = int(obj.get("min_samples", self.min_samples))
             self.min_conf = float(obj.get("min_conf", self.min_conf))
             self.last_train_ts = obj.get("last_train_ts", None)

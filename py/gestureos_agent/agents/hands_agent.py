@@ -1,7 +1,9 @@
-# file: py/gestureos_agent/agents/hands_agent.py
+# py/gestureos_agent/agents/hands_agent.py
 import os
 import time
 import ctypes
+import math
+
 from typing import Any, List, Optional, Tuple
 
 os.environ.setdefault("GLOG_minloglevel", "2")
@@ -26,6 +28,7 @@ from ..modes.rush_color import ColorStickTracker
 
 from ..bindings import DEFAULT_SETTINGS, deep_copy, merge_settings, get_binding
 from ..learner_proto import ProtoLearner
+from collections import deque, Counter
 
 
 # =============================================================================
@@ -111,6 +114,20 @@ def _lm_to_payload(lm):
     if lm is None:
         return []
     return [{"x": float(p[0]), "y": float(p[1]), "z": float(p[2])} for p in lm]
+
+
+def _pinch_thresh_from_ratio(lm, ratio: float, fallback: float = 0.06) -> float:
+    try:
+        if lm is None or len(lm) != 21:
+            return float(fallback)
+        x0, y0, _ = lm[0]
+        x9, y9, _ = lm[9]
+        palm = math.sqrt((x0 - x9) ** 2 + (y0 - y9) ** 2)
+        if palm < 1e-6:
+            return float(fallback)
+        return float(max(0.01, min(0.20, ratio * palm)))
+    except Exception:
+        return float(fallback)
 
 
 def _pack_xy(p: Optional[dict]):
@@ -229,12 +246,41 @@ class HandsAgent:
         # learner (prototype training)
         self.learner = ProtoLearner()
 
+        # ✅ mode -> learner profile 자동 매핑
+        self._mode_profile_map = {
+            "MOUSE": "mouse",
+            "KEYBOARD": "keyboard",
+            "PRESENTATION": "ppt",
+            "DRAW": "draw",
+            "VKEY": "vkey",
+            "RUSH_HAND": "rush",
+            "RUSH_COLOR": "rush",
+        }
+
+        try:
+            self.learner.set_profile(self._mode_profile_map.get(str(self.mode).upper(), "default"))
+        except Exception:
+            pass
+
+
+        self.pred_hist = {
+            "cursor": deque(maxlen=5),
+            "other": deque(maxlen=5),
+        }
+
         # ws
         self.ws = WSClient(
             getattr(cfg, "ws_url", "ws://127.0.0.1:8080/ws/agent"),
             self._on_command,
             enabled=(not getattr(cfg, "no_ws", False)),
         )
+
+        # pinch debounce / hysteresis (cursor hand)
+        self._pinch_down = False
+        self._pinch_t0 = 0.0  # pinch candidate start time
+        self._pinch_hold_ms = 90  # tweakable: 70~140ms
+        self._pinch_hys_on = 1.00  # ON threshold multiplier (tight)
+        self._pinch_hys_off = 1.25 # OFF threshold multiplier (looser)
 
     # ---------- WS helpers ----------
     def send_event(self, name: str, payload: Optional[dict]):
@@ -246,7 +292,9 @@ class HandsAgent:
     def _on_command(self, data: dict):
         typ = data.get("type")
 
-        if typ in ("SET_MODE", "ENABLE", "DISABLE", "SET_PREVIEW", "UPDATE_SETTINGS"):
+        if typ in ("SET_MODE", "ENABLE", "DISABLE", "SET_PREVIEW", "UPDATE_SETTINGS",
+                   "TRAIN_CAPTURE", "TRAIN_TRAIN", "TRAIN_ENABLE", "TRAIN_RESET",
+                   "TRAIN_SET_PROFILE", "TRAIN_PROFILE_CREATE", "TRAIN_PROFILE_DELETE", "TRAIN_PROFILE_RENAME"):
             print("[PY] cmd:", data, flush=True)
 
         if typ == "ENABLE":
@@ -267,7 +315,7 @@ class HandsAgent:
         elif typ == "UPDATE_SETTINGS":
             incoming = data.get("settings") or {}
             self.apply_settings(incoming)
-        
+
         elif typ == "TRAIN_CAPTURE":
             p = data.get("payload") or {}
             hand = str(p.get("hand", "cursor"))
@@ -286,6 +334,34 @@ class HandsAgent:
         elif typ == "TRAIN_RESET":
             self.learner.reset()
 
+        elif typ == "TRAIN_ROLLBACK":
+            self.learner.rollback()
+
+
+        elif typ == "TRAIN_SET_PROFILE":
+            p = data.get("payload") or {}
+            name = p.get("profile") or data.get("profile") or data.get("name") or "default"
+            self.learner.set_profile(str(name))
+            self.learner.save()
+
+        elif typ == "TRAIN_PROFILE_CREATE":
+            p = data.get("payload") or {}
+            name = p.get("profile") or "new"
+            copy = bool(p.get("copy", True))
+            self.learner.create_profile(str(name), copy_from_current=copy, switch=True)
+
+        elif typ == "TRAIN_PROFILE_DELETE":
+            p = data.get("payload") or {}
+            name = p.get("profile") or data.get("profile") or data.get("name")
+            if name:
+                self.learner.delete_profile(str(name))
+
+        elif typ == "TRAIN_PROFILE_RENAME":
+            p = data.get("payload") or {}
+            src = p.get("from") or p.get("src")
+            dst = p.get("to") or p.get("dst")
+            if src and dst:
+                self.learner.rename_profile(str(src), str(dst))
 
     # ---------- mode + state ----------
     def _reset_side_effects(self):
@@ -299,15 +375,8 @@ class HandsAgent:
         self.vkey.reset()
 
     def apply_settings(self, incoming: dict):
-        """Apply user settings pushed from server.
-
-        incoming can be either:
-          - full object: {version:1, bindings:{...}}
-          - bindings only: {...}
-        """
         try:
             self.settings = merge_settings(self.settings, incoming)
-            # side-effect handlers can keep running; bindings are read live
             print("[PY] apply_settings -> version", self.settings.get("version"), flush=True)
         except Exception as e:
             print("[PY] apply_settings failed:", e, flush=True)
@@ -319,7 +388,6 @@ class HandsAgent:
         if nm == "PAINT":
             nm = "DRAW"
 
-        # aliases(레거시 호환)
         if nm == "RUSH":
             nm = "RUSH_HAND"
         if nm in ("RUSH_STICK", "RUSH_COLOR_STICK"):
@@ -355,6 +423,12 @@ class HandsAgent:
                 pass
 
         self.mode = nm
+        # ✅ 모드 바뀌면 learner 프로필도 자동 전환
+        try:
+            self.learner.set_profile(self._mode_profile_map.get(str(self.mode).upper(), "default"))
+        except Exception:
+            pass
+
         print("[PY] apply_set_mode ->", self.mode, flush=True)
 
     # ---------- capture ----------
@@ -372,6 +446,30 @@ class HandsAgent:
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         return cap
 
+    def _update_pinch_state(self, is_pinch_rule: bool, now_s: float) -> bool:
+        hold_s = self._pinch_hold_ms / 1000.0
+
+        if not self._pinch_down:
+            if is_pinch_rule:
+                if self._pinch_t0 <= 0.0:
+                    self._pinch_t0 = now_s
+                if (now_s - self._pinch_t0) >= hold_s:
+                    self._pinch_down = True
+                    self._pinch_t0 = 0.0
+            else:
+                self._pinch_t0 = 0.0
+        else:
+            if not is_pinch_rule:
+                if self._pinch_t0 <= 0.0:
+                    self._pinch_t0 = now_s
+                if (now_s - self._pinch_t0) >= 0.06:
+                    self._pinch_down = False
+                    self._pinch_t0 = 0.0
+            else:
+                self._pinch_t0 = 0.0
+
+        return self._pinch_down
+
     # ---------- palette modal ----------
     def _update_palette_modal(
         self,
@@ -383,21 +481,16 @@ class HandsAgent:
         cursor_cx: float,
         cursor_cy: float,
     ) -> bool:
-        """
-        Returns True if palette is active (and normal mode side-effects must be blocked).
-        """
         self.cursor_bubble = None
         hud = getattr(self.cfg, "hud", None)
 
         if not hud:
-            # HUD가 없으면 팔레트 기능 자체 비활성
             self.palette_active = False
             self.palette_open_start = None
             self.palette_confirm_start = None
             self.palette_cancel_start = None
             return False
 
-        # open trigger: both V_SIGN hold
         if (not self.palette_active) and self.enabled and got_other and (cursor_gesture == "V_SIGN") and (other_gesture == "V_SIGN"):
             if self.palette_open_start is None:
                 self.palette_open_start = t
@@ -413,7 +506,6 @@ class HandsAgent:
                 else:
                     hud.show_menu()
 
-                # 혹시 다운/드래그 남아있으면 제거
                 self._reset_side_effects()
         else:
             self.palette_open_start = None
@@ -421,18 +513,15 @@ class HandsAgent:
         if not self.palette_active:
             return False
 
-        # palette active: hover + confirm/cancel
-        hover = hud.get_menu_hover()  # "MOUSE"/"KEYBOARD"/"DRAW"/"PPT"/"OTHER"/None
+        hover = hud.get_menu_hover()
         self.cursor_bubble = f"MENU • {hover or '...'} (PINCH=확정, FIST=취소)"
 
-        # allow cursor move (OPEN_PALM) only for selecting items
         no_inject = bool(getattr(self.cfg, "no_inject", False))
         if (not no_inject) and (t >= self.reacquire_until) and got_cursor and (cursor_gesture == "OPEN_PALM"):
             ux, uy = self.control.map_control_to_screen(cursor_cx, cursor_cy)
             ex, ey = self.control.apply_ema(ux, uy)
             self.control.move_cursor(ex, ey, t)
 
-        # confirm
         if (cursor_gesture == "PINCH_INDEX") and hover:
             if self.palette_confirm_start is None:
                 self.palette_confirm_start = t
@@ -448,7 +537,6 @@ class HandsAgent:
         else:
             self.palette_confirm_start = None
 
-        # cancel
         if cursor_gesture == "FIST":
             if self.palette_cancel_start is None:
                 self.palette_cancel_start = t
@@ -462,6 +550,28 @@ class HandsAgent:
             self.palette_cancel_start = None
 
         return bool(self.palette_active)
+
+    def _smooth_pred(self, hand: str, pred, score: float, rule: str):
+        if pred is None:
+            self.pred_hist[hand].append(("NONE", 0.0))
+        else:
+            self.pred_hist[hand].append((str(pred), float(score)))
+
+        labels = [p for (p, _) in self.pred_hist[hand] if p and p != "NONE"]
+        if not labels:
+            return (None, 0.0)
+
+        lab, cnt = Counter(labels).most_common(1)[0]
+        if cnt < 3:
+            return (None, 0.0)
+
+        scores = [s for (p, s) in self.pred_hist[hand] if p == lab]
+        avg = (sum(scores) / len(scores)) if scores else 0.0
+
+        if lab == "PINCH_INDEX" and rule != "PINCH_INDEX":
+            return (None, avg)
+
+        return (lab, avg)
 
     # ---------- main loop ----------
     def run(self):
@@ -504,17 +614,14 @@ class HandsAgent:
                     label = labels[i] if i < len(labels) else None
                     hands_list.append((label, lm))
 
-            # rush left/right packs (hands-based default)
             rush_left, rush_right = self.rush_lr.pick(t, hands_list)
 
-            # RUSH_COLOR: override with HSV stick tracking
             if str(self.mode).upper() == "RUSH_COLOR":
                 try:
                     rush_left, rush_right = self.rush_color.process(frame, t)
                 except Exception as e:
                     print("[RUSH_COLOR] tracker error:", e, flush=True)
 
-            # cursor / other selection
             cursor_lm = None
             other_lm = None
             if hands_list:
@@ -532,27 +639,49 @@ class HandsAgent:
                             break
 
             got_cursor = (cursor_lm is not None)
+
             if got_cursor:
                 cursor_cx, cursor_cy = palm_center(cursor_lm)
-                cursor_gesture = classify_gesture(cursor_lm)
-                cursor_gesture_rule = cursor_gesture
+
+                ratio = float(getattr(self.learner, "pinch_ratio_thresh", {}).get("cursor", 0.35))
+                base = _pinch_thresh_from_ratio(cursor_lm, ratio, fallback=0.06)
+                pth = base * (self._pinch_hys_off if self._pinch_down else self._pinch_hys_on)
+
+                cursor_gesture_raw = classify_gesture(cursor_lm, pinch_thresh=pth)
+
+                now_s = time.time()
+                raw_is_pinch = (cursor_gesture_raw == "PINCH_INDEX")
+                pinch_down = self._update_pinch_state(raw_is_pinch, now_s)
+
+                if pinch_down:
+                    cursor_gesture_rule = "PINCH_INDEX"
+                else:
+                    cursor_gesture_rule = "OPEN_PALM" if cursor_gesture_raw == "PINCH_INDEX" else cursor_gesture_raw
+
+                cursor_gesture = cursor_gesture_rule
+
                 self.learner.tick_capture(cursor_lm=cursor_lm, other_lm=other_lm)
 
                 pred, score = self.learner.predict("cursor", cursor_lm)
-                if pred is not None:
-                    cursor_gesture = pred
+                sm_pred, sm_score = self._smooth_pred("cursor", pred, score, cursor_gesture_rule)
+
+                if sm_pred is not None:
+                    cursor_gesture = sm_pred
 
                 self.learner.last_pred = {
                     "hand": "cursor",
-                    "label": pred,
-                    "score": float(score),
+                    "label": sm_pred,
+                    "score": float(sm_score),
                     "rule": cursor_gesture_rule,
+                    "rawLabel": pred,
+                    "rawScore": float(score),
                 }
 
                 self.last_seen_ts = t
                 self.last_cursor_lm = cursor_lm
                 self.last_cursor_cxcy = (cursor_cx, cursor_cy)
                 self.last_cursor_gesture = cursor_gesture
+
             else:
                 if self.last_cursor_lm is not None and (t - self.last_seen_ts) <= LOSS_GRACE_SEC:
                     cursor_cx, cursor_cy = self.last_cursor_cxcy
@@ -564,19 +693,20 @@ class HandsAgent:
                     cursor_cx, cursor_cy = (0.5, 0.5)
                     if self.last_cursor_lm is None or (t - self.last_seen_ts) >= HARD_LOSS_SEC:
                         self.reacquire_until = t + REACQUIRE_BLOCK_SEC
+                        self._pinch_down = False
+                        self._pinch_t0 = 0.0
 
             got_other = (other_lm is not None)
             other_gesture = "NONE"
             other_cx, other_cy = (0.5, 0.5)
             if got_other:
                 other_cx, other_cy = palm_center(other_lm)
-                other_gesture = classify_gesture(other_lm)
+                ratio_o = float(getattr(self.learner, "pinch_ratio_thresh", {}).get("other", 0.35))
+                pth_o = _pinch_thresh_from_ratio(other_lm, ratio_o, fallback=0.06)
+                other_gesture = classify_gesture(other_lm, pinch_thresh=pth_o)
 
             mode_u = str(self.mode).upper()
 
-            # ============================================================
-            # (A안) Palette modal state 업데이트 (최우선)
-            # ============================================================
             block_by_palette = self._update_palette_modal(
                 t=t,
                 got_cursor=got_cursor,
@@ -587,7 +717,6 @@ class HandsAgent:
                 cursor_cy=cursor_cy,
             )
 
-            # UI menu (HUD) - 팔레트 열려있으면 기존 UI 메뉴는 멈춤
             if not block_by_palette:
                 _ = self.ui_menu.update(
                     t=t,
@@ -599,7 +728,6 @@ class HandsAgent:
                     send_event=lambda name, payload: self.send_event(name, payload),
                 )
 
-            # NEXT_MODE when locked: both OPEN_PALM hold (팔레트 중엔 막기)
             if (not block_by_palette) and self.enabled and self.locked and got_other and (cursor_gesture == "OPEN_PALM") and (other_gesture == "OPEN_PALM"):
                 if self.mode_hold_start is None:
                     self.mode_hold_start = t
@@ -610,7 +738,6 @@ class HandsAgent:
             else:
                 self.mode_hold_start = None
 
-            # ---- bindings (read live) ----
             mouse_move_g = get_binding(self.settings, "MOUSE", "MOVE", default="OPEN_PALM")
             mouse_click_g = get_binding(self.settings, "MOUSE", "CLICK_DRAG", default="PINCH_INDEX")
             mouse_right_g = get_binding(self.settings, "MOUSE", "RIGHT_CLICK", default="V_SIGN")
@@ -620,7 +747,6 @@ class HandsAgent:
             kb_bindings = ((self.settings.get("bindings") or {}).get("KEYBOARD") or {})
             ppt_bindings = ((self.settings.get("bindings") or {}).get("PRESENTATION") or {})
 
-            # LOCK only in MOUSE (팔레트 중엔 막기)
             if (not block_by_palette) and mode_u == "MOUSE":
                 self.locked = self.mouse_lock.update(
                     t=t,
@@ -636,7 +762,6 @@ class HandsAgent:
             else:
                 self.mouse_lock.reset()
 
-            # injection permissions
             no_inject = bool(getattr(self.cfg, "no_inject", False))
             can_mouse_inject = self.enabled and (mode_u == "MOUSE") and (t >= self.reacquire_until) and (not self.locked) and (not no_inject)
             can_draw_inject  = self.enabled and (mode_u == "DRAW") and (t >= self.reacquire_until) and (not self.locked) and (not no_inject)
@@ -645,7 +770,6 @@ class HandsAgent:
             can_vkey_detect  = self.enabled and (mode_u == "VKEY") and (t >= self.reacquire_until) and (not self.locked)
             can_vkey_click   = can_vkey_detect and (not no_inject)
 
-            # RUSH disables OS inject
             if mode_u.startswith("RUSH"):
                 can_mouse_inject = False
                 can_draw_inject = False
@@ -654,17 +778,12 @@ class HandsAgent:
                 can_vkey_detect = False
                 can_vkey_click = False
 
-            # VKEY uses only vkey
             if mode_u == "VKEY":
                 can_mouse_inject = False
                 can_draw_inject = False
                 can_kb_inject = False
                 can_ppt_inject = False
 
-            # ============================================================
-            # Palette active면 "기존 동작" 모두 차단
-            # (메뉴 이동은 _update_palette_modal()에서만 허용)
-            # ============================================================
             if block_by_palette:
                 can_mouse_inject = False
                 can_draw_inject = False
@@ -673,7 +792,6 @@ class HandsAgent:
                 can_vkey_detect = False
                 can_vkey_click = False
 
-            # pointer move (기존 로직은 팔레트 중엔 막기)
             can_pointer_inject = (can_mouse_inject or can_draw_inject or can_ppt_inject)
             if (not block_by_palette) and can_pointer_inject and got_cursor:
                 do_move = False
@@ -689,7 +807,6 @@ class HandsAgent:
                     ex, ey = self.control.apply_ema(ux, uy)
                     self.control.move_cursor(ex, ey, t)
 
-            # mouse actions (팔레트 중엔 막기)
             if mode_u == "MOUSE":
                 self.mouse_click.update(
                     t,
@@ -707,7 +824,6 @@ class HandsAgent:
                 self.mouse_click.update(t, cursor_gesture, False, click_gesture=mouse_click_g)
                 self.mouse_right.update(t, cursor_gesture, False, gesture=mouse_right_g)
 
-            # draw
             if mode_u == "DRAW":
                 if not block_by_palette:
                     self.draw.update_draw(t, cursor_gesture, can_draw_inject)
@@ -717,7 +833,6 @@ class HandsAgent:
             else:
                 self.draw.reset()
 
-            # presentation
             if mode_u == "PRESENTATION":
                 if not block_by_palette:
                     self.ppt.update(t, can_ppt_inject, got_cursor, cursor_gesture, got_other, other_gesture, bindings=ppt_bindings)
@@ -726,7 +841,6 @@ class HandsAgent:
             else:
                 self.ppt.reset()
 
-            # scroll (mouse only)
             scroll_active = False
             if (not block_by_palette) and can_mouse_inject and got_other:
                 sa = (other_gesture == mouse_scroll_hold_g)
@@ -735,19 +849,16 @@ class HandsAgent:
             else:
                 self.mouse_scroll.update(t, False, 0.5, False)
 
-            # keyboard
             if not block_by_palette:
                 self.kb.update(t, can_kb_inject, got_cursor, cursor_gesture, got_other, other_gesture, bindings=kb_bindings)
             else:
                 self.kb.reset()
 
-            # vkey
             if mode_u == "VKEY" and (not block_by_palette):
                 self.vkey.update(t, can_vkey_click, cursor_lm, self.control.map_control_to_screen)
             elif mode_u == "VKEY":
                 self.vkey.reset()
 
-            # send status
             self._send_status(
                 fps=fps,
                 cursor_gesture=cursor_gesture,
@@ -764,7 +875,6 @@ class HandsAgent:
                 got_cursor=got_cursor,
             )
 
-            # preview
             if bool(getattr(self.cfg, "headless", False)):
                 time.sleep(0.001)
                 continue
@@ -841,29 +951,30 @@ class HandsAgent:
             "tapSeq": int(getattr(self.vkey, "tap_seq", 0)),
             "connected": bool(self.ws.connected),
 
-            # learner상태 추가
+            # learner status
+            "learnProfile": str(getattr(self.learner, "profile", "default")),
+            "learnProfiles": list(getattr(self.learner, "list_profiles", lambda: ["default"])()),
+
             "learnEnabled": bool(self.learner.enabled),
             "learnCounts": self.learner.counts(),
             "learnLastPred": self.learner.last_pred,
             "learnLastTrainTs": float(self.learner.last_train_ts or 0.0),
             "learnCapture": self.learner.capture,
+            "learnProfile": getattr(self.learner, "profile", "default"),
+            "learnHasBackup": bool(getattr(self.learner, "has_backup", lambda: False)()),
 
         }
 
-        # ✅ HUD bubble override (menu text)
         if getattr(self, "cursor_bubble", None):
             payload["cursorBubble"] = str(self.cursor_bubble)
 
-        # rush input type
         if mode_u.startswith("RUSH"):
             payload["rushInput"] = "COLOR" if mode_u == "RUSH_COLOR" else "HAND"
 
-        # pointer
         payload["pointerX"] = None
         payload["pointerY"] = None
         payload["isTracking"] = False
 
-        # left/right packs
         if lp is not None:
             payload["leftPointerX"], payload["leftPointerY"] = lp
             payload["leftTracking"] = True
@@ -876,7 +987,6 @@ class HandsAgent:
         else:
             payload["rightTracking"] = False
 
-        # pointer 결정(단 한 번)
         if mode_u.startswith("RUSH"):
             if rp is not None:
                 payload["pointerX"], payload["pointerY"] = rp
