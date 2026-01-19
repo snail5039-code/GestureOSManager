@@ -82,7 +82,7 @@ def main():
             print("[HUD_WS] start failed:", e, flush=True)
 
     # OS 커서 숨기기(원할 때만)
-    HIDE_OS_CURSOR = True
+    HIDE_OS_CURSOR = False
     if HIDE_OS_CURSOR and (not no_hud):
         try:
             cur_path = os.path.join(os.path.dirname(__file__), "gestureos_agent", "assets", "reticle", "invisible.cur")
