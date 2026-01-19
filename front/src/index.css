@@ -23,6 +23,30 @@ main {
 
 html { font-size: 20px; }
 
+html[data-theme="dark"],
+html[data-theme="dark"] body,
+html[data-theme="dark"] body * {
+  cursor: url("/cursor/dark.png") 2 2, auto !important;
+}
+
+html[data-theme="light"],
+html[data-theme="light"] body,
+html[data-theme="light"] body * {
+  cursor: url("/cursor/light.png") 2 2, auto !important;
+}
+   
+html[data-theme="neon"],
+html[data-theme="neon"] body,
+html[data-theme="neon"] body * {
+  cursor: url("/cursor/neon.png") 2 2, auto !important;
+}
+  
+html[data-theme="rose"],
+html[data-theme="rose"] body,
+html[data-theme="rose"] body * {
+  cursor: url("/cursor/rose.png") 2 2, auto !important;
+}
+
 html[data-theme="devil"],
 html[data-theme="devil"] body,
 html[data-theme="devil"] body * {
