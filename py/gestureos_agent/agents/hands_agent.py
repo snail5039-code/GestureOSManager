@@ -25,6 +25,8 @@ from ..modes.rush_lr import RushLRPicker
 from ..modes.rush_color import ColorStickTracker
 
 from ..bindings import DEFAULT_SETTINGS, deep_copy, merge_settings, get_binding
+from ..learner_proto import ProtoLearner
+
 
 # =============================================================================
 # OS cursor helpers
@@ -224,6 +226,9 @@ class HandsAgent:
             min_tracking_confidence=0.5,
         )
 
+        # learner (prototype training)
+        self.learner = ProtoLearner()
+
         # ws
         self.ws = WSClient(
             getattr(cfg, "ws_url", "ws://127.0.0.1:8080/ws/agent"),
@@ -262,6 +267,25 @@ class HandsAgent:
         elif typ == "UPDATE_SETTINGS":
             incoming = data.get("settings") or {}
             self.apply_settings(incoming)
+        
+        elif typ == "TRAIN_CAPTURE":
+            p = data.get("payload") or {}
+            hand = str(p.get("hand", "cursor"))
+            label = str(p.get("label", "OPEN_PALM"))
+            seconds = float(p.get("seconds", 2.0))
+            hz = int(p.get("hz", 15))
+            self.learner.start_capture(hand=hand, label=label, seconds=seconds, hz=hz)
+
+        elif typ == "TRAIN_TRAIN":
+            self.learner.train()
+
+        elif typ == "TRAIN_ENABLE":
+            self.learner.enabled = bool(data.get("enabled", True))
+            self.learner.save()
+
+        elif typ == "TRAIN_RESET":
+            self.learner.reset()
+
 
     # ---------- mode + state ----------
     def _reset_side_effects(self):
@@ -511,6 +535,20 @@ class HandsAgent:
             if got_cursor:
                 cursor_cx, cursor_cy = palm_center(cursor_lm)
                 cursor_gesture = classify_gesture(cursor_lm)
+                cursor_gesture_rule = cursor_gesture
+                self.learner.tick_capture(cursor_lm=cursor_lm, other_lm=other_lm)
+
+                pred, score = self.learner.predict("cursor", cursor_lm)
+                if pred is not None:
+                    cursor_gesture = pred
+
+                self.learner.last_pred = {
+                    "hand": "cursor",
+                    "label": pred,
+                    "score": float(score),
+                    "rule": cursor_gesture_rule,
+                }
+
                 self.last_seen_ts = t
                 self.last_cursor_lm = cursor_lm
                 self.last_cursor_cxcy = (cursor_cx, cursor_cy)
@@ -802,6 +840,14 @@ class HandsAgent:
 
             "tapSeq": int(getattr(self.vkey, "tap_seq", 0)),
             "connected": bool(self.ws.connected),
+
+            # learner상태 추가
+            "learnEnabled": bool(self.learner.enabled),
+            "learnCounts": self.learner.counts(),
+            "learnLastPred": self.learner.last_pred,
+            "learnLastTrainTs": float(self.learner.last_train_ts or 0.0),
+            "learnCapture": self.learner.capture,
+
         }
 
         # ✅ HUD bubble override (menu text)
