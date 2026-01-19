@@ -33,9 +33,7 @@ export default function TitleBar({
   theme,
   setTheme,
   onOpenPairing,
-
-  // ✅ 추가: Dashboard 폴링 결과를 여기로 올려서 표시
-  agentStatus, // { connected:boolean, locked:boolean, mode:string, modeText?:string }
+  agentStatus,
 }) {
   const onMin = () => window.managerWin?.minimize?.();
   const onMax = () => window.managerWin?.toggleMaximize?.();
@@ -76,17 +74,13 @@ export default function TitleBar({
     agentStatus?.mode ??
     "-";
 
-  // =========================
-  // Theme Select Popover (Portal)
-  // =========================
+  // Theme Popover
   const [open, setOpen] = useState(false);
   const btnRef = useRef(null);
   const popRef = useRef(null);
   const [pos, setPos] = useState({ top: 48, left: 0, width: 220 });
 
-  // =========================
-  // Settings Popover (Gear)
-  // =========================
+  // Settings Popover
   const [settingsOpen, setSettingsOpen] = useState(false);
   const gearBtnRef = useRef(null);
   const settingsPopRef = useRef(null);
@@ -101,10 +95,7 @@ export default function TitleBar({
     const width = Math.max(180, r.width + 24);
 
     const desiredLeft = r.right - width;
-    const left = Math.max(
-      margin,
-      Math.min(desiredLeft, window.innerWidth - width - margin)
-    );
+    const left = Math.max(margin, Math.min(desiredLeft, window.innerWidth - width - margin));
     const top = Math.min(r.bottom + margin, window.innerHeight - margin);
 
     setPos({ top, left, width });
@@ -116,11 +107,9 @@ export default function TitleBar({
 
     const r = el.getBoundingClientRect();
     const margin = 10;
-    // 화면이 작을 때도 넘치지 않게 clamp
     const ideal = Math.min(760, Math.max(380, Math.round(window.innerWidth * 0.62)));
     const width = Math.max(320, Math.min(ideal, window.innerWidth - margin * 2));
 
-    // 오른쪽 정렬 느낌(기어 버튼 기준으로)
     const desiredLeft = r.right - width;
     const left = Math.max(margin, Math.min(desiredLeft, window.innerWidth - width - margin));
     const top = Math.min(r.bottom + margin, window.innerHeight - margin);
@@ -204,6 +193,7 @@ export default function TitleBar({
             left: pos.left,
             width: pos.width,
             zIndex: 99999,
+            WebkitAppRegion: "no-drag",
           }}
           className={cn(
             "rounded-xl shadow-2xl ring-1",
@@ -250,6 +240,7 @@ export default function TitleBar({
             left: settingsPos.left,
             width: settingsPos.width,
             zIndex: 99999,
+            WebkitAppRegion: "no-drag",
           }}
           className={cn(
             "rounded-2xl shadow-2xl ring-1",
@@ -271,12 +262,11 @@ export default function TitleBar({
   return (
     <div
       className={cn(
-        "navbar h-11 px-3 select-none",
+        "navbar h-11 px-3 select-none titlebar-drag",
         "border-b border-base-300/50",
         "bg-base-200/80 backdrop-blur",
         "text-base-content"
       )}
-      style={{ WebkitAppRegion: "no-drag" }}
       onDoubleClick={onMax}
     >
       {/* LEFT */}
@@ -300,18 +290,7 @@ export default function TitleBar({
           >
             Dashboard
           </button>
-          <button
-            type="button"
-            onClick={() => onChangeScreen?.("train")}
-            className={cn(
-              "px-3 py-1 text-xs rounded-md transition",
-              screen === "train"
-                ? "bg-base-300/50 text-base-content"
-                : "opacity-80 hover:bg-base-300/30 hover:opacity-100"
-            )}
-          >
-            Training
-          </button>
+
           <button
             type="button"
             onClick={() => onChangeScreen?.("rush")}
@@ -324,16 +303,11 @@ export default function TitleBar({
           >
             Rush
           </button>
-
-          {/* 설정은 오른쪽 기어(⚙)로 이동 */}
         </div>
 
-        {/* ✅ 여기: 연결/잠금/모드만 살려서 위쪽으로 */}
+        {/* Status */}
         <div className="ml-2 flex items-center gap-1.5">
-          <StatusChip
-            tone={connected ? "ok" : "bad"}
-            title="에이전트 연결 상태"
-          >
+          <StatusChip tone={connected ? "ok" : "bad"} title="에이전트 연결 상태">
             {connected ? "연결됨" : "끊김"}
           </StatusChip>
           <StatusChip tone={locked ? "bad" : "ok"} title="제스처 잠금 상태">
@@ -359,7 +333,6 @@ export default function TitleBar({
           휴대폰 연결
         </button>
 
-        {/* WEB HUD 토글 */}
         <button
           type="button"
           onClick={() => onToggleHud?.()}
@@ -374,7 +347,6 @@ export default function TitleBar({
           HUD: {hudOn ? "ON" : "OFF"}
         </button>
 
-        {/* OS HUD 토글 */}
         <button
           type="button"
           onClick={() => onToggleOsHud?.()}
@@ -391,13 +363,11 @@ export default function TitleBar({
       </div>
 
       {/* RIGHT */}
-      <div className="ml-auto flex items-center gap-2" style={{ WebkitAppRegion: "no-drag" }}>
-        {/* Settings (Gear) */}
+      <div className="ml-auto flex items-center gap-2">
         <button
           ref={gearBtnRef}
           type="button"
           onClick={() => {
-            // 둘 다 열릴 필요 없음
             setOpen(false);
             setSettingsOpen((v) => !v);
           }}
@@ -411,27 +381,6 @@ export default function TitleBar({
           title="제스처 설정"
         >
           <span className="inline-flex items-center gap-2">
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-              className="opacity-80"
-            >
-              <path
-                d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"
-                stroke="currentColor"
-                strokeWidth="1.8"
-              />
-              <path
-                d="M19.4 15a8.3 8.3 0 0 0 .1-6l-2.1-.8a6.8 6.8 0 0 0-1.2-2.1l1-2a8.3 8.3 0 0 0-5.2-2.2l-.7 2.2a6.7 6.7 0 0 0-2.4 0L8.2 1.9A8.3 8.3 0 0 0 3 4.1l1 2a6.8 6.8 0 0 0-1.2 2.1L.7 9a8.3 8.3 0 0 0 .1 6l2.1.8a6.8 6.8 0 0 0 1.2 2.1l-1 2A8.3 8.3 0 0 0 8.2 22l.7-2.2a6.7 6.7 0 0 0 2.4 0L12 22a8.3 8.3 0 0 0 5.2-2.2l-1-2a6.8 6.8 0 0 0 1.2-2.1l2-.7Z"
-                stroke="currentColor"
-                strokeWidth="1.2"
-                strokeLinejoin="round"
-                opacity="0.9"
-              />
-            </svg>
             <span className="text-xs font-semibold">설정</span>
           </span>
         </button>
@@ -458,25 +407,13 @@ export default function TitleBar({
         {ThemePopover}
 
         <div className="flex items-center gap-2">
-          <button
-            className="w-10 h-8 rounded-md hover:bg-base-300/40"
-            onClick={onMin}
-            title="Minimize"
-          >
+          <button className="w-10 h-8 rounded-md hover:bg-base-300/40" onClick={onMin} title="Minimize">
             —
           </button>
-          <button
-            className="w-10 h-8 rounded-md hover:bg-base-300/40"
-            onClick={onMax}
-            title="Maximize"
-          >
+          <button className="w-10 h-8 rounded-md hover:bg-base-300/40" onClick={onMax} title="Maximize">
             □
           </button>
-          <button
-            className="w-10 h-8 rounded-md hover:bg-error/25"
-            onClick={onClose}
-            title="Close"
-          >
+          <button className="w-10 h-8 rounded-md hover:bg-error/25" onClick={onClose} title="Close">
             ×
           </button>
         </div>

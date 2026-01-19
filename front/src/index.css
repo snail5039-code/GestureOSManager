@@ -52,3 +52,21 @@ html[data-theme="devil"] body,
 html[data-theme="devil"] body * {
   cursor: url("/cursor/devil.png") 2 2, auto !important;
 }
+
+/* =========================
+   Electron Frameless Drag
+   ========================= */
+.titlebar-drag {
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+/* 타이틀바 안에서 클릭해야 하는 요소들은 드래그 금지 */
+.titlebar-drag button,
+.titlebar-drag a,
+.titlebar-drag input,
+.titlebar-drag select,
+.titlebar-drag textarea,
+.titlebar-drag [role="button"] {
+  -webkit-app-region: no-drag;
+}
