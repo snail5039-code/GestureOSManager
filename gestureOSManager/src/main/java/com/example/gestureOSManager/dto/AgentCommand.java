@@ -70,4 +70,38 @@ public class AgentCommand {
   public static AgentCommand trainReset() {
     return AgentCommand.builder().type(CommandType.TRAIN_RESET).build();
   }
+  // =========================
+  // ✅ Profile commands
+  // =========================
+  public static AgentCommand trainSetProfile(String profile) {
+    return AgentCommand.builder()
+        .type(CommandType.TRAIN_SET_PROFILE)
+        .payload(Map.of("profile", profile))
+        .build();
+  }
+
+  public static AgentCommand trainProfileCreate(String profile, boolean copy) {
+    return AgentCommand.builder()
+        .type(CommandType.TRAIN_PROFILE_CREATE)
+        .payload(Map.of("profile", profile, "copy", copy))
+        .build();
+  }
+
+  public static AgentCommand trainProfileDelete(String profile) {
+    return AgentCommand.builder()
+        .type(CommandType.TRAIN_PROFILE_DELETE)
+        .payload(Map.of("profile", profile))
+        .build();
+  }
+
+  public static AgentCommand trainProfileRename(String from, String to) {
+    return AgentCommand.builder()
+        .type(CommandType.TRAIN_PROFILE_RENAME)
+        .payload(Map.of("from", from, "to", to))
+        .build();
+  }
+  
+  public static AgentCommand trainRollback() {
+	return AgentCommand.builder().type(CommandType.TRAIN_ROLLBACK).build();
+  }
 }
