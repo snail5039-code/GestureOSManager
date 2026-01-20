@@ -89,7 +89,11 @@ export default function TitleBar({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const gearBtnRef = useRef(null);
   const settingsPopRef = useRef(null);
-  const [settingsPos, setSettingsPos] = useState({ top: 48, left: 0, width: 640 });
+  const [settingsPos, setSettingsPos] = useState({
+    top: 48,
+    left: 0,
+    width: 640,
+  });
 
   const calcPos = () => {
     const el = btnRef.current;
@@ -119,7 +123,10 @@ export default function TitleBar({
     const width = Math.max(320, Math.min(ideal, window.innerWidth - margin * 2));
 
     const desiredLeft = r.right - width;
-    const left = Math.max(margin, Math.min(desiredLeft, window.innerWidth - width - margin));
+    const left = Math.max(
+      margin,
+      Math.min(desiredLeft, window.innerWidth - width - margin)
+    );
     const top = Math.min(r.bottom + margin, window.innerHeight - margin);
 
     setSettingsPos({ top, left, width });
@@ -201,6 +208,7 @@ export default function TitleBar({
             left: pos.left,
             width: pos.width,
             zIndex: 99999,
+            WebkitAppRegion: "no-drag",
           }}
           className={cn(
             "rounded-xl shadow-2xl ring-1",
@@ -247,6 +255,7 @@ export default function TitleBar({
             left: settingsPos.left,
             width: settingsPos.width,
             zIndex: 99999,
+            WebkitAppRegion: "no-drag",
           }}
           className={cn(
             "rounded-2xl shadow-2xl ring-1",
@@ -268,12 +277,11 @@ export default function TitleBar({
   return (
     <div
       className={cn(
-        "navbar h-11 px-3 select-none",
+        "navbar h-11 px-3 select-none titlebar-drag",
         "border-b border-base-300/50",
         "bg-base-200/80 backdrop-blur",
         "text-base-content"
       )}
-      style={{ WebkitAppRegion: "no-drag" }}
       onDoubleClick={onMax}
     >
       {/* LEFT */}
@@ -296,6 +304,20 @@ export default function TitleBar({
             )}
           >
             Dashboard
+          </button>
+
+          {/* ✅ Training 유지 */}
+          <button
+            type="button"
+            onClick={() => onChangeScreen?.("train")}
+            className={cn(
+              "px-3 py-1 text-xs rounded-md transition",
+              screen === "train"
+                ? "bg-base-300/50 text-base-content"
+                : "opacity-80 hover:bg-base-300/30 hover:opacity-100"
+            )}
+          >
+            Training
           </button>
 
           <button
@@ -359,7 +381,6 @@ export default function TitleBar({
           휴대폰 연결
         </button>
 
-        {/* WEB HUD 토글 */}
         <button
           type="button"
           onClick={() => onToggleHud?.()}
@@ -374,7 +395,6 @@ export default function TitleBar({
           HUD: {hudOn ? "ON" : "OFF"}
         </button>
 
-        {/* OS HUD 토글 */}
         <button
           type="button"
           onClick={() => onToggleOsHud?.()}
@@ -391,8 +411,10 @@ export default function TitleBar({
       </div>
 
       {/* RIGHT */}
-      <div className="ml-auto flex items-center gap-2" style={{ WebkitAppRegion: "no-drag" }}>
-        {/* Settings (Gear) */}
+      <div
+        className="ml-auto flex items-center gap-2"
+        style={{ WebkitAppRegion: "no-drag" }}
+      >
         <button
           ref={gearBtnRef}
           type="button"
