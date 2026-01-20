@@ -347,25 +347,6 @@ export default function TitleBar({
           </StatusChip>
         </div>
 
-        {/* ✅ NEW: VKEY 모드 진입 버튼 (여기 한 줄이 핵심) */}
-        <button
-          type="button"
-          disabled={!connected}
-          onClick={() => setModeVKey()}
-          className={cn(
-            "ml-2 px-3 py-1 text-xs rounded-lg ring-1",
-            connected
-              ? "bg-base-100/35 ring-base-300/50 opacity-90 hover:opacity-100 hover:bg-base-100/55"
-              : "bg-base-100/20 ring-base-300/30 opacity-50 cursor-not-allowed",
-            "transition-all duration-150",
-            "hover:-translate-y-[1px] hover:shadow-md",
-            "active:translate-y-0 active:shadow-none"
-          )}
-          title={connected ? "가상 키보드 모드로 전환" : "에이전트가 연결되어야 합니다"}
-        >
-          가상키보드
-        </button>
-
         <button
           type="button"
           onClick={() => onOpenPairing?.()}
