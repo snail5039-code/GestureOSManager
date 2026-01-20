@@ -306,11 +306,17 @@ class HandsAgent:
         except Exception:
             pass
 
-
         self.pred_hist = {
             "cursor": deque(maxlen=5),
             "other": deque(maxlen=5),
         }
+
+        # ✅✅ pinch debounce / hysteresis (cursor hand)  <-- (원래 _osk_toggle 아래에 있던 걸 여기로 이동)
+        self._pinch_down = False
+        self._pinch_t0 = 0.0  # pinch candidate start time
+        self._pinch_hold_ms = 90  # tweakable: 70~140ms
+        self._pinch_hys_on = 1.00  # ON threshold multiplier (tight)
+        self._pinch_hys_off = 1.25  # OFF threshold multiplier (looser)
 
         # ws
         self.ws = WSClient(
@@ -397,14 +403,6 @@ class HandsAgent:
     # -------------------------------------------------------------------------
     # WS helpers
     # -------------------------------------------------------------------------
-        # pinch debounce / hysteresis (cursor hand)
-        self._pinch_down = False
-        self._pinch_t0 = 0.0  # pinch candidate start time
-        self._pinch_hold_ms = 90  # tweakable: 70~140ms
-        self._pinch_hys_on = 1.00  # ON threshold multiplier (tight)
-        self._pinch_hys_off = 1.25 # OFF threshold multiplier (looser)
-
-    # ---------- WS helpers ----------
     def send_event(self, name: str, payload: Optional[dict]):
         msg = {"type": "EVENT", "name": name}
         if payload is not None:
@@ -414,9 +412,21 @@ class HandsAgent:
     def _on_command(self, data: dict):
         typ = data.get("type")
 
-        if typ in ("SET_MODE", "ENABLE", "DISABLE", "SET_PREVIEW", "UPDATE_SETTINGS",
-                   "TRAIN_CAPTURE", "TRAIN_TRAIN", "TRAIN_ENABLE", "TRAIN_RESET",
-                   "TRAIN_SET_PROFILE", "TRAIN_PROFILE_CREATE", "TRAIN_PROFILE_DELETE", "TRAIN_PROFILE_RENAME"):
+        if typ in (
+            "SET_MODE",
+            "ENABLE",
+            "DISABLE",
+            "SET_PREVIEW",
+            "UPDATE_SETTINGS",
+            "TRAIN_CAPTURE",
+            "TRAIN_TRAIN",
+            "TRAIN_ENABLE",
+            "TRAIN_RESET",
+            "TRAIN_SET_PROFILE",
+            "TRAIN_PROFILE_CREATE",
+            "TRAIN_PROFILE_DELETE",
+            "TRAIN_PROFILE_RENAME",
+        ):
             print("[PY] cmd:", data, flush=True)
 
         if typ == "ENABLE":
@@ -440,9 +450,6 @@ class HandsAgent:
             incoming = data.get("settings") or {}
             self.apply_settings(incoming)
 
-    # -------------------------------------------------------------------------
-    # mode + state
-    # -------------------------------------------------------------------------
         elif typ == "TRAIN_CAPTURE":
             p = data.get("payload") or {}
             hand = str(p.get("hand", "cursor"))
@@ -463,7 +470,6 @@ class HandsAgent:
 
         elif typ == "TRAIN_ROLLBACK":
             self.learner.rollback()
-
 
         elif typ == "TRAIN_SET_PROFILE":
             p = data.get("payload") or {}
