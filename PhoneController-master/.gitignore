@@ -1,0 +1,45 @@
+# -----------------------------
+# Android / Gradle
+# -----------------------------
+**/.gradle/
+**/build/
+**/out/
+**/.idea/
+**/*.iml
+**/*.ipr
+**/*.iws
+**/.DS_Store
+**/captures/
+**/.externalNativeBuild/
+**/.cxx/
+
+# local machine settings
+**/local.properties
+
+# -----------------------------
+# Signing / Keystore (절대 커밋 금지)
+# -----------------------------
+**/*.jks
+**/*.keystore
+**/keystore/
+**/keys/
+**/*release*.jks
+**/*signing*.jks
+
+# -----------------------------
+# Release outputs (산출물 커밋 금지)
+# -----------------------------
+**/*.apk
+**/*.aab
+**/release/
+**/app/release/
+**/app/build/outputs/
+**/app/build/outputs/apk/
+**/app/build/outputs/bundle/
+
+# -----------------------------
+# Logs / temp
+# -----------------------------
+**/*.log
+**/tmp/
+**/*.tmp
