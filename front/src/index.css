@@ -3,26 +3,36 @@
 @plugin "daisyui" {
   themes: dark --default, light, cupcake, bumblebee, acid, valentine;
 }
-/* 스크롤은 유지하되 덜 튀게 */
-main::-webkit-scrollbar {
-  width: 10px;
-}
-main::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 999px;
-}
-main::-webkit-scrollbar-track {
-  background: transparent;
+
+/* ✅ Vite 기본 템플릿 #root 제한 제거 */
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
 }
 
-/* Firefox */
+#root {
+  max-width: none;
+  text-align: initial;
+}
+
+/* body 스크롤은 막고 main만 스크롤 */
+body { overflow: hidden; }
+
+/* 스크롤바(선택) */
+main::-webkit-scrollbar { width: 10px; }
+main::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 999px; }
+main::-webkit-scrollbar-track { background: transparent; }
+
 main {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+  scrollbar-color: rgba(255,255,255,0.12) transparent;
 }
 
 html { font-size: 20px; }
 
+/* theme cursor (유지) */
 html[data-theme="dark"],
 html[data-theme="dark"] body,
 html[data-theme="dark"] body * {
@@ -34,13 +44,13 @@ html[data-theme="light"] body,
 html[data-theme="light"] body * {
   cursor: url("/cursor/light.png") 2 2, auto !important;
 }
-   
+
 html[data-theme="neon"],
 html[data-theme="neon"] body,
 html[data-theme="neon"] body * {
   cursor: url("/cursor/neon.png") 2 2, auto !important;
 }
-  
+
 html[data-theme="rose"],
 html[data-theme="rose"] body,
 html[data-theme="rose"] body * {
@@ -53,15 +63,8 @@ html[data-theme="devil"] body * {
   cursor: url("/cursor/devil.png") 2 2, auto !important;
 }
 
-/* =========================
-   Electron Frameless Drag
-   ========================= */
-.titlebar-drag {
-  -webkit-app-region: drag;
-  user-select: none;
-}
-
-/* 타이틀바 안에서 클릭해야 하는 요소들은 드래그 금지 */
+/* Electron drag */
+.titlebar-drag { -webkit-app-region: drag; user-select: none; }
 .titlebar-drag button,
 .titlebar-drag a,
 .titlebar-drag input,
