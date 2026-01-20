@@ -1131,7 +1131,7 @@ class HandsAgent:
                         cv2.destroyWindow("GestureOS Agent")
                     except Exception:
                         try:
-                            cv2.destroyAllWindows()
+                            cv2.destroyAllWindows() 
                         except Exception:
                             pass
                     self.window_open = False
