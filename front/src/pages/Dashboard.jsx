@@ -13,7 +13,6 @@ const MODE_LABEL = {
   PRESENTATION: "프레젠테이션",
   DRAW: "그리기",
   VKEY: "가상키보드",
-  DEFAULT: "기본",
 };
 
 const api = axios.create({
