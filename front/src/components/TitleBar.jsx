@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import GestureSettingsPanel from "./GestureSettingsPanel";
+import { setModeVKey } from "../api/agentWs";
 
 function cn(...xs) {
   return xs.filter(Boolean).join(" ");
@@ -34,7 +35,7 @@ export default function TitleBar({
   setTheme,
   onOpenPairing,
 
-  // ✅ 추가: Dashboard 폴링 결과를 여기로 올려서 표시
+  // ✅ Dashboard 폴링 결과 표시
   agentStatus, // { connected:boolean, locked:boolean, mode:string, modeText?:string }
 }) {
   const onMin = () => window.managerWin?.minimize?.();
@@ -55,12 +56,10 @@ export default function TitleBar({
   const MODE_LABEL = useMemo(
     () => ({
       MOUSE: "마우스",
-      KEYBOARD: "키보드",
       PRESENTATION: "프레젠테이션",
       DRAW: "그리기",
       RUSH: "러쉬",
       VKEY: "가상키보드",
-      DEFAULT: "기본",
     }),
     []
   );
@@ -116,11 +115,9 @@ export default function TitleBar({
 
     const r = el.getBoundingClientRect();
     const margin = 10;
-    // 화면이 작을 때도 넘치지 않게 clamp
     const ideal = Math.min(760, Math.max(380, Math.round(window.innerWidth * 0.62)));
     const width = Math.max(320, Math.min(ideal, window.innerWidth - margin * 2));
 
-    // 오른쪽 정렬 느낌(기어 버튼 기준으로)
     const desiredLeft = r.right - width;
     const left = Math.max(margin, Math.min(desiredLeft, window.innerWidth - width - margin));
     const top = Math.min(r.bottom + margin, window.innerHeight - margin);
@@ -313,16 +310,11 @@ export default function TitleBar({
           >
             Rush
           </button>
-
-          {/* 설정은 오른쪽 기어(⚙)로 이동 */}
         </div>
 
-        {/* ✅ 여기: 연결/잠금/모드만 살려서 위쪽으로 */}
+        {/* ✅ 연결/잠금/모드 */}
         <div className="ml-2 flex items-center gap-1.5">
-          <StatusChip
-            tone={connected ? "ok" : "bad"}
-            title="에이전트 연결 상태"
-          >
+          <StatusChip tone={connected ? "ok" : "bad"} title="에이전트 연결 상태">
             {connected ? "연결됨" : "끊김"}
           </StatusChip>
           <StatusChip tone={locked ? "bad" : "ok"} title="제스처 잠금 상태">
@@ -332,6 +324,25 @@ export default function TitleBar({
             모드: {modeText}
           </StatusChip>
         </div>
+
+        {/* ✅ NEW: VKEY 모드 진입 버튼 (여기 한 줄이 핵심) */}
+        <button
+          type="button"
+          disabled={!connected}
+          onClick={() => setModeVKey()}
+          className={cn(
+            "ml-2 px-3 py-1 text-xs rounded-lg ring-1",
+            connected
+              ? "bg-base-100/35 ring-base-300/50 opacity-90 hover:opacity-100 hover:bg-base-100/55"
+              : "bg-base-100/20 ring-base-300/30 opacity-50 cursor-not-allowed",
+            "transition-all duration-150",
+            "hover:-translate-y-[1px] hover:shadow-md",
+            "active:translate-y-0 active:shadow-none"
+          )}
+          title={connected ? "가상 키보드 모드로 전환" : "에이전트가 연결되어야 합니다"}
+        >
+          가상키보드
+        </button>
 
         <button
           type="button"
@@ -386,7 +397,6 @@ export default function TitleBar({
           ref={gearBtnRef}
           type="button"
           onClick={() => {
-            // 둘 다 열릴 필요 없음
             setOpen(false);
             setSettingsOpen((v) => !v);
           }}

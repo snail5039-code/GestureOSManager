@@ -2,6 +2,7 @@
 import os
 import time
 import ctypes
+import subprocess
 from typing import Any, List, Optional, Tuple
 
 os.environ.setdefault("GLOG_minloglevel", "2")
@@ -20,6 +21,7 @@ from ..ws_client import WSClient
 # =============================================================================
 _MODE_IMPORT_ERRS = []
 
+
 def _safe_import(path: str, name: str):
     try:
         mod = __import__(path, fromlist=[name])
@@ -28,21 +30,21 @@ def _safe_import(path: str, name: str):
         _MODE_IMPORT_ERRS.append((f"{path}.{name}", repr(e)))
         return None
 
-# mouse
-MouseClickDrag   = _safe_import("gestureos_agent.modes.mouse", "MouseClickDrag")
-MouseRightClick  = _safe_import("gestureos_agent.modes.mouse", "MouseRightClick")
-MouseScroll      = _safe_import("gestureos_agent.modes.mouse", "MouseScroll")
-MouseLockToggle  = _safe_import("gestureos_agent.modes.mouse", "MouseLockToggle")
 
-# keyboard / draw / ppt / vkey
-KeyboardHandler      = _safe_import("gestureos_agent.modes.keyboard", "KeyboardHandler")
-DrawHandler          = _safe_import("gestureos_agent.modes.draw", "DrawHandler")
-PresentationHandler  = _safe_import("gestureos_agent.modes.presentation", "PresentationHandler")
-VKeyHandler          = _safe_import("gestureos_agent.modes.vkey", "VKeyHandler")
+# mouse
+MouseClickDrag = _safe_import("gestureos_agent.modes.mouse", "MouseClickDrag")
+MouseRightClick = _safe_import("gestureos_agent.modes.mouse", "MouseRightClick")
+MouseScroll = _safe_import("gestureos_agent.modes.mouse", "MouseScroll")
+MouseLockToggle = _safe_import("gestureos_agent.modes.mouse", "MouseLockToggle")
+
+# keyboard / draw / ppt
+KeyboardHandler = _safe_import("gestureos_agent.modes.keyboard", "KeyboardHandler")
+DrawHandler = _safe_import("gestureos_agent.modes.draw", "DrawHandler")
+PresentationHandler = _safe_import("gestureos_agent.modes.presentation", "PresentationHandler")
 
 # ui menu / rush
-UIModeMenu       = _safe_import("gestureos_agent.modes.ui_menu", "UIModeMenu")
-RushLRPicker     = _safe_import("gestureos_agent.modes.rush_lr", "RushLRPicker")
+UIModeMenu = _safe_import("gestureos_agent.modes.ui_menu", "UIModeMenu")
+RushLRPicker = _safe_import("gestureos_agent.modes.rush_lr", "RushLRPicker")
 ColorStickTracker = _safe_import("gestureos_agent.modes.rush_color", "ColorStickTracker")
 
 from ..bindings import DEFAULT_SETTINGS, deep_copy, merge_settings, get_binding
@@ -108,22 +110,26 @@ MODE_HOLD_SEC = 0.8
 MODE_COOLDOWN_SEC = 1.2
 
 # =============================================================================
-# Mode Palette (OS overlay menu) - "modal state" (A안)
-# Trigger: both hands V_SIGN hold
-# Confirm: PINCH_INDEX hold
-# Cancel : FIST hold
+# Mode Palette (OS overlay menu)
 # =============================================================================
-PALETTE_OPEN_HOLD    = 0.35
+PALETTE_OPEN_HOLD = 0.35
 PALETTE_CONFIRM_HOLD = 0.18
-PALETTE_CANCEL_HOLD  = 0.45
+PALETTE_CANCEL_HOLD = 0.45
 
+# ✅ HUD의 "키보드"를 VKEY(윈도우 OSK)로 매핑
 PALETTE_MAP = {
     "MOUSE": "MOUSE",
-    "KEYBOARD": "KEYBOARD",
+    "KEYBOARD": "VKEY",
     "DRAW": "DRAW",
     "PPT": "PRESENTATION",
-    "OTHER": "MOUSE",  # 필요하면 "DEFAULT"로 변경 가능
+    "OTHER": "MOUSE",
 }
+
+# =============================================================================
+# OSK toggle gesture (VKEY only)
+# =============================================================================
+OSK_TOGGLE_HOLD_SEC = 0.8
+OSK_TOGGLE_COOLDOWN_SEC = 1.2
 
 
 def _lm_to_payload(lm):
@@ -149,12 +155,15 @@ class HandsAgent:
     - MOUSE / KEYBOARD / PRESENTATION / DRAW / VKEY
     - RUSH_HAND: mediapipe hands-based left/right (RushLRPicker)
     - RUSH_COLOR: HSV stick tracking left/right (ColorStickTracker)
+
+    NOTE:
+    - VKEY 모드는 "윈도우 OSK/TabTip 띄우기"만 담당.
+      (커서 이동/클릭은 hands_agent에서 그대로 처리)
     """
 
     def __init__(self, cfg: AgentConfig):
         self.cfg = cfg
 
-        # import 에러 로그 1회 출력
         if _MODE_IMPORT_ERRS:
             print("[MODE_IMPORT_ERRS]", _MODE_IMPORT_ERRS, flush=True)
 
@@ -197,7 +206,6 @@ class HandsAgent:
         self.kb = KeyboardHandler() if KeyboardHandler else None
         self.draw = DrawHandler() if DrawHandler else None
         self.ppt = PresentationHandler() if PresentationHandler else None
-        self.vkey = VKeyHandler() if VKeyHandler else None
 
         self.ui_menu = UIModeMenu() if UIModeMenu else None
 
@@ -206,14 +214,18 @@ class HandsAgent:
 
         # rush handlers
         self.rush_lr = RushLRPicker() if RushLRPicker else None
-        self.rush_color = ColorStickTracker(
-            s_min=int(os.getenv("RUSH_COLOR_S_MIN", "60")),
-            v_min=int(os.getenv("RUSH_COLOR_V_MIN", "60")),
-            min_area=int(os.getenv("RUSH_COLOR_MIN_AREA", "220")),
-            use_bgr_fallback=(os.getenv("RUSH_COLOR_BGR_FALLBACK", "1") == "1"),
-            flip_mirror=(os.getenv("RUSH_COLOR_FLIP", "0") == "1"),
-            debug=(os.getenv("RUSH_COLOR_DEBUG", "0") == "1"),
-        ) if ColorStickTracker else None
+        self.rush_color = (
+            ColorStickTracker(
+                s_min=int(os.getenv("RUSH_COLOR_S_MIN", "60")),
+                v_min=int(os.getenv("RUSH_COLOR_V_MIN", "60")),
+                min_area=int(os.getenv("RUSH_COLOR_MIN_AREA", "220")),
+                use_bgr_fallback=(os.getenv("RUSH_COLOR_BGR_FALLBACK", "1") == "1"),
+                flip_mirror=(os.getenv("RUSH_COLOR_FLIP", "0") == "1"),
+                debug=(os.getenv("RUSH_COLOR_DEBUG", "0") == "1"),
+            )
+            if ColorStickTracker
+            else None
+        )
 
         # tracking loss
         self.last_seen_ts = 0.0
@@ -238,6 +250,14 @@ class HandsAgent:
         # preview window
         self.window_open = False
 
+        # ---- OSK state ----
+        self.osk_open = False
+        self.osk_toggle_hold_start = None
+        self.last_osk_toggle_ts = 0.0
+
+        # 팔레트 열기 직전 OSK 상태 저장(“열려있었으면 닫고, 닫힐 때 복구”)
+        self.palette_prev_osk_open = False
+
         # mediapipe hands
         self.mp_hands = mp.solutions.hands
         self.hands = self.mp_hands.Hands(
@@ -255,7 +275,84 @@ class HandsAgent:
             enabled=(not getattr(cfg, "no_ws", False)),
         )
 
-    # ---------- WS helpers ----------
+        # boot: start_vkey면 바로 OSK 띄우기
+        if str(self.mode).upper() == "VKEY":
+            self._enter_vkey_mode()
+
+    # -------------------------------------------------------------------------
+    # OSK helpers
+    # -------------------------------------------------------------------------
+    def _osk_open(self):
+        if os.name != "nt":
+            return
+        if self.osk_open:
+            return
+
+        launched_any = False
+
+        # 1) TabTip (떠도 UI가 안 뜰 수 있음)
+        tabtip = r"C:\Program Files\Common Files\Microsoft Shared\ink\TabTip.exe"
+        try:
+            if os.path.exists(tabtip):
+                subprocess.Popen([tabtip], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                print("[VKEY] launched TabTip", flush=True)
+                launched_any = True
+                time.sleep(0.05)
+        except Exception as e:
+            print("[VKEY] TabTip failed:", repr(e), flush=True)
+
+        # 2) Win11 URI (옵션)
+        try:
+            subprocess.Popen(
+                ["cmd", "/c", "start", "", "ms-inputapp:"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            print("[VKEY] launched ms-inputapp:", flush=True)
+            launched_any = True
+            time.sleep(0.05)
+        except Exception as e:
+            print("[VKEY] ms-inputapp failed:", repr(e), flush=True)
+
+        # 3) ✅ 가장 확실: classic OSK
+        try:
+            subprocess.Popen(
+                ["cmd", "/c", "start", "", "osk.exe"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            print("[VKEY] launched osk.exe", flush=True)
+            launched_any = True
+        except Exception as e:
+            print("[VKEY] osk.exe failed:", repr(e), flush=True)
+
+        if launched_any:
+            self.osk_open = True
+
+    def _osk_close(self):
+        if os.name != "nt":
+            return
+        for exe in ("osk.exe", "TabTip.exe"):
+            try:
+                subprocess.run(
+                    ["taskkill", "/IM", exe, "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            except Exception:
+                pass
+        self.osk_open = False
+
+    def _osk_toggle(self):
+        if self.osk_open:
+            self._osk_close()
+        else:
+            self._osk_open()
+
+    # -------------------------------------------------------------------------
+    # WS helpers
+    # -------------------------------------------------------------------------
     def send_event(self, name: str, payload: Optional[dict]):
         msg = {"type": "EVENT", "name": name}
         if payload is not None:
@@ -275,6 +372,8 @@ class HandsAgent:
         elif typ == "DISABLE":
             self.enabled = False
             self._reset_side_effects()
+            # ✅ Stop 누르면 OSK도 끄기
+            self._osk_close()
 
         elif typ == "SET_MODE":
             new_mode = str(data.get("mode", "MOUSE")).upper()
@@ -287,31 +386,52 @@ class HandsAgent:
             incoming = data.get("settings") or {}
             self.apply_settings(incoming)
 
-    # ---------- mode + state ----------
+    # -------------------------------------------------------------------------
+    # mode + state
+    # -------------------------------------------------------------------------
     def _reset_side_effects(self):
-        if self.mouse_click: self.mouse_click.reset()
-        if self.mouse_right: self.mouse_right.reset()
-        if self.mouse_scroll: self.mouse_scroll.reset()
+        if self.mouse_click:
+            self.mouse_click.reset()
+        if self.mouse_right:
+            self.mouse_right.reset()
+        if self.mouse_scroll:
+            self.mouse_scroll.reset()
 
-        if self.kb: self.kb.reset()
-        if self.draw: self.draw.reset()
-        if self.ppt: self.ppt.reset()
-        if self.vkey: self.vkey.reset()
+        if self.kb:
+            self.kb.reset()
+        if self.draw:
+            self.draw.reset()
+        if self.ppt:
+            self.ppt.reset()
 
     def apply_settings(self, incoming: dict):
-        """Apply user settings pushed from server.
-
-        incoming can be either:
-          - full object: {version:1, bindings:{...}}
-          - bindings only: {...}
-        """
         try:
             self.settings = merge_settings(self.settings, incoming)
             print("[PY] apply_settings -> version", self.settings.get("version"), flush=True)
         except Exception as e:
             print("[PY] apply_settings failed:", e, flush=True)
 
+    # ---------- VKEY helpers ----------
+    def _enter_vkey_mode(self):
+        """VKEY 진입 시: 윈도우 가상 키보드(터치 키보드/osk) 띄우기."""
+        # keyboard.py가 on_enter 지원하면 호출(있어도 최종 OSK는 띄움)
+        if self.kb and hasattr(self.kb, "on_enter"):
+            try:
+                self.kb.on_enter(mode="VKEY")
+            except TypeError:
+                try:
+                    self.kb.on_enter("VKEY")
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        # ✅ 최종: OSK 강제
+        self._osk_open()
+
     def apply_set_mode(self, new_mode: str):
+        prev_mode = str(self.mode).upper()
+
         nm = str(new_mode).upper()
         if nm == "PPT":
             nm = "PRESENTATION"
@@ -329,39 +449,44 @@ class HandsAgent:
             print("[PY] apply_set_mode ignored:", new_mode, flush=True)
             return
 
+        # ✅ VKEY에서 다른 모드로 나가면 OSK 닫기
+        if prev_mode == "VKEY" and nm != "VKEY":
+            self._osk_close()
+
         self.control.reset_ema()
 
         if self.mode == "DRAW" and nm != "DRAW":
-            if self.draw: self.draw.reset()
+            if self.draw:
+                self.draw.reset()
 
         if nm != "MOUSE":
-            if self.mouse_click: self.mouse_click.reset()
-            if self.mouse_right: self.mouse_right.reset()
-            if self.mouse_scroll: self.mouse_scroll.reset()
+            if self.mouse_click:
+                self.mouse_click.reset()
+            if self.mouse_right:
+                self.mouse_right.reset()
+            if self.mouse_scroll:
+                self.mouse_scroll.reset()
 
         if nm in ("KEYBOARD", "PRESENTATION", "DRAW", "RUSH_HAND", "RUSH_COLOR", "VKEY"):
             self.locked = False
 
-        if self.kb: self.kb.reset()
-        if self.ppt: self.ppt.reset()
-        if self.draw: self.draw.reset()
-        if self.vkey: self.vkey.reset()
-
-        if nm == "VKEY" and self.vkey:
-            try:
-                self.vkey.on_enter()
-            except Exception as e:
-                print("[VKEY] on_enter failed:", repr(e), flush=True)
-
-            try:
-                self.vkey.open_windows_osk()
-            except Exception:
-                pass
+        if self.kb:
+            self.kb.reset()
+        if self.ppt:
+            self.ppt.reset()
+        if self.draw:
+            self.draw.reset()
 
         self.mode = nm
         print("[PY] apply_set_mode ->", self.mode, flush=True)
 
-    # ---------- capture ----------
+        # ✅ VKEY 진입 시 OSK 띄우기
+        if nm == "VKEY":
+            self._enter_vkey_mode()
+
+    # -------------------------------------------------------------------------
+    # capture
+    # -------------------------------------------------------------------------
     def _open_camera(self):
         try:
             cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
@@ -376,7 +501,9 @@ class HandsAgent:
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         return cap
 
-    # ---------- palette modal ----------
+    # -------------------------------------------------------------------------
+    # palette modal
+    # -------------------------------------------------------------------------
     def _update_palette_modal(
         self,
         t: float,
@@ -387,25 +514,36 @@ class HandsAgent:
         cursor_cx: float,
         cursor_cy: float,
     ) -> bool:
-        """
-        Returns True if palette is active (and normal mode side-effects must be blocked).
-        """
+        """Returns True if palette is active (and normal mode side-effects must be blocked)."""
         self.cursor_bubble = None
         hud = getattr(self.cfg, "hud", None)
 
         if not hud:
-            # HUD가 없으면 팔레트 기능 자체 비활성
             self.palette_active = False
             self.palette_open_start = None
             self.palette_confirm_start = None
             self.palette_cancel_start = None
             return False
 
-        # open trigger: both V_SIGN hold
-        if (not self.palette_active) and self.enabled and got_other and (cursor_gesture == "V_SIGN") and (other_gesture == "V_SIGN"):
+        # -----------------------
+        # open trigger (inactive -> active)
+        # -----------------------
+        if (
+            (not self.palette_active)
+            and self.enabled
+            and got_other
+            and (cursor_gesture == "V_SIGN")
+            and (other_gesture == "V_SIGN")
+        ):
             if self.palette_open_start is None:
                 self.palette_open_start = t
+
             if (t - self.palette_open_start) >= PALETTE_OPEN_HOLD:
+                # ✅ 팔레트 열리는 "순간"에만 OSK 상태 저장 + 닫기
+                self.palette_prev_osk_open = bool(self.osk_open)
+                if self.palette_prev_osk_open:
+                    self._osk_close()
+
                 self.palette_active = True
                 self.palette_open_start = None
                 self.palette_confirm_start = None
@@ -417,7 +555,6 @@ class HandsAgent:
                 else:
                     hud.show_menu()
 
-                # 혹시 다운/드래그 남아있으면 제거
                 self._reset_side_effects()
         else:
             self.palette_open_start = None
@@ -449,6 +586,11 @@ class HandsAgent:
                 self.palette_confirm_start = None
                 self.palette_cancel_start = None
                 self._reset_side_effects()
+
+                # ✅ 팔레트 닫힌 뒤 복구: 결과가 VKEY이고, 열기 전 OSK가 켜져있었으면 다시 켜기
+                if str(self.mode).upper() == "VKEY" and self.palette_prev_osk_open:
+                    self._osk_open()
+                self.palette_prev_osk_open = False
         else:
             self.palette_confirm_start = None
 
@@ -462,16 +604,27 @@ class HandsAgent:
                 self.palette_confirm_start = None
                 self.palette_cancel_start = None
                 self._reset_side_effects()
+
+                # ✅ 취소도 복구: 현재 모드가 VKEY이고, 열기 전 OSK가 켜져있었으면 다시 켜기
+                if str(self.mode).upper() == "VKEY" and self.palette_prev_osk_open:
+                    self._osk_open()
+                self.palette_prev_osk_open = False
         else:
             self.palette_cancel_start = None
 
         return bool(self.palette_active)
 
-    # ---------- main loop ----------
+    # -------------------------------------------------------------------------
+    # main loop
+    # -------------------------------------------------------------------------
     def run(self):
         print("[PY] running:", os.path.abspath(__file__), flush=True)
-        print("[PY] WS_URL:", getattr(self.cfg, "ws_url", ""),
-              "(disabled)" if getattr(self.cfg, "no_ws", False) else "", flush=True)
+        print(
+            "[PY] WS_URL:",
+            getattr(self.cfg, "ws_url", ""),
+            "(disabled)" if getattr(self.cfg, "no_ws", False) else "",
+            flush=True,
+        )
 
         cap = self._open_camera()
         self.ws.start()
@@ -567,7 +720,7 @@ class HandsAgent:
             mode_u = str(self.mode).upper()
 
             # ============================================================
-            # (A안) Palette modal state 업데이트 (최우선)
+            # Palette modal (최우선)
             # ============================================================
             block_by_palette = self._update_palette_modal(
                 t=t,
@@ -591,11 +744,37 @@ class HandsAgent:
                     send_event=lambda name, payload: self.send_event(name, payload),
                 )
 
+            # ✅ VKEY에서 OSK 토글 사인: 주먹(FIST) 0.8초 홀드
+            if (not block_by_palette) and mode_u == "VKEY" and self.enabled:
+                if cursor_gesture == "FIST":
+                    if self.osk_toggle_hold_start is None:
+                        self.osk_toggle_hold_start = t
+                    if (t - self.osk_toggle_hold_start) >= OSK_TOGGLE_HOLD_SEC and t >= (
+                        self.last_osk_toggle_ts + OSK_TOGGLE_COOLDOWN_SEC
+                    ):
+                        self._osk_toggle()
+                        self.last_osk_toggle_ts = t
+                        self.osk_toggle_hold_start = None
+                        self.cursor_bubble = "OSK 토글!"
+                else:
+                    self.osk_toggle_hold_start = None
+            else:
+                self.osk_toggle_hold_start = None
+
             # NEXT_MODE when locked: both OPEN_PALM hold (팔레트 중엔 막기)
-            if (not block_by_palette) and self.enabled and self.locked and got_other and (cursor_gesture == "OPEN_PALM") and (other_gesture == "OPEN_PALM"):
+            if (
+                (not block_by_palette)
+                and self.enabled
+                and self.locked
+                and got_other
+                and (cursor_gesture == "OPEN_PALM")
+                and (other_gesture == "OPEN_PALM")
+            ):
                 if self.mode_hold_start is None:
                     self.mode_hold_start = t
-                if (t - self.mode_hold_start) >= MODE_HOLD_SEC and t >= (self.last_mode_event_ts + MODE_COOLDOWN_SEC):
+                if (t - self.mode_hold_start) >= MODE_HOLD_SEC and t >= (
+                    self.last_mode_event_ts + MODE_COOLDOWN_SEC
+                ):
                     self.send_event("NEXT_MODE", None)
                     self.last_mode_event_ts = t
                     self.mode_hold_start = None
@@ -631,12 +810,20 @@ class HandsAgent:
 
             # injection permissions
             no_inject = bool(getattr(self.cfg, "no_inject", False))
-            can_mouse_inject = self.enabled and (mode_u == "MOUSE") and (t >= self.reacquire_until) and (not self.locked) and (not no_inject)
-            can_draw_inject  = self.enabled and (mode_u == "DRAW") and (t >= self.reacquire_until) and (not self.locked) and (not no_inject)
-            can_kb_inject    = self.enabled and (mode_u == "KEYBOARD") and (t >= self.reacquire_until) and (not self.locked) and (not no_inject)
-            can_ppt_inject   = self.enabled and (mode_u == "PRESENTATION") and (t >= self.reacquire_until) and (not self.locked) and (not no_inject)
-            can_vkey_detect  = self.enabled and (mode_u == "VKEY")
-            can_vkey_click   = can_vkey_detect
+            can_mouse_inject = (
+                self.enabled and (mode_u == "MOUSE") and (t >= self.reacquire_until) and (not self.locked) and (not no_inject)
+            )
+            can_draw_inject = (
+                self.enabled and (mode_u == "DRAW") and (t >= self.reacquire_until) and (not self.locked) and (not no_inject)
+            )
+            can_kb_inject = (
+                self.enabled and (mode_u == "KEYBOARD") and (t >= self.reacquire_until) and (not self.locked) and (not no_inject)
+            )
+            can_ppt_inject = (
+                self.enabled and (mode_u == "PRESENTATION") and (t >= self.reacquire_until) and (not self.locked) and (not no_inject)
+            )
+            can_vkey_detect = self.enabled and (mode_u == "VKEY")
+            can_vkey_click = can_vkey_detect
 
             # RUSH disables OS inject
             if mode_u.startswith("RUSH"):
@@ -647,13 +834,15 @@ class HandsAgent:
                 can_vkey_detect = False
                 can_vkey_click = False
 
-            # VKEY uses only vkey
+            # VKEY: OSK는 띄우기만, 입력은 OS 커서 이동+클릭으로 처리
             if mode_u == "VKEY":
                 self.locked = False
-                can_mouse_inject = False
+                can_mouse_inject = self.enabled and (t >= self.reacquire_until) and (not no_inject)
                 can_draw_inject = False
                 can_kb_inject = False
                 can_ppt_inject = False
+                can_vkey_detect = True
+                can_vkey_click = True
 
             # Palette active면 기존 동작 모두 차단
             if block_by_palette:
@@ -668,7 +857,7 @@ class HandsAgent:
             can_pointer_inject = (can_mouse_inject or can_draw_inject or can_ppt_inject)
             if (not block_by_palette) and can_pointer_inject and got_cursor:
                 do_move = False
-                if mode_u == "MOUSE":
+                if mode_u in ("MOUSE", "VKEY"):
                     dragging = bool(getattr(self.mouse_click, "dragging", False)) if self.mouse_click else False
                     do_move = (cursor_gesture == mouse_move_g) or (dragging and cursor_gesture == mouse_click_g)
                 elif mode_u == "DRAW":
@@ -683,7 +872,7 @@ class HandsAgent:
                     self.control.move_cursor(ex, ey, t)
 
             # mouse actions
-            if mode_u == "MOUSE":
+            if mode_u in ("MOUSE", "VKEY"):
                 if self.mouse_click:
                     self.mouse_click.update(
                         t,
@@ -691,7 +880,7 @@ class HandsAgent:
                         can_mouse_inject and (not block_by_palette),
                         click_gesture=mouse_click_g,
                     )
-                if self.mouse_right:
+                if mode_u == "MOUSE" and self.mouse_right:
                     self.mouse_right.update(
                         t,
                         cursor_gesture,
@@ -708,7 +897,9 @@ class HandsAgent:
             if mode_u == "DRAW" and self.draw:
                 if not block_by_palette:
                     self.draw.update_draw(t, cursor_gesture, can_draw_inject)
-                    self.draw.update_selection_shortcuts(t, cursor_gesture, other_gesture, got_other, can_draw_inject)
+                    self.draw.update_selection_shortcuts(
+                        t, cursor_gesture, other_gesture, got_other, can_draw_inject
+                    )
                 else:
                     self.draw.reset()
             else:
@@ -718,16 +909,30 @@ class HandsAgent:
             # presentation
             if mode_u == "PRESENTATION" and self.ppt:
                 if not block_by_palette:
-                    self.ppt.update(t, can_ppt_inject, got_cursor, cursor_gesture, got_other, other_gesture, bindings=ppt_bindings)
+                    self.ppt.update(
+                        t,
+                        can_ppt_inject,
+                        got_cursor,
+                        cursor_gesture,
+                        got_other,
+                        other_gesture,
+                        bindings=ppt_bindings,
+                    )
                 else:
                     self.ppt.reset()
             else:
                 if self.ppt:
                     self.ppt.reset()
 
-            # scroll (mouse only)
+            # scroll (MOUSE only) ✅ VKEY에서 스크롤 제스처가 OSK 클릭을 방해할 수 있어서 차단
             scroll_active = False
-            if (not block_by_palette) and can_mouse_inject and got_other and self.mouse_scroll:
+            if (
+                (mode_u == "MOUSE")
+                and (not block_by_palette)
+                and can_mouse_inject
+                and got_other
+                and self.mouse_scroll
+            ):
                 sa = (other_gesture == mouse_scroll_hold_g)
                 self.mouse_scroll.update(t, sa, other_cy, True)
                 scroll_active = sa
@@ -737,17 +942,18 @@ class HandsAgent:
 
             # keyboard
             if (not block_by_palette) and self.kb:
-                self.kb.update(t, can_kb_inject, got_cursor, cursor_gesture, got_other, other_gesture, bindings=kb_bindings)
+                self.kb.update(
+                    t,
+                    can_kb_inject,
+                    got_cursor,
+                    cursor_gesture,
+                    got_other,
+                    other_gesture,
+                    bindings=kb_bindings,
+                )
             else:
                 if self.kb:
                     self.kb.reset()
-
-            # vkey
-            if mode_u == "VKEY" and (not block_by_palette) and self.enabled and self.vkey:
-                self.vkey.update(t, can_vkey_click, cursor_lm, cursor_gesture)
-            elif mode_u == "VKEY" and (not self.enabled):
-                if self.vkey:
-                    self.vkey.reset()
 
             # send status
             self._send_status(
@@ -779,13 +985,32 @@ class HandsAgent:
                 lp = _pack_xy(rush_left)
                 rp = _pack_xy(rush_right)
 
-                line1 = f"mode={mode_u} enabled={self.enabled} locked={self.locked} cur={cursor_gesture} oth={other_gesture} palette={self.palette_active}"
+                line1 = (
+                    f"mode={mode_u} enabled={self.enabled} locked={self.locked} "
+                    f"cur={cursor_gesture} oth={other_gesture} palette={self.palette_active}"
+                )
                 cv2.putText(frame, line1, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
 
                 if lp is not None:
-                    cv2.putText(frame, f"RUSH L: ({lp[0]:.2f},{lp[1]:.2f})", (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 0), 2)
+                    cv2.putText(
+                        frame,
+                        f"RUSH L: ({lp[0]:.2f},{lp[1]:.2f})",
+                        (10, 100),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.55,
+                        (255, 255, 0),
+                        2,
+                    )
                 if rp is not None:
-                    cv2.putText(frame, f"RUSH R: ({rp[0]:.2f},{rp[1]:.2f})", (10, 125), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 0, 255), 2)
+                    cv2.putText(
+                        frame,
+                        f"RUSH R: ({rp[0]:.2f},{rp[1]:.2f})",
+                        (10, 125),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.55,
+                        (255, 0, 255),
+                        2,
+                    )
 
                 cv2.imshow("GestureOS Agent", frame)
 
@@ -796,6 +1021,9 @@ class HandsAgent:
         cap.release()
         cv2.destroyAllWindows()
 
+    # -------------------------------------------------------------------------
+    # status
+    # -------------------------------------------------------------------------
     def _send_status(
         self,
         fps: float,
@@ -826,38 +1054,31 @@ class HandsAgent:
             "mode": mode_u,
             "locked": bool(self.locked),
             "preview": bool(self.preview),
-
             "gesture": str(cursor_gesture),
             "fps": float(fps),
-
             "canMove": bool(can_mouse and (cursor_gesture in ("OPEN_PALM", "PINCH_INDEX"))),
-            "canClick": bool((can_mouse and (cursor_gesture in ("PINCH_INDEX", "V_SIGN"))) or (self.enabled and mode_u == "VKEY")),
+            "canClick": bool(
+                (can_mouse and (cursor_gesture in ("PINCH_INDEX", "V_SIGN")))
+                or (mode_u == "VKEY" and self.enabled and cursor_gesture == "PINCH_INDEX")
+            ),
             "scrollActive": bool(scroll_active),
             "canKey": bool(can_key),
-
             "otherGesture": str(other_gesture),
-
             "cursorLandmarks": _lm_to_payload(cursor_lm),
             "otherLandmarks": _lm_to_payload(other_lm),
-
-            "tapSeq": int(getattr(self.vkey, "tap_seq", 0)) if self.vkey else 0,
             "connected": bool(self.ws.connected),
         }
 
-        # ✅ HUD bubble override (menu text)
         if getattr(self, "cursor_bubble", None):
             payload["cursorBubble"] = str(self.cursor_bubble)
 
-        # rush input type
         if mode_u.startswith("RUSH"):
             payload["rushInput"] = "COLOR" if mode_u == "RUSH_COLOR" else "HAND"
 
-        # pointer
         payload["pointerX"] = None
         payload["pointerY"] = None
         payload["isTracking"] = False
 
-        # left/right packs
         if lp is not None:
             payload["leftPointerX"], payload["leftPointerY"] = lp
             payload["leftTracking"] = True
@@ -870,7 +1091,6 @@ class HandsAgent:
         else:
             payload["rightTracking"] = False
 
-        # pointer 결정(단 한 번)
         if mode_u.startswith("RUSH"):
             if rp is not None:
                 payload["pointerX"], payload["pointerY"] = rp
