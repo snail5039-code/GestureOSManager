@@ -32,7 +32,7 @@ export default function App() {
     localStorage.setItem("osHudOn", osHudOn ? "1" : "0");
     fetch(`/api/hud/show?enabled=${osHudOn ? "true" : "false"}`, {
       method: "POST",
-    }).catch(() => {});
+    }).catch(() => { });
   }, [osHudOn]);
 
   const toggleHud = () => setHudOn((x) => !x);
@@ -44,16 +44,74 @@ export default function App() {
   // Dashboard에서 올라오는 HUD 표시용 데이터
   const [hudFeed, setHudFeed] = useState(null);
 
+  // Dashboard의 액션(함수들)을 ref에 저장
+  const hudActionsRef = useRef({});
+
+  // ✅ 페어링 모달 & 데이터
   const [pairOpen, setPairOpen] = useState(false);
   const [pairing, setPairing] = useState(() => ({
     pc: "",
     httpPort: 8081,
-    udpPort: 5005,
+    udpPort: 39500,
     name: "PC",
   }));
 
-  // Dashboard의 액션(함수들)을 ref에 저장
-  const hudActionsRef = useRef({});
+  // ✅ 서버에서 pairing 정보 최신화
+  const refreshPairing = () => {
+    let cancelled = false;
+
+    fetch("/api/pairing")
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((data) => {
+        if (cancelled || !data) return;
+        setPairing((prev) => ({ ...prev, ...data }));
+      })
+      .catch(() => { });
+
+    return () => {
+      cancelled = true;
+    };
+  };
+
+  // ✅ Name 저장(POST) → 저장 후 즉시 refresh
+  const savePairingName = async (nextName) => {
+    const name = String(nextName || "").trim() || "PC";
+
+    try {
+      await fetch("/api/pairing", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+    } catch {
+      // noop
+    }
+
+    refreshPairing();
+  };
+
+  const savePairingPc = async (nextPc) => {
+    const pc = String(nextPc || "").trim();
+    if (!pc) return;
+
+    try {
+      await fetch("/api/pairing", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pc }),
+      });
+    } catch {
+      // noop
+    }
+
+    refreshPairing();
+  };
+
+  // 앱 시작 시 1회 로딩
+  useEffect(() => {
+    const cleanup = refreshPairing();
+    return cleanup;
+  }, []);
 
   // ✅ 테마 state (유효성 체크 + 저장)
   const [theme, _setTheme] = useState(() => {
@@ -70,55 +128,27 @@ export default function App() {
     _setTheme(v);
   };
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/pairing")
-      .then((r) => (r.ok ? r.json() : Promise.reject()))
-      .then((data) => {
-        if (cancelled || !data) return;
-        setPairing((prev) => ({ ...prev, ...data }));
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   // ✅ DaisyUI + html attribute 적용 + localStorage 저장
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem("theme", theme);
 
-    if (theme === "dark") {
-      document.body.style.cursor = "crosshair";
-    } else {
-      document.body.style.cursor = "auto";
-    }
+    // 기존 로직 유지(조금 중복이지만 그대로 둠)
+    if (theme === "dark") document.body.style.cursor = "crosshair";
+    else document.body.style.cursor = "auto";
 
-    if (theme === "light") {
-      document.body.style.cursor = "crosshair";
-    } else {
-      document.body.style.cursor = "auto";
-    }
+    if (theme === "light") document.body.style.cursor = "crosshair";
+    else document.body.style.cursor = "auto";
 
-    if (theme === "neon") {
-      document.body.style.cursor = "crosshair";
-    } else {
-      document.body.style.cursor = "auto";
-    }
-    
-    if (theme === "rose") {
-      document.body.style.cursor = "crosshair";
-    } else {
-      document.body.style.cursor = "auto";
-    }
+    if (theme === "neon") document.body.style.cursor = "crosshair";
+    else document.body.style.cursor = "auto";
 
-    if (theme === "devil") {
-      document.body.style.cursor = "crosshair";
-    } else {
-      document.body.style.cursor = "auto";
-    }
-  
+    if (theme === "rose") document.body.style.cursor = "crosshair";
+    else document.body.style.cursor = "auto";
+
+    if (theme === "devil") document.body.style.cursor = "crosshair";
+    else document.body.style.cursor = "auto";
+
     console.log("data-theme =", theme);
   }, [theme]);
 
@@ -128,7 +158,7 @@ export default function App() {
       connected: !!hudFeed?.connected,
       locked: !!hudFeed?.locked,
       mode: hudFeed?.mode ?? "DEFAULT",
-      modeText: hudFeed?.modeText ?? undefined, // TitleBar에서 modeText 우선 사용
+      modeText: hudFeed?.modeText ?? undefined,
     };
   }, [hudFeed]);
 
@@ -143,8 +173,11 @@ export default function App() {
         onChangeScreen={setScreen}
         theme={theme}
         setTheme={setTheme}
-        agentStatus={agentStatus} // ✅ 추가
-        onOpenPairing={() => setPairOpen(true)}
+        agentStatus={agentStatus}
+        onOpenPairing={() => {
+          refreshPairing();
+          setPairOpen(true);
+        }}
       />
 
       <main
@@ -176,7 +209,7 @@ export default function App() {
         {/* Settings */}
         {screen === "settings" && <Settings theme={theme} />}
 
-        {/* ✅ Training Lab (추가된 부분) */}
+        {/* Training Lab */}
         {screen === "train" && <TrainingLab theme={theme} />}
       </main>
 
@@ -204,6 +237,8 @@ export default function App() {
         open={pairOpen}
         onClose={() => setPairOpen(false)}
         pairing={pairing}
+        onSaveName={savePairingName}
+        onSavePc={savePairingPc}
       />
     </div>
   );

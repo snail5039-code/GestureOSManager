@@ -1,11 +1,28 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { QRCodeCanvas } from "qrcode.react";
 
 function cn(...xs) {
   return xs.filter(Boolean).join(" ");
 }
 
-export default function PairingQrModal({ open, onClose, pairing }) {
+export default function PairingQrModal({
+  open,
+  onClose,
+  pairing,
+  onSaveName,
+  onSavePc,
+}) {
+  const [nameDraft, setNameDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  // pairing.name이 바뀌면 입력칸도 동기화
+  useEffect(() => {
+    setNameDraft(String(pairing?.name || ""));
+  }, [pairing?.name]);
+
+  // candidates 안전 추출
+  const candidates = Array.isArray(pairing?.candidates) ? pairing.candidates : [];
+
   const payload = useMemo(() => {
     const pc = String(pairing?.pc || "").trim();
     const httpPort = Number(pairing?.httpPort || 0);
@@ -38,7 +55,6 @@ export default function PairingQrModal({ open, onClose, pairing }) {
     >
       <div
         className={cn(
-          // ✅ 폭 조금 키우고, 화면 안에서 스크롤 가능하게
           "w-full max-w-[680px] max-h-[85vh] overflow-auto",
           "rounded-3xl ring-1 p-6",
           "bg-base-200 text-base-content border border-base-300/60",
@@ -79,12 +95,55 @@ export default function PairingQrModal({ open, onClose, pairing }) {
             <div className="rounded-2xl ring-1 bg-base-100/25 ring-base-300/50 p-5">
               <div className="text-xs opacity-70">연결 정보</div>
 
-              {/* ✅ 잘림 방지: grid로 라벨/값 정렬 + break-all */}
               <div className="mt-3 grid grid-cols-[72px_1fr] gap-y-2 text-sm">
                 <div className="opacity-70">PC</div>
-                <div className="text-right font-semibold break-all min-w-0">
+                <div
+                  className="text-right font-semibold truncate min-w-0"
+                  title={pairing?.pc || ""}
+                >
                   {pairing?.pc || "-"}
                 </div>
+
+                {/* ✅ IP 후보 */}
+                {candidates.length > 0 && (
+                  <>
+                    <div className="opacity-70 text-[12px]">IP 후보</div>
+                    <div className="flex justify-end">
+                      <div className="flex flex-wrap gap-2 justify-end">
+                        {candidates.map((ip) => {
+                          const active = String(ip) === String(pairing?.pc);
+                          return (
+                            <button
+                              key={ip}
+                              type="button"
+                              disabled={!onSavePc || saving}
+                              onClick={async () => {
+                                if (!onSavePc) return;
+                                setSaving(true);
+                                try {
+                                  await onSavePc(ip);
+                                } finally {
+                                  setSaving(false);
+                                }
+                              }}
+                              className={cn(
+                                "px-3 py-1.5 rounded-xl text-[11px] font-semibold ring-1",
+                                "transition-all duration-150 whitespace-nowrap",
+                                active
+                                  ? "bg-emerald-500/15 ring-emerald-400/30"
+                                  : "bg-base-100/25 ring-base-300/50 hover:bg-base-100/45",
+                                (!onSavePc || saving) && "opacity-60 cursor-not-allowed"
+                              )}
+                              title="클릭하면 PC IP로 저장"
+                            >
+                              {ip}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </>
+                )}
 
                 <div className="opacity-70">HTTP</div>
                 <div className="text-right font-semibold">
@@ -96,14 +155,50 @@ export default function PairingQrModal({ open, onClose, pairing }) {
                   {pairing?.udpPort ?? "-"}
                 </div>
 
+                {/* ✅ Name: 입력 */}
                 <div className="opacity-70">Name</div>
-                <div className="text-right font-semibold break-all min-w-0">
-                  {pairing?.name ?? "-"}
+                <div className="min-w-0 flex justify-end">
+                  <input
+                    value={nameDraft}
+                    onChange={(e) => setNameDraft(e.target.value)}
+                    className={cn(
+                      "w-[220px] max-w-full text-right",
+                      "px-3 py-2 rounded-xl ring-1",
+                      "bg-base-100/25 ring-base-300/50",
+                      "text-sm font-semibold outline-none",
+                      "focus:ring-base-300/80 focus:bg-base-100/35"
+                    )}
+                    placeholder="PC"
+                  />
                 </div>
               </div>
 
               {/* Buttons */}
               <div className="mt-5 flex flex-wrap gap-2">
+                {/* ✅ 이름 저장 */}
+                <button
+                  type="button"
+                  disabled={!onSaveName || saving}
+                  onClick={async () => {
+                    if (!onSaveName) return;
+                    setSaving(true);
+                    try {
+                      await onSaveName(nameDraft);
+                    } finally {
+                      setSaving(false);
+                    }
+                  }}
+                  className={cn(
+                    "px-4 py-2 rounded-2xl text-xs font-semibold ring-1",
+                    "transition-all duration-150 whitespace-nowrap",
+                    (!onSaveName || saving)
+                      ? "opacity-50 cursor-not-allowed bg-base-100/20 ring-base-300/40"
+                      : "bg-base-100/35 ring-base-300/60 hover:bg-base-100/60 hover:-translate-y-[1px] hover:shadow-sm"
+                  )}
+                >
+                  {saving ? "저장 중..." : "이름 저장"}
+                </button>
+
                 <button
                   type="button"
                   onClick={copy}
@@ -131,7 +226,7 @@ export default function PairingQrModal({ open, onClose, pairing }) {
                 </button>
               </div>
 
-              {/* ✅ 문자열은 “박스 안 + 스크롤”로 (잘림 방지) */}
+              {/* URI box */}
               <div className="mt-4">
                 <div className="text-[11px] opacity-60 mb-1">페어링 URI</div>
                 <div
@@ -156,7 +251,6 @@ export default function PairingQrModal({ open, onClose, pairing }) {
             <div className="rounded-2xl ring-1 bg-base-100/25 ring-base-300/50 p-5 flex items-center justify-center">
               {canShow ? (
                 <div className="bg-white rounded-2xl p-4 ring-1 ring-black/10 shadow-sm">
-                  {/* ✅ 살짝 더 크게, 그런데 오른쪽 박스 안에 딱 맞게 */}
                   <QRCodeCanvas value={payload} size={248} includeMargin />
                 </div>
               ) : (
