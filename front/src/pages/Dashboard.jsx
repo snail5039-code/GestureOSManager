@@ -5,7 +5,7 @@ import { THEME } from "../theme/themeTokens";
 
 const POLL_MS = 500;
 
-const MODE_OPTIONS = ["MOUSE", "KEYBOARD", "PRESENTATION", "DRAW", "VKEY", "DEFAULT"];
+const MODE_OPTIONS = ["MOUSE", "KEYBOARD", "PRESENTATION", "DRAW", "VKEY"];
 
 const MODE_LABEL = {
   MOUSE: "마우스",
