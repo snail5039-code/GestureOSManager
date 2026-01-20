@@ -208,6 +208,16 @@ export default function TrainingLab({ theme = "dark" }) {
     } catch (_) {}
   }, [datasetVersion]);
 
+  // ✅ Premium toast auto-dismiss
+  useEffect(() => {
+    if (!info && !error) return;
+    const t = setTimeout(() => {
+      setInfo("");
+      setError("");
+    }, 2200);
+    return () => clearTimeout(t);
+  }, [info, error]);
+
   const abortRef = useRef(null);
   const pollTimerRef = useRef(null);
   const unmountedRef = useRef(false);
@@ -265,7 +275,7 @@ export default function TrainingLab({ theme = "dark" }) {
     return out;
   }, [datasetVersion]);
 
-  // ✅ 여기 핵심: Training 페이지는 /train/stats를 폴링해야 learner/profile 정보가 안정적으로 옴
+  // ✅ Training 페이지는 /train/stats를 폴링해야 learner/profile 정보가 안정적으로 옴
   const fetchStatus = useCallback(async () => {
     if (abortRef.current) abortRef.current.abort();
     const controller = new AbortController();
@@ -425,7 +435,7 @@ export default function TrainingLab({ theme = "dark" }) {
           hz: 15,
         },
       });
-      setInfo(data?.ok ? "서버 캡처 시작됨 ✅" : "서버 캡처 실패 ❌");
+      setInfo(data?.ok ? "Server capture started" : "Server capture failed");
     } catch (e) {
       const msg = e?.response
         ? `서버 캡처 실패 (HTTP ${e.response.status})`
@@ -442,7 +452,7 @@ export default function TrainingLab({ theme = "dark" }) {
     setServerBusy(true);
     try {
       const { data } = await api.post("/train/train");
-      setInfo(data?.ok ? "서버 Train 완료 ✅" : "서버 Train 실패 ❌");
+      setInfo(data?.ok ? "Training completed" : "Training failed");
     } catch (e) {
       const msg = e?.response
         ? `서버 Train 실패 (HTTP ${e.response.status})`
@@ -462,7 +472,7 @@ export default function TrainingLab({ theme = "dark" }) {
       const { data } = await api.post("/train/enable", null, {
         params: { enabled: next },
       });
-      setInfo(data?.ok ? `learner ${next ? "ON" : "OFF"} ✅` : "enable 실패 ❌");
+      setInfo(data?.ok ? (next ? "Learner enabled" : "Learner disabled") : "Enable failed");
     } catch (e) {
       const msg = e?.response
         ? `enable 실패 (HTTP ${e.response.status})`
@@ -479,7 +489,7 @@ export default function TrainingLab({ theme = "dark" }) {
     setServerBusy(true);
     try {
       const { data } = await api.post("/train/reset");
-      setInfo(data?.ok ? "서버 learner reset ✅" : "reset 실패 ❌");
+      setInfo(data?.ok ? "Reset done" : "Reset failed");
     } catch (e) {
       const msg = e?.response
         ? `reset 실패 (HTTP ${e.response.status})`
@@ -496,7 +506,7 @@ export default function TrainingLab({ theme = "dark" }) {
     setServerBusy(true);
     try {
       const { data } = await api.post("/train/rollback");
-      setInfo(data?.ok ? "롤백 완료 ✅ (이전 상태 복구)" : "롤백 실패 ❌");
+      setInfo(data?.ok ? "Rollback done" : "Rollback failed");
     } catch (e) {
       const msg = e?.response
         ? `롤백 실패 (HTTP ${e.response.status})`
@@ -518,9 +528,11 @@ export default function TrainingLab({ theme = "dark" }) {
       const { data } = await api.post("/train/profile/set", null, {
         params: { name },
       });
-      setInfo(data?.ok ? `profile -> ${name} ✅` : "profile set 실패 ❌");
+      setInfo(data?.ok ? `Profile: ${name}` : "Profile set failed");
     } catch (e) {
-      setError(e?.response ? `profile set 실패 (HTTP ${e.response.status})` : e?.message || "profile set 실패");
+      setError(
+        e?.response ? `profile set 실패 (HTTP ${e.response.status})` : e?.message || "profile set 실패"
+      );
     } finally {
       setServerBusy(false);
     }
@@ -536,7 +548,7 @@ export default function TrainingLab({ theme = "dark" }) {
       const { data } = await api.post("/train/profile/create", null, {
         params: { name, copy: true },
       });
-      setInfo(data?.ok ? `profile created -> ${name} ✅` : "create 실패 ❌");
+      setInfo(data?.ok ? `Profile created: ${name}` : "Create failed");
       setNewProfile("");
     } catch (e) {
       setError(e?.response ? `create 실패 (HTTP ${e.response.status})` : e?.message || "create 실패");
@@ -554,7 +566,7 @@ export default function TrainingLab({ theme = "dark" }) {
       const { data } = await api.post("/train/profile/delete", null, {
         params: { name: learnProfile },
       });
-      setInfo(data?.ok ? `deleted -> ${learnProfile} ✅` : "delete 실패 ❌");
+      setInfo(data?.ok ? `Profile deleted: ${learnProfile}` : "Delete failed");
     } catch (e) {
       setError(e?.response ? `delete 실패 (HTTP ${e.response.status})` : e?.message || "delete 실패");
     } finally {
@@ -572,7 +584,7 @@ export default function TrainingLab({ theme = "dark" }) {
       const { data } = await api.post("/train/profile/rename", null, {
         params: { from: learnProfile, to },
       });
-      setInfo(data?.ok ? `renamed: ${learnProfile} -> ${to} ✅` : "rename 실패 ❌");
+      setInfo(data?.ok ? `Renamed: ${learnProfile} → ${to}` : "Rename failed");
       setRenameTo("");
     } catch (e) {
       setError(e?.response ? `rename 실패 (HTTP ${e.response.status})` : e?.message || "rename 실패");
@@ -601,7 +613,64 @@ export default function TrainingLab({ theme = "dark" }) {
   }, [learnLastTrainTs]);
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-6 space-y-6 relative">
+      {/* ✅ Premium Toast (replaces ugly banner) */}
+      <div className="toast toast-top toast-end z-50">
+        {info ? (
+          <div className="flex items-start gap-3 rounded-2xl px-4 py-3 shadow-xl backdrop-blur-md bg-base-100/80 ring-1 ring-emerald-400/20">
+            <svg className="h-5 w-5 mt-0.5 shrink-0 text-emerald-400" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M20 6L9 17l-5-5"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            <div className="text-sm leading-snug min-w-[220px]">
+              <div className="font-semibold text-emerald-400">Done</div>
+              <div className="opacity-80">{info}</div>
+            </div>
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs rounded-xl"
+              onClick={() => setInfo("")}
+              aria-label="close"
+              title="close"
+            >
+              ✕
+            </button>
+          </div>
+        ) : null}
+
+        {error ? (
+          <div className="flex items-start gap-3 rounded-2xl px-4 py-3 shadow-xl backdrop-blur-md bg-base-100/80 ring-1 ring-rose-400/20">
+            <svg className="h-5 w-5 mt-0.5 shrink-0 text-rose-400" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M12 9v4m0 4h.01M10.29 3.86l-7.2 12.47A2 2 0 004.82 19h14.36a2 2 0 001.73-2.67l-7.2-12.47a2 2 0 00-3.46 0z"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            <div className="text-sm leading-snug min-w-[220px]">
+              <div className="font-semibold text-rose-400">Error</div>
+              <div className="opacity-80">{error}</div>
+            </div>
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs rounded-xl"
+              onClick={() => setError("")}
+              aria-label="close"
+              title="close"
+            >
+              ✕
+            </button>
+          </div>
+        ) : null}
+      </div>
+
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div>
           <div className="text-2xl font-bold">Training Lab</div>
@@ -662,18 +731,6 @@ export default function TrainingLab({ theme = "dark" }) {
                 <div className="text-xs opacity-70 mt-1">gesture: {derived.otherGesture}</div>
               </div>
             </div>
-
-            {info ? (
-              <div className="mt-3 alert alert-success rounded-xl">
-                <span className="text-sm">{info}</span>
-              </div>
-            ) : null}
-
-            {error ? (
-              <div className="mt-3 alert alert-error rounded-xl">
-                <span className="text-sm">{error}</span>
-              </div>
-            ) : null}
           </div>
         </div>
 
