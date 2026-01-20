@@ -32,7 +32,6 @@ public class AgentCommand {
         .build();
   }
 
-  // ✅ 중복 방지: setMode 라는 이름을 쓰지 않음
   public static AgentCommand ofMode(ModeType mode) {
     return AgentCommand.builder()
         .type(CommandType.SET_MODE)
@@ -46,11 +45,16 @@ public class AgentCommand {
         .settings(settings)
         .build();
   }
-  
+
   public static AgentCommand preview(boolean enabled) {
-	  return AgentCommand.builder()
-	      .type(CommandType.SET_PREVIEW)
-	      .enabled(enabled)
-	      .build();
+    return AgentCommand.builder()
+        .type(CommandType.SET_PREVIEW)
+        .enabled(enabled)
+        .build();
+  }
+
+  // ✅ 프론트 “잠금” 토글용
+	public static AgentCommand lock(boolean enabled) {
+		return AgentCommand.builder().type(CommandType.SET_LOCK).enabled(enabled).build();
 	}
 }

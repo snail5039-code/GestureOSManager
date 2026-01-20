@@ -162,7 +162,11 @@ class HandsAgent:
     """
 
     def __init__(self, cfg: AgentConfig):
+        self._request_close_preview = False
         self.cfg = cfg
+
+        # ✅ UI 잠금(프론트 토글) : enabled는 유지하되 제스처 inject만 막는다
+        self.ui_locked = False
 
         if _MODE_IMPORT_ERRS:
             print("[MODE_IMPORT_ERRS]", _MODE_IMPORT_ERRS, flush=True)
@@ -179,7 +183,7 @@ class HandsAgent:
         elif getattr(cfg, "start_vkey", False):
             self.mode = "VKEY"
 
-        # lock policy
+        # lock policy (gesture lock)
         self.locked = True
         if self.enabled:
             self.locked = False
@@ -362,11 +366,22 @@ class HandsAgent:
     def _on_command(self, data: dict):
         typ = data.get("type")
 
-        if typ in ("SET_MODE", "ENABLE", "DISABLE", "SET_PREVIEW", "UPDATE_SETTINGS"):
+        if typ in (
+            "SET_MODE",
+            "ENABLE",
+            "DISABLE",
+            "SET_PREVIEW",
+            "UPDATE_SETTINGS",
+            "SET_LOCK",
+            "SET_LOCKED",
+            "LOCK",
+            "UNLOCK",
+        ):
             print("[PY] cmd:", data, flush=True)
 
         if typ == "ENABLE":
             self.enabled = True
+            # ✅ enabled는 켜되, UI 잠금은 유지 (프론트 토글 기준)
             self.locked = False
 
         elif typ == "DISABLE":
@@ -375,12 +390,54 @@ class HandsAgent:
             # ✅ Stop 누르면 OSK도 끄기
             self._osk_close()
 
+        elif typ == "SET_LOCK" or typ == "SET_LOCKED":
+            # payload 예: {"type":"SET_LOCK","enabled":true} or {"locked":true}
+            v = data.get("enabled", data.get("locked", True))
+            self.ui_locked = bool(v)
+
+            # ✅ 잠그는 순간 드래그/키다운/스크롤 같은 사이드이펙트 즉시 해제 + 팔레트 닫기
+            if self.ui_locked:
+                self._reset_side_effects()
+                hud = getattr(self.cfg, "hud", None)
+                if hud and self.palette_active:
+                    try:
+                        hud.hide_menu()
+                    except Exception:
+                        pass
+                self.palette_active = False
+                self.palette_open_start = None
+                self.palette_confirm_start = None
+                self.palette_cancel_start = None
+
+        elif typ == "LOCK":
+            self.ui_locked = True
+            self._reset_side_effects()
+            hud = getattr(self.cfg, "hud", None)
+            if hud and self.palette_active:
+                try:
+                    hud.hide_menu()
+                except Exception:
+                    pass
+            self.palette_active = False
+            self.palette_open_start = None
+            self.palette_confirm_start = None
+            self.palette_cancel_start = None
+
+        elif typ == "UNLOCK":
+            self.ui_locked = False
+
         elif typ == "SET_MODE":
             new_mode = str(data.get("mode", "MOUSE")).upper()
             self.apply_set_mode(new_mode)
 
         elif typ == "SET_PREVIEW":
-            self.preview = bool(data.get("enabled", True))
+            enabled = bool(data.get("enabled", True))
+            self.preview = enabled
+            print(f"[PY] preview set -> {enabled} (window_open={self.window_open})", flush=True)
+
+            # 프리뷰 OFF면 창을 즉시 닫기 (창이 "안 없어지는" 문제 해결)
+            if not enabled:
+                self._request_close_preview = True
 
         elif typ == "UPDATE_SETTINGS":
             incoming = data.get("settings") or {}
@@ -467,7 +524,7 @@ class HandsAgent:
             if self.mouse_scroll:
                 self.mouse_scroll.reset()
 
-        if nm in ("KEYBOARD", "PRESENTATION", "DRAW", "RUSH_HAND", "RUSH_COLOR", "VKEY"):
+        if nm in ("PRESENTATION", "DRAW", "RUSH_HAND", "RUSH_COLOR", "VKEY"):
             self.locked = False
 
         if self.kb:
@@ -719,21 +776,39 @@ class HandsAgent:
 
             mode_u = str(self.mode).upper()
 
-            # ============================================================
-            # Palette modal (최우선)
-            # ============================================================
-            block_by_palette = self._update_palette_modal(
-                t=t,
-                got_cursor=got_cursor,
-                got_other=got_other,
-                cursor_gesture=cursor_gesture,
-                other_gesture=other_gesture,
-                cursor_cx=cursor_cx,
-                cursor_cy=cursor_cy,
-            )
+            # ✅ UI 잠금(프론트 토글) + gesture lock 을 합친 "실제 잠김" 상태
+            effective_locked = bool(self.ui_locked) or bool(self.locked)
 
-            # UI menu (HUD)
-            if (not block_by_palette) and self.ui_menu:
+            # ============================================================
+            # Palette modal (최우선)  (단, UI 잠금 중이면 제스처로 열지 못하게)
+            # ============================================================
+            block_by_palette = False
+            if not self.ui_locked:
+                block_by_palette = self._update_palette_modal(
+                    t=t,
+                    got_cursor=got_cursor,
+                    got_other=got_other,
+                    cursor_gesture=cursor_gesture,
+                    other_gesture=other_gesture,
+                    cursor_cx=cursor_cx,
+                    cursor_cy=cursor_cy,
+                )
+            else:
+                # UI 잠김이면 팔레트가 열려있던 것도 강제 비활성(안전)
+                if self.palette_active:
+                    hud = getattr(self.cfg, "hud", None)
+                    if hud:
+                        try:
+                            hud.hide_menu()
+                        except Exception:
+                            pass
+                self.palette_active = False
+                self.palette_open_start = None
+                self.palette_confirm_start = None
+                self.palette_cancel_start = None
+
+            # UI menu (HUD) (UI 잠금 중이면 제스처 처리 막기)
+            if (not block_by_palette) and (not self.ui_locked) and self.ui_menu:
                 _ = self.ui_menu.update(
                     t=t,
                     enabled=self.enabled,
@@ -744,8 +819,8 @@ class HandsAgent:
                     send_event=lambda name, payload: self.send_event(name, payload),
                 )
 
-            # ✅ VKEY에서 OSK 토글 사인: 주먹(FIST) 0.8초 홀드
-            if (not block_by_palette) and mode_u == "VKEY" and self.enabled:
+            # ✅ VKEY에서 OSK 토글 사인: 주먹(FIST) 0.8초 홀드 (UI 잠금 중이면 막기)
+            if (not block_by_palette) and (not self.ui_locked) and mode_u == "VKEY" and self.enabled:
                 if cursor_gesture == "FIST":
                     if self.osk_toggle_hold_start is None:
                         self.osk_toggle_hold_start = t
@@ -761,9 +836,10 @@ class HandsAgent:
             else:
                 self.osk_toggle_hold_start = None
 
-            # NEXT_MODE when locked: both OPEN_PALM hold (팔레트 중엔 막기)
+            # NEXT_MODE when locked: both OPEN_PALM hold (팔레트 중엔 막기, UI 잠금 중엔 막기)
             if (
                 (not block_by_palette)
+                and (not self.ui_locked)
                 and self.enabled
                 and self.locked
                 and got_other
@@ -791,8 +867,8 @@ class HandsAgent:
             kb_bindings = ((self.settings.get("bindings") or {}).get("KEYBOARD") or {})
             ppt_bindings = ((self.settings.get("bindings") or {}).get("PRESENTATION") or {})
 
-            # LOCK only in MOUSE (팔레트 중엔 막기)
-            if (not block_by_palette) and mode_u == "MOUSE" and self.mouse_lock:
+            # LOCK only in MOUSE (팔레트 중엔 막기, UI 잠금 중엔 막기)
+            if (not block_by_palette) and (not self.ui_locked) and mode_u == "MOUSE" and self.mouse_lock:
                 self.locked = self.mouse_lock.update(
                     t=t,
                     cursor_gesture=cursor_gesture,
@@ -811,16 +887,32 @@ class HandsAgent:
             # injection permissions
             no_inject = bool(getattr(self.cfg, "no_inject", False))
             can_mouse_inject = (
-                self.enabled and (mode_u == "MOUSE") and (t >= self.reacquire_until) and (not self.locked) and (not no_inject)
+                self.enabled
+                and (mode_u == "MOUSE")
+                and (t >= self.reacquire_until)
+                and (not effective_locked)
+                and (not no_inject)
             )
             can_draw_inject = (
-                self.enabled and (mode_u == "DRAW") and (t >= self.reacquire_until) and (not self.locked) and (not no_inject)
+                self.enabled
+                and (mode_u == "DRAW")
+                and (t >= self.reacquire_until)
+                and (not effective_locked)
+                and (not no_inject)
             )
             can_kb_inject = (
-                self.enabled and (mode_u == "KEYBOARD") and (t >= self.reacquire_until) and (not self.locked) and (not no_inject)
+                self.enabled
+                and (mode_u == "KEYBOARD")
+                and (t >= self.reacquire_until)
+                and (not effective_locked)
+                and (not no_inject)
             )
             can_ppt_inject = (
-                self.enabled and (mode_u == "PRESENTATION") and (t >= self.reacquire_until) and (not self.locked) and (not no_inject)
+                self.enabled
+                and (mode_u == "PRESENTATION")
+                and (t >= self.reacquire_until)
+                and (not effective_locked)
+                and (not no_inject)
             )
             can_vkey_detect = self.enabled and (mode_u == "VKEY")
             can_vkey_click = can_vkey_detect
@@ -836,8 +928,10 @@ class HandsAgent:
 
             # VKEY: OSK는 띄우기만, 입력은 OS 커서 이동+클릭으로 처리
             if mode_u == "VKEY":
+                # 기존 정책 유지: gesture lock은 무의미하게 풀어둠
                 self.locked = False
-                can_mouse_inject = self.enabled and (t >= self.reacquire_until) and (not no_inject)
+                # ✅ 하지만 UI 잠금이면 제스처 주입은 막아야 함
+                can_mouse_inject = self.enabled and (t >= self.reacquire_until) and (not no_inject) and (not self.ui_locked)
                 can_draw_inject = False
                 can_kb_inject = False
                 can_ppt_inject = False
@@ -850,6 +944,18 @@ class HandsAgent:
                 can_draw_inject = False
                 can_kb_inject = False
                 can_ppt_inject = False
+                can_vkey_detect = False
+                can_vkey_click = False
+
+            # UI 잠금이면 최종적으로 전부 차단(팔레트보다 바깥 안전망)
+            if self.ui_locked:
+                can_mouse_inject = False
+                can_draw_inject = False
+                can_kb_inject = False
+                can_ppt_inject = False
+                # detect는 유지해도 되지만, 클릭/이동은 막아야 하니까 아래에서 move/click이 다 막힘
+                # (STATUS에서 tracking 표시는 계속 가능)
+                # can_vkey_detect/can_vkey_click은 여기서 끄면 OSK 관련도 완전 정지됨
                 can_vkey_detect = False
                 can_vkey_click = False
 
@@ -973,7 +1079,7 @@ class HandsAgent:
             )
 
             # preview
-            if bool(getattr(self.cfg, "headless", False)):
+            if bool(getattr(self.cfg, "headless", False)) and (not self.preview):
                 time.sleep(0.001)
                 continue
 
@@ -986,7 +1092,7 @@ class HandsAgent:
                 rp = _pack_xy(rush_right)
 
                 line1 = (
-                    f"mode={mode_u} enabled={self.enabled} locked={self.locked} "
+                    f"mode={mode_u} enabled={self.enabled} locked={self.locked} ui_locked={self.ui_locked} "
                     f"cur={cursor_gesture} oth={other_gesture} palette={self.palette_active}"
                 )
                 cv2.putText(frame, line1, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
@@ -1018,6 +1124,19 @@ class HandsAgent:
                 if key == 27:
                     break
 
+            else:
+                # OFF: 요청이 있거나 창이 열려있으면 닫기
+                if self._request_close_preview or self.window_open:
+                    try:
+                        cv2.destroyWindow("GestureOS Agent")
+                    except Exception:
+                        try:
+                            cv2.destroyAllWindows()
+                        except Exception:
+                            pass
+                    self.window_open = False
+                    self._request_close_preview = False
+
         cap.release()
         cv2.destroyAllWindows()
 
@@ -1048,11 +1167,16 @@ class HandsAgent:
         lp = _pack_xy(rush_left)
         rp = _pack_xy(rush_right)
 
+        # ✅ 프론트 표시용: 실제 잠김은 ui_locked OR gesture lock
+        effective_locked = bool(self.ui_locked) or bool(self.locked)
+
         payload = {
             "type": "STATUS",
             "enabled": bool(self.enabled),
             "mode": mode_u,
-            "locked": bool(self.locked),
+            "locked": bool(effective_locked),
+            "uiLocked": bool(self.ui_locked),
+            "gestureLocked": bool(self.locked),
             "preview": bool(self.preview),
             "gesture": str(cursor_gesture),
             "fps": float(fps),
