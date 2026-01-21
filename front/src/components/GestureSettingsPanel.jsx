@@ -1,5 +1,6 @@
 import axios from "axios";
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { THEME } from "../theme/themeTokens";
 
 const api = axios.create({
@@ -129,18 +130,94 @@ function setIn(obj, path, value) {
   return root;
 }
 
+function Dialog({ open, title, children, actions, onClose }) {
+  if (!open) return null;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[100000] flex items-center justify-center p-4">
+      <div
+        className="absolute inset-0 bg-black/45 backdrop-blur-sm"
+        onMouseDown={onClose}
+      />
+      <div
+        className={cn(
+          "relative w-full max-w-lg",
+          "rounded-xl ring-1 border border-base-300/60",
+          "bg-base-200/92 text-base-content shadow-2xl",
+          "backdrop-blur-md"
+        )}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="px-5 py-4 border-b border-base-300/45">
+          <div className="text-sm font-semibold whitespace-nowrap">{title}</div>
+        </div>
+
+        <div className="px-5 py-4 text-sm">{children}</div>
+
+        <div className="px-5 pb-4 flex items-center justify-end gap-2">
+          {actions}
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function SegBtn({ active, children, onClick, disabled }) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        "px-3 py-2 text-xs font-semibold transition",
+        "rounded-md ring-1",
+        active
+          ? "bg-base-100/30 ring-base-300/70"
+          : "bg-transparent ring-base-300/45 hover:bg-base-100/15"
+      )}
+    >
+      <span className="whitespace-nowrap">{children}</span>
+    </button>
+  );
+}
+
+function ActionRow({ label, help, value, onChange, disabled }) {
+  return (
+    <div className="rounded-lg bg-base-100/10 ring-1 ring-base-300/45 px-4 py-3">
+      <div className="grid grid-cols-[1fr_auto] items-center gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold whitespace-nowrap">{label}</div>
+          <div className="text-[11px] opacity-70 truncate">{help}</div>
+        </div>
+
+        <select
+          className="select select-sm select-bordered w-[170px]"
+          value={value}
+          onChange={onChange}
+          disabled={disabled}
+        >
+          {GESTURES.map((gg) => (
+            <option key={gg} value={gg}>
+              {gg}
+            </option>
+          ))}
+        </select>
+      </div>
+    </div>
+  );
+}
+
 export default function GestureSettingsPanel({ theme, embedded = false, onRequestClose }) {
   const t = THEME[theme] || THEME.dark;
 
   const [mode, setMode] = useState("MOUSE");
   const [settings, setSettings] = useState({ version: 1, bindings: {} });
-  const bindings = settings?.bindings || {};
+  const bindings = settings && settings.bindings ? settings.bindings : {};
 
   const [busy, setBusy] = useState(false);
   const [conflict, setConflict] = useState(null);
-
-  // ✅ 저장/리셋 결과 모달
-  const [result, setResult] = useState(null); // { tone:'ok'|'warn'|'error', title, text }
+  const [result, setResult] = useState(null);
 
   const activeConf = MODE_CONFIG[mode];
 
@@ -166,12 +243,12 @@ export default function GestureSettingsPanel({ theme, embedded = false, onReques
     try {
       const body = { version: settings.version || 1, bindings: settings.bindings || {} };
       const { data } = await api.post("/settings", body);
-      if (data?.settings) setSettings(data.settings);
+      if (data && data.settings) setSettings(data.settings);
 
       setResult({
-        tone: data?.pushed ? "ok" : "warn",
+        tone: data && data.pushed ? "ok" : "warn",
         title: "저장 완료",
-        text: data?.pushed
+        text: data && data.pushed
           ? "저장한 설정이 에이전트에 적용됐어요."
           : "저장은 됐지만 에이전트 적용이 실패했어요. (연결 상태 확인)",
       });
@@ -186,12 +263,12 @@ export default function GestureSettingsPanel({ theme, embedded = false, onReques
     setBusy(true);
     try {
       const { data } = await api.post("/settings/reset");
-      if (data?.settings) setSettings(data.settings);
+      if (data && data.settings) setSettings(data.settings);
 
       setResult({
-        tone: data?.pushed ? "ok" : "warn",
+        tone: data && data.pushed ? "ok" : "warn",
         title: "리셋 완료",
-        text: data?.pushed
+        text: data && data.pushed
           ? "기본값으로 리셋하고 에이전트에 적용했어요."
           : "리셋은 됐지만 에이전트 적용이 실패했어요. (연결 상태 확인)",
       });
@@ -222,7 +299,7 @@ export default function GestureSettingsPanel({ theme, embedded = false, onReques
     if (prev === next) return;
 
     const map = groupGestureIndex.get(groupKey);
-    const conflictKey = next !== "NONE" ? map?.get(next) : null;
+    const conflictKey = next !== "NONE" ? (map ? map.get(next) : null) : null;
     if (conflictKey && conflictKey !== fullKey) {
       setConflict({ groupKey, path, prev, next, conflictKey });
       return;
@@ -230,7 +307,7 @@ export default function GestureSettingsPanel({ theme, embedded = false, onReques
 
     setSettings((s) => ({
       ...s,
-      bindings: setIn(s.bindings || {}, path, next),
+      bindings: setIn((s && s.bindings) || {}, path, next),
     }));
   };
 
@@ -241,14 +318,14 @@ export default function GestureSettingsPanel({ theme, embedded = false, onReques
 
     if (action === "swap") {
       setSettings((s) => {
-        let b = s.bindings || {};
+        let b = (s && s.bindings) || {};
         b = setIn(b, path, next);
         b = setIn(b, conflictPath, prev);
         return { ...s, bindings: b };
       });
     } else if (action === "replace") {
       setSettings((s) => {
-        let b = s.bindings || {};
+        let b = (s && s.bindings) || {};
         b = setIn(b, conflictPath, "NONE");
         b = setIn(b, path, next);
         return { ...s, bindings: b };
@@ -258,168 +335,145 @@ export default function GestureSettingsPanel({ theme, embedded = false, onReques
     setConflict(null);
   };
 
-  // embedded일 때: 본문 스크롤 + 하단 고정 버튼
-  const rootCls = embedded ? "p-3 h-[80vh] max-h-[80vh] flex flex-col" : "p-5 max-w-5xl mx-auto";
-  const bodyScrollCls = embedded ? "flex-1 overflow-auto pr-1" : "";
+  // ✅ embedded: 헤더/바디/푸터를 정확히 분리 (바디만 스크롤)
+  const rootCls = embedded
+    ? "h-full max-h-full flex flex-col"
+    : "p-5 max-w-5xl mx-auto";
+
+  const headerCls = embedded ? "px-4 pt-4" : "";
+  const bodyCls = embedded ? "flex-1 min-h-0 overflow-auto px-4 pb-4" : "mt-4";
+  const footerCls = embedded
+    ? "px-4 py-3 border-t border-base-300/45 bg-base-200/80 backdrop-blur-md"
+    : "mt-4";
 
   return (
     <div className={rootCls}>
       {/* Header */}
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className={cn(embedded ? "text-lg" : "text-xl", "font-semibold")}>모션(제스처) 세팅</div>
-          <div className={cn("text-sm opacity-70", embedded && "text-[12px]")}>
-            액션별로 제스처를 바꿀 수 있어요
+      <div className={cn(embedded ? headerCls : "")}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className={cn("font-semibold", embedded ? "text-base" : "text-xl")}>
+              모션(제스처) 세팅
+            </div>
+            <div className={cn("opacity-70", embedded ? "text-[12px]" : "text-sm")}>
+              액션별로 제스처를 바꿀 수 있어요
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              className={cn("btn btn-sm btn-ghost")}
+              onClick={reset}
+              disabled={busy}
+              title="기본값으로 리셋"
+            >
+              리셋
+            </button>
+
+            {embedded && (
+              <button
+                className={cn("btn btn-sm btn-ghost")}
+                onClick={() => onRequestClose && onRequestClose()}
+                title="닫기"
+                disabled={busy}
+              >
+                ✕
+              </button>
+            )}
           </div>
         </div>
 
-        {/* ✅ 오른쪽 상단: 리셋 + 닫기 */}
-        <div className="flex items-center gap-2">
-          <button className={cn("btn btn-sm btn-ghost")} onClick={reset} disabled={busy} title="기본값으로 리셋">
-            리셋
-          </button>
-
-          {embedded && (
-            <button
-              className={cn("btn btn-sm btn-ghost")}
-              onClick={() => onRequestClose?.()}
-              title="닫기 (ESC)"
-              disabled={busy}
-            >
-              ✕
-            </button>
-          )}
+        {/* Mode segmented */}
+        <div className="mt-3 inline-flex items-center gap-2 rounded-lg ring-1 ring-base-300/45 bg-base-100/10 p-1">
+          {Object.keys(MODE_CONFIG).map((m) => (
+            <SegBtn key={m} active={mode === m} onClick={() => setMode(m)} disabled={busy}>
+              {MODE_CONFIG[m].label}
+            </SegBtn>
+          ))}
         </div>
-      </div>
-
-      {/* Mode tabs */}
-      <div className="mt-4 flex items-center gap-2 flex-wrap">
-        {Object.keys(MODE_CONFIG).map((m) => (
-          <button
-            key={m}
-            className={cn("btn btn-sm", mode === m ? "btn-secondary" : "btn-ghost")}
-            onClick={() => setMode(m)}
-            disabled={busy}
-          >
-            {MODE_CONFIG[m].label}
-          </button>
-        ))}
       </div>
 
       {/* Body */}
-      <div className={cn("mt-4 grid gap-4", bodyScrollCls)}>
-        {activeConf?.notes?.length ? (
-          <div className="alert">
-            <div>
-              <div className="font-semibold">참고</div>
-              <ul className={cn("list-disc pl-5 text-sm opacity-80", embedded && "text-[12px]")}>
-                {activeConf.notes.map((x, i) => (
-                  <li key={i}>{x}</li>
-                ))}
-              </ul>
-            </div>
+      <div className={cn(bodyCls, embedded ? "mt-4" : "")}>
+        {activeConf && activeConf.notes && activeConf.notes.length ? (
+          <div className="rounded-xl ring-1 ring-base-300/45 bg-base-100/10 p-4 mb-4">
+            <div className="text-sm font-semibold">참고</div>
+            <ul className="list-disc pl-5 mt-2 text-[12px] opacity-80 space-y-1">
+              {activeConf.notes.map((x, i) => (
+                <li key={i}>{x}</li>
+              ))}
+            </ul>
           </div>
         ) : null}
 
-        {activeConf.groups.map((g) => (
-          <div
-            key={g.key}
-            className="rounded-2xl border border-base-300 bg-base-200/40 p-4"
-            style={{ boxShadow: t.glowShadowLite }}
-          >
-            <div>
-              <div className="font-semibold">{g.label}</div>
-              <div className={cn("text-sm opacity-70", embedded && "text-[12px]")}>{g.desc}</div>
+        <div className="grid gap-4">
+          {activeConf.groups.map((g) => (
+            <div
+              key={g.key}
+              className="rounded-xl border border-base-300/50 bg-base-200/35 p-4"
+              style={{ boxShadow: t.glowShadowLite }}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold whitespace-nowrap">{g.label}</div>
+                  <div className="text-[12px] opacity-70 truncate">{g.desc}</div>
+                </div>
+              </div>
+
+              <div className="mt-3 grid md:grid-cols-2 gap-3">
+                {g.actions.map((a) => {
+                  const v = getIn(bindings, a.path, "NONE");
+                  return (
+                    <ActionRow
+                      key={a.path.join(".")}
+                      label={a.label}
+                      help={a.help}
+                      value={v}
+                      disabled={busy}
+                      onChange={(e) => requestSet(g.key, a.path, e.target.value)}
+                    />
+                  );
+                })}
+              </div>
             </div>
+          ))}
 
-            <div className="mt-3 grid md:grid-cols-2 gap-3">
-              {g.actions.map((a) => {
-                const v = getIn(bindings, a.path, "NONE");
-                return (
-                  <div key={a.path.join(".")} className="rounded-xl bg-base-100/50 border border-base-300 p-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <div className="font-medium">{a.label}</div>
-                        <div className={cn("text-xs opacity-60", embedded && "text-[11px]")}>{a.help}</div>
-                      </div>
-
-                      <select
-                        className="select select-sm select-bordered"
-                        value={v}
-                        onChange={(e) => requestSet(g.key, a.path, e.target.value)}
-                        disabled={busy}
-                      >
-                        {GESTURES.map((gg) => (
-                          <option key={gg} value={gg}>
-                            {gg}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                );
-              })}
+          {activeConf.extras && activeConf.extras.length ? (
+            <div className="rounded-xl border border-base-300/50 bg-base-200/35 p-4">
+              <div className="text-sm font-semibold">보조 설정</div>
+              <div className="mt-3 grid md:grid-cols-2 gap-3">
+                {activeConf.extras.map((x) => {
+                  const v = getIn(bindings, x.path, "NONE");
+                  return (
+                    <ActionRow
+                      key={x.path.join(".")}
+                      label={x.label}
+                      help={x.help}
+                      value={v}
+                      disabled={busy}
+                      onChange={(e) => {
+                        setSettings((s) => ({
+                          ...s,
+                          bindings: setIn((s && s.bindings) || {}, x.path, e.target.value),
+                        }));
+                      }}
+                    />
+                  );
+                })}
+              </div>
             </div>
-          </div>
-        ))}
-
-        {activeConf.extras?.length ? (
-          <div className="rounded-2xl border border-base-300 bg-base-200/40 p-4">
-            <div className="font-semibold">보조 설정</div>
-            <div className="mt-3 grid md:grid-cols-2 gap-3">
-              {activeConf.extras.map((x) => {
-                const v = getIn(bindings, x.path, "NONE");
-                return (
-                  <div key={x.path.join(".")} className="rounded-xl bg-base-100/50 border border-base-300 p-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <div className="font-medium">{x.label}</div>
-                        <div className={cn("text-xs opacity-60", embedded && "text-[11px]")}>{x.help}</div>
-                      </div>
-                      <select
-                        className="select select-sm select-bordered"
-                        value={v}
-                        onChange={(e) => {
-                          setSettings((s) => ({
-                            ...s,
-                            bindings: setIn(s.bindings || {}, x.path, e.target.value),
-                          }));
-                        }}
-                        disabled={busy}
-                      >
-                        {GESTURES.map((gg) => (
-                          <option key={gg} value={gg}>
-                            {gg}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ) : null}
-
-        {/* embedded에서 footer가 가려지지 않게 여백 */}
-        {embedded ? <div className="h-3" /> : null}
+          ) : null}
+        </div>
       </div>
 
-      {/* ✅ Footer: 저장 버튼만 가운데 (절반 너비, 높이 줄임) */}
-      <div
-        className={cn(
-          "mt-4",
-          embedded &&
-            "border-t border-base-300/60 bg-base-200/80 backdrop-blur " +
-              "pt-3 pb-3 -mx-3 px-3"
-        )}
-      >
-        <div className="flex justify-center">
+      {/* Footer */}
+      <div className={footerCls}>
+        <div className="flex items-center justify-center">
           <button
             className={cn(
               "btn btn-primary",
-              "w-1/2 max-w-[360px] min-w-[220px]",
-              "h-10 min-h-0"
+              "h-10 min-h-0",
+              "w-full max-w-[420px]"
             )}
             onClick={save}
             disabled={busy}
@@ -430,61 +484,66 @@ export default function GestureSettingsPanel({ theme, embedded = false, onReques
         </div>
       </div>
 
-      {/* conflict modal */}
-      <input type="checkbox" className="modal-toggle" checked={!!conflict} onChange={() => setConflict(null)} />
-      <div className="modal">
-        <div className="modal-box">
-          <h3 className="font-bold text-lg">중복 할당</h3>
-          <p className="py-2 text-sm opacity-80">
-            같은 그룹 안에서 같은 제스처를 이미 쓰고 있어요.
-            <br />
-            어떻게 처리할까요?
-          </p>
-
-          {conflict && (
-            <div className="text-sm opacity-80">
-              <div>
-                <span className="font-semibold">{conflict.next}</span> 는 이미
-                <span className="font-semibold"> {conflict.conflictKey}</span> 에 할당돼 있어요.
-              </div>
-              <div className="opacity-70 mt-1">(Cancel: 변경 취소 / Swap: 서로 교체 / Replace: 기존을 NONE으로)</div>
-            </div>
-          )}
-
-          <div className="modal-action">
-            <button className="btn" onClick={() => setConflict(null)}>
+      {/* Conflict Dialog */}
+      <Dialog
+        open={!!conflict}
+        title="중복 할당"
+        onClose={() => setConflict(null)}
+        actions={
+          <>
+            <button className="btn btn-sm" onClick={() => setConflict(null)}>
               Cancel
             </button>
-            <button className="btn btn-secondary" onClick={() => resolveConflict("swap")}>
+            <button className="btn btn-sm btn-secondary" onClick={() => resolveConflict("swap")}>
               Swap
             </button>
-            <button className="btn btn-primary" onClick={() => resolveConflict("replace")}>
+            <button className="btn btn-sm btn-primary" onClick={() => resolveConflict("replace")}>
               Replace
             </button>
+          </>
+        }
+      >
+        <div className="text-[13px] opacity-85 leading-relaxed">
+          같은 그룹 안에서 같은 제스처를 이미 쓰고 있어요.
+          <div className="mt-2">
+            {conflict ? (
+              <>
+                <span className="font-semibold">{conflict.next}</span> 는 이미
+                <span className="font-semibold"> {conflict.conflictKey}</span> 에 할당돼 있어요.
+                <div className="opacity-70 mt-1 text-[12px]">
+                  Cancel: 변경 취소 / Swap: 서로 교체 / Replace: 기존을 NONE으로
+                </div>
+              </>
+            ) : null}
           </div>
         </div>
-      </div>
+      </Dialog>
 
-      {/* result modal */}
-      <input type="checkbox" className="modal-toggle" checked={!!result} onChange={() => setResult(null)} />
-      <div className="modal">
-        <div className="modal-box">
-          <h3 className="font-bold text-lg">{result?.title ?? "완료"}</h3>
-          <p className="py-3 text-sm opacity-80 whitespace-pre-line">{result?.text ?? ""}</p>
-
-          <div className="modal-action">
-            <button
-              className={cn(
-                "btn",
-                result?.tone === "ok" ? "btn-primary" : result?.tone === "warn" ? "btn-secondary" : "btn-error"
-              )}
-              onClick={() => setResult(null)}
-            >
-              확인
-            </button>
-          </div>
+      {/* Result Dialog */}
+      <Dialog
+        open={!!result}
+        title={(result && result.title) || "완료"}
+        onClose={() => setResult(null)}
+        actions={
+          <button
+            className={cn(
+              "btn btn-sm",
+              result && result.tone === "ok"
+                ? "btn-primary"
+                : result && result.tone === "warn"
+                ? "btn-secondary"
+                : "btn-error"
+            )}
+            onClick={() => setResult(null)}
+          >
+            확인
+          </button>
+        }
+      >
+        <div className="text-[13px] opacity-85 whitespace-pre-line leading-relaxed">
+          {(result && result.text) || ""}
         </div>
-      </div>
+      </Dialog>
     </div>
   );
 }

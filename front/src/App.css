@@ -1,45 +1,87 @@
 @import "tailwindcss";
-@plugin "daisyui";
+
+@plugin "daisyui" {
+  themes: dark --default, light, cupcake, bumblebee, acid, valentine;
+}
+
+/* ✅ Vite 기본 템플릿 #root 제한 제거 */
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
 
 #root {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+  max-width: none;
+  text-align: initial;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafbaa);
+/* ✅ 가장 큰 체감 포인트: 전체 폰트 크기 정상화 (20px -> 16px) */
+html { font-size: 16px; }
+
+/* ✅ DaisyUI 라운드 전역 다운: 둥글둥글 제거(전문적 톤) */
+:root{
+  --rounded-box: 0.85rem;   /* 카드/모달 */
+  --rounded-btn: 0.65rem;   /* 버튼 */
+  --rounded-badge: 0.6rem;  /* 뱃지 */
+  --tab-radius: 0.65rem;
 }
 
-@keyframes logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+/* body 스크롤은 막고 main만 스크롤 */
+body { overflow: hidden; }
+
+/* 스크롤바(선택) */
+main::-webkit-scrollbar { width: 10px; }
+main::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 999px; }
+main::-webkit-scrollbar-track { background: transparent; }
+
+main {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.12) transparent;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
-  }
+/* theme cursor (유지) */
+html[data-theme="dark"],
+html[data-theme="dark"] body,
+html[data-theme="dark"] body * {
+  cursor: url("/cursor/dark.png") 2 2, auto !important;
 }
 
-.card {
-  padding: 2em;
+html[data-theme="light"],
+html[data-theme="light"] body,
+html[data-theme="light"] body * {
+  cursor: url("/cursor/light.png") 2 2, auto !important;
 }
 
-.read-the-docs {
-  color: #888;
+html[data-theme="neon"],
+html[data-theme="neon"] body,
+html[data-theme="neon"] body * {
+  cursor: url("/cursor/neon.png") 2 2, auto !important;
 }
+
+html[data-theme="rose"],
+html[data-theme="rose"] body,
+html[data-theme="rose"] body * {
+  cursor: url("/cursor/rose.png") 2 2, auto !important;
+}
+
+html[data-theme="devil"],
+html[data-theme="devil"] body,
+html[data-theme="devil"] body * {
+  cursor: url("/cursor/devil.png") 2 2, auto !important;
+}
+
+/* Electron drag */
+.titlebar-drag { -webkit-app-region: drag; user-select: none; }
+.titlebar-drag button,
+.titlebar-drag a,
+.titlebar-drag input,
+.titlebar-drag select,
+.titlebar-drag textarea,
+.titlebar-drag [role="button"] {
+  -webkit-app-region: no-drag;
+}
+
+/* ✅ 텍스트 줄바꿈 튐 방지(자주 쓰는 곳) */
+.nowrap { white-space: nowrap; }

@@ -15,13 +15,11 @@ function cn(...xs) {
 }
 
 export default function App() {
-  // ✅ WEB HUD(AgentHud) ON/OFF 상태 (기본 ON, 저장)
   const [hudOn, setHudOn] = useState(() => {
     const v = localStorage.getItem("hudOn");
     return v === null ? true : v === "1";
   });
 
-  // ✅ OS HUD(Python Overlay) ON/OFF 상태 (기본 ON, 저장)
   const [osHudOn, setOsHudOn] = useState(() => {
     const v = localStorage.getItem("osHudOn");
     return v === null ? true : v === "1";
@@ -33,24 +31,16 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem("osHudOn", osHudOn ? "1" : "0");
-    fetch(`/api/hud/show?enabled=${osHudOn ? "true" : "false"}`, {
-      method: "POST",
-    }).catch(() => {});
+    fetch(`/api/hud/show?enabled=${osHudOn ? "true" : "false"}`, { method: "POST" }).catch(() => {});
   }, [osHudOn]);
 
   const toggleHud = () => setHudOn((x) => !x);
   const toggleOsHud = () => setOsHudOn((x) => !x);
 
-  // 화면 전환
   const [screen, setScreen] = useState("dashboard");
-
-  // Dashboard에서 올라오는 HUD 표시용 데이터
   const [hudFeed, setHudFeed] = useState(null);
-
-  // Dashboard의 액션(함수들)을 ref에 저장
   const hudActionsRef = useRef({});
 
-  // ✅ 페어링 모달 & 데이터
   const [pairOpen, setPairOpen] = useState(false);
   const [pairing, setPairing] = useState(() => ({
     pc: "",
@@ -106,7 +96,6 @@ export default function App() {
     return cleanup;
   }, []);
 
-  // ✅ 테마 state (유효성 체크 + 저장)
   const [theme, _setTheme] = useState(() => {
     const saved = localStorage.getItem("theme") || "dark";
     return VALID_THEMES.has(saved) ? saved : "dark";
@@ -125,7 +114,6 @@ export default function App() {
 
   const t = THEME[theme] || THEME.dark;
 
-  // ✅ TitleBar에 올릴 "연결/잠금/모드" 미니 상태
   const agentStatus = useMemo(() => {
     return {
       connected: !!hudFeed?.connected,
@@ -138,21 +126,14 @@ export default function App() {
   return (
     <div
       data-theme={theme}
-      className={cn(
-        // ✅ 화면 전체를 정확히 먹도록
-        "w-[100dvw] h-[100dvh] flex flex-col overflow-hidden min-w-0 min-h-0 relative",
-        // ✅ 전체 창 배경색은 여기서 통일
-        t.page
-      )}
+      className={cn("w-[100dvw] h-[100dvh] flex flex-col overflow-hidden min-w-0 min-h-0 relative", t.page)}
     >
-      {/* ✅ 배경은 App 전체에 “fixed”로 깔아야 오른쪽/아래가 안 비고 항상 채워짐 */}
       <div className="pointer-events-none fixed inset-0 z-0">
         <div className={cn("absolute -top-40 -left-40 h-[520px] w-[520px] rounded-full blur-3xl", t.glow1)} />
         <div className={cn("absolute -bottom-52 -right-48 h-[560px] w-[560px] rounded-full blur-3xl", t.glow2)} />
         <div className={cn("absolute inset-0 bg-[size:60px_60px]", t.grid)} />
       </div>
 
-      {/* TitleBar는 항상 위 */}
       <div className="relative z-30">
         <TitleBar
           hudOn={hudOn}
@@ -171,14 +152,7 @@ export default function App() {
         />
       </div>
 
-      {/* ✅ main은 투명(배경은 App fixed가 담당), 스크롤은 여기 한 곳만 */}
-      <main
-        className={cn(
-          "relative z-10 flex-1 min-h-0 min-w-0",
-          screen === "rush" ? "overflow-hidden" : "overflow-auto"
-        )}
-      >
-        {/* Dashboard */}
+      <main className={cn("relative z-10 flex-1 min-h-0 min-w-0", screen === "rush" ? "overflow-hidden" : "overflow-auto")}>
         <div className={cn(screen === "dashboard" ? "block" : "hidden", "w-full min-w-0")}>
           <Dashboard
             hudOn={hudOn}
@@ -191,19 +165,11 @@ export default function App() {
           />
         </div>
 
-        {/* Rush */}
-        {screen === "rush" && (
-          <Rush3DPage status={hudFeed?.status} connected={hudFeed?.connected ?? true} />
-        )}
-
-        {/* Settings */}
+        {screen === "rush" && <Rush3DPage status={hudFeed?.status} connected={hudFeed?.connected ?? true} />}
         {screen === "settings" && <Settings theme={theme} />}
-
-        {/* Training Lab */}
         {screen === "train" && <TrainingLab theme={theme} />}
       </main>
 
-      {/* HUD/Modal은 제일 위 레이어 */}
       <div className="relative z-40">
         {hudOn && (
           <AgentHud
@@ -211,9 +177,7 @@ export default function App() {
             connected={hudFeed?.connected ?? true}
             modeOptions={hudFeed?.modeOptions}
             onSetMode={(m) => hudActionsRef.current.applyMode?.(m)}
-            onEnableToggle={(next) =>
-              next ? hudActionsRef.current.start?.() : hudActionsRef.current.stop?.()
-            }
+            onEnableToggle={(next) => (next ? hudActionsRef.current.start?.() : hudActionsRef.current.stop?.())}
             onPreviewToggle={() => hudActionsRef.current.togglePreview?.()}
             onLockToggle={(nextLocked) => {
               if (hudActionsRef.current.setLock) return hudActionsRef.current.setLock(nextLocked);
