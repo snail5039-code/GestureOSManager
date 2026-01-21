@@ -15,6 +15,7 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 @Builder
 public class AgentCommand {
+
   private CommandType type;
   private ModeType mode;
 
@@ -24,6 +25,9 @@ public class AgentCommand {
   // ✅ training payload
   private Map<String, Object> payload;
 
+  // =========================
+  // Base commands
+  // =========================
   public static AgentCommand enable() {
     return AgentCommand.builder().type(CommandType.ENABLE).build();
   }
@@ -42,6 +46,11 @@ public class AgentCommand {
 
   public static AgentCommand preview(boolean enabled) {
     return AgentCommand.builder().type(CommandType.SET_PREVIEW).enabled(enabled).build();
+  }
+
+  // ✅ 프론트 “잠금” 토글용
+  public static AgentCommand lock(boolean enabled) {
+    return AgentCommand.builder().type(CommandType.SET_LOCK).enabled(enabled).build();
   }
 
   // =========================
@@ -70,6 +79,7 @@ public class AgentCommand {
   public static AgentCommand trainReset() {
     return AgentCommand.builder().type(CommandType.TRAIN_RESET).build();
   }
+
   // =========================
   // ✅ Profile commands
   // =========================
@@ -100,8 +110,8 @@ public class AgentCommand {
         .payload(Map.of("from", from, "to", to))
         .build();
   }
-  
+
   public static AgentCommand trainRollback() {
-	return AgentCommand.builder().type(CommandType.TRAIN_ROLLBACK).build();
+    return AgentCommand.builder().type(CommandType.TRAIN_ROLLBACK).build();
   }
 }
