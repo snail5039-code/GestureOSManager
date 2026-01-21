@@ -262,6 +262,149 @@ class ProtoLearner:
         self.profile = p
         self.load()
 
+    # ---------- profile management (create/list/delete/rename) ----------
+    def list_profiles(self) -> List[str]:
+        """Return known profiles by scanning the profile directory."""
+        try:
+            names: set[str] = set()
+            for fn in os.listdir(_BASE_DIR):
+                # model files are "<profile>.json" (backup is ".json.bak")
+                if not fn.endswith(".json"):
+                    continue
+                if fn.endswith(".json.bak"):
+                    continue
+                base = fn[:-5]
+                if base:
+                    names.add(_sanitize_profile(base))
+            # always include default + current
+            names.add("default")
+            names.add(_sanitize_profile(self.profile))
+            out = sorted(names)
+            return out if out else ["default"]
+        except Exception:
+            # last resort
+            p = _sanitize_profile(getattr(self, "profile", "default"))
+            return sorted({"default", p})
+
+    def create_profile(self, profile: str, copy_from_current: bool = True, switch: bool = True) -> str:
+        """Create a new profile.
+
+        - copy_from_current=True: copy current model file if it exists (save() first).
+        - switch=True: immediately switch learner to the new profile.
+        """
+        p = _sanitize_profile(profile)
+        if not p:
+            p = "default"
+
+        # Ensure current profile file exists if we want to copy.
+        try:
+            if copy_from_current:
+                self.save()
+        except Exception:
+            pass
+
+        dst = self._model_path(p)
+        try:
+            if copy_from_current:
+                src = self._model_path(self.profile)
+                if os.path.exists(src):
+                    shutil.copyfile(src, dst)
+                else:
+                    # create empty model if nothing to copy
+                    self._write_empty_model(dst, p)
+            else:
+                self._write_empty_model(dst, p)
+        except Exception:
+            # fallback: attempt to write empty
+            try:
+                self._write_empty_model(dst, p)
+            except Exception:
+                pass
+
+        if switch:
+            try:
+                self.set_profile(p)
+            except Exception:
+                self.profile = p
+        return p
+
+    def delete_profile(self, profile: str) -> bool:
+        p = _sanitize_profile(profile)
+        if p == "default":
+            return False
+
+        # If deleting current profile, switch away first (otherwise set_profile() would re-save it).
+        if p == _sanitize_profile(self.profile):
+            try:
+                self.set_profile("default")
+            except Exception:
+                self.profile = "default"
+
+        ok = False
+        for path in (self._model_path(p), self._bak_path(p)):
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+                    ok = True
+            except Exception:
+                pass
+        return ok
+
+    def rename_profile(self, src: str, dst: str) -> bool:
+        s = _sanitize_profile(src)
+        d = _sanitize_profile(dst)
+        if s == "default" or d == "default":
+            return False
+        if s == d:
+            return True
+
+        # If renaming current and model file doesn't exist yet, save() first.
+        try:
+            if s == _sanitize_profile(self.profile):
+                self.save()
+        except Exception:
+            pass
+
+        src_path = self._model_path(s)
+        dst_path = self._model_path(d)
+        if not os.path.exists(src_path):
+            return False
+        if os.path.exists(dst_path):
+            # avoid silent overwrite
+            return False
+
+        try:
+            shutil.move(src_path, dst_path)
+            # move backup too if exists
+            src_bak = self._bak_path(s)
+            dst_bak = self._bak_path(d)
+            if os.path.exists(src_bak) and (not os.path.exists(dst_bak)):
+                shutil.move(src_bak, dst_bak)
+        except Exception:
+            return False
+
+        if s == _sanitize_profile(self.profile):
+            self.profile = d
+            try:
+                self.load()
+            except Exception:
+                pass
+        return True
+
+    def _write_empty_model(self, path: str, profile: str):
+        """Create a minimal model file for a profile."""
+        obj = {
+            "profile": _sanitize_profile(profile),
+            "enabled": bool(self.enabled),
+            "min_samples": int(self.min_samples),
+            "min_conf": float(self.min_conf),
+            "last_train_ts": None,
+            "model": {"cursor": {}, "other": {}},
+        }
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(obj, f, ensure_ascii=False)
+
     # ---------- rollback ----------
     def rollback(self) -> bool:
         """
