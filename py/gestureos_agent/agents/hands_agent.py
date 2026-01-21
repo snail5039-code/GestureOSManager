@@ -136,6 +136,11 @@ PALETTE_MAP = {
 OSK_TOGGLE_HOLD_SEC = 0.8
 OSK_TOGGLE_COOLDOWN_SEC = 1.2
 
+# =============================================================================
+# UI LOCK toggle gesture (global)
+# =============================================================================
+UI_LOCK_HOLD_SEC = 2.0
+UI_LOCK_COOLDOWN_SEC = 1.0
 
 def _lm_to_payload(lm):
     if lm is None:
@@ -277,6 +282,10 @@ class HandsAgent:
         self.osk_open = False
         self.osk_toggle_hold_start = None
         self.last_osk_toggle_ts = 0.0
+
+        # ---- UI lock toggle state (FIST hold) ----
+        self.ui_lock_hold_start = None
+        self.last_ui_lock_toggle_ts = 0.0
 
         # 팔레트 열기 직전 OSK 상태 저장(“열려있었으면 닫고, 닫힐 때 복구”)
         self.palette_prev_osk_open = False
@@ -562,6 +571,23 @@ class HandsAgent:
             self.draw.reset()
         if self.ppt:
             self.ppt.reset()
+
+    def _apply_ui_locked_side_effects(self):
+        """ui_locked가 True로 바뀌는 순간, 드래그/키다운/팔레트 등 즉시 정리"""
+        self._reset_side_effects()
+
+        # 팔레트 닫기
+        hud = getattr(self.cfg, "hud", None)
+        if hud and self.palette_active:
+            try:
+                hud.hide_menu()
+            except Exception:
+                pass
+
+        self.palette_active = False
+        self.palette_open_start = None
+        self.palette_confirm_start = None
+        self.palette_cancel_start = None
 
     def apply_settings(self, incoming: dict):
         try:
@@ -970,6 +996,57 @@ class HandsAgent:
             effective_locked = bool(self.ui_locked) or bool(self.locked)
 
             # ============================================================
+            # UI 잠금 토글 (FIST 2초 홀드) : ui_locked 상태에서도 해제 가능해야 함
+            # - VKEY의 OSK 토글(FIST 0.8초)과 충돌 방지 위해 우선순위 높게 처리
+            # ============================================================  
+            block_osk_toggle_by_ui_lock = False
+
+            if self.enabled and got_cursor and (cursor_gesture == "FIST"):
+                block_osk_toggle_by_ui_lock = True  # FIST 잡고있는 동안은 OSK 토글 막기
+
+                if self.ui_lock_hold_start is None:
+                    self.ui_lock_hold_start = t
+
+                if (t - self.ui_lock_hold_start) >= UI_LOCK_HOLD_SEC and t >= (
+                    self.last_ui_lock_toggle_ts + UI_LOCK_COOLDOWN_SEC
+                ):
+                    self.ui_locked = (not self.ui_locked)
+                    self.last_ui_lock_toggle_ts = t
+                    self.ui_lock_hold_start = None
+
+                    if self.ui_locked:
+                        # 잠그는 순간: 드래그/키다운/팔레트 등 즉시 정리
+                        if hasattr(self, "_apply_ui_locked_side_effects"):
+                            self._apply_ui_locked_side_effects()
+                        else:
+                            # 헬퍼 안 만들었으면 최소한 이것들
+                            self._reset_side_effects()
+                            hud = getattr(self.cfg, "hud", None)
+                            if hud and self.palette_active:
+                                try:
+                                    hud.hide_menu()
+                                except Exception:
+                                    pass
+                            self.palette_active = False
+                            self.palette_open_start = None
+                            self.palette_confirm_start = None
+                            self.palette_cancel_start = None
+
+                        self.cursor_bubble = "UI 잠금!"
+                    else:
+                        self.cursor_bubble = "UI 해제!"
+
+                    # (선택) 서버/프론트가 이벤트를 듣고 있으면 같이 쏴주기
+                    try:
+                        self.send_event("UI_LOCK", {"locked": bool(self.ui_locked)})
+                    except Exception:
+                        pass
+
+            else:
+                self.ui_lock_hold_start = None
+
+
+            # ============================================================
             # Palette modal (최우선)  (단, UI 잠금 중이면 제스처로 열지 못하게)
             # ============================================================
             block_by_palette = False
@@ -1010,7 +1087,7 @@ class HandsAgent:
                 )
 
             # ✅ VKEY에서 OSK 토글 사인: 주먹(FIST) 0.8초 홀드 (UI 잠금 중이면 막기)
-            if (not block_by_palette) and (not self.ui_locked) and mode_u == "VKEY" and self.enabled:
+            if (not block_by_palette) and (not self.ui_locked) and (not block_osk_toggle_by_ui_lock) and mode_u == "VKEY" and self.enabled:
                 if cursor_gesture == "FIST":
                     if self.osk_toggle_hold_start is None:
                         self.osk_toggle_hold_start = t
