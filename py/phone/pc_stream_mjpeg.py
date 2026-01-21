@@ -8,12 +8,14 @@ app = Flask(__name__)
 
 FPS = 20
 JPEG_QUALITY = 70
-MONITOR_INDEX = 1   # 1=첫 모니터, 2=두번째...
+
+# ✅ 스트리밍할 모니터 (1=첫 모니터, 2=두번째...)
+MONITOR_INDEX = 1
 
 def gen():
     frame_dt = 1.0 / FPS
     with mss.mss() as sct:
-        mon = sct.monitors[MONITOR_INDEX]
+        mon = sct.monitors[MONITOR_INDEX]  # {"left","top","width","height",...}
         next_t = time.time()
         while True:
             now = time.time()
@@ -21,7 +23,7 @@ def gen():
                 time.sleep(next_t - now)
             next_t = time.time() + frame_dt
 
-            img = np.array(sct.grab(mon))          # BGRA
+            img = np.array(sct.grab(mon))  # BGRA
             frame = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
 
             ok, jpg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
@@ -39,5 +41,5 @@ def mjpeg():
     return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
 if __name__ == "__main__":
-    # Windows 방화벽에서 8080 허용 필요할 수 있음
+    # 방화벽: TCP 8081 허용 필요할 수 있음
     app.run(host="0.0.0.0", port=8081, threaded=True)

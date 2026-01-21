@@ -5,7 +5,7 @@ import { THEME } from "../theme/themeTokens";
 
 const POLL_MS = 500;
 
-const MODE_OPTIONS = ["MOUSE", "PRESENTATION", "DRAW", "VKEY"];
+const MODE_OPTIONS = ["MOUSE", "KEYBOARD", "PRESENTATION", "DRAW", "VKEY"];
 
 const MODE_LABEL = {
   MOUSE: "마우스",
@@ -13,7 +13,6 @@ const MODE_LABEL = {
   PRESENTATION: "프레젠테이션",
   DRAW: "그리기",
   VKEY: "가상키보드",
-  DEFAULT: "기본",
 };
 
 const api = axios.create({
@@ -525,18 +524,12 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
   const isBright = theme === "light" || theme === "rose";
 
   return (
-    <div className={cn("min-h-screen relative", t.page)}>
-      {/* background */}
-      <div className="pointer-events-none absolute inset-0">
-        <div className={cn("absolute -top-40 -left-40 h-[520px] w-[520px] rounded-full blur-3xl", t.glow1)} />
-        <div className={cn("absolute -bottom-52 -right-48 h-[560px] w-[560px] rounded-full blur-3xl", t.glow2)} />
-        <div className={cn("absolute inset-0 bg-[size:60px_60px]", t.grid)} />
-      </div>
+    <div className={cn("w-full h-full min-h-0 relative", t.page)}>
 
       {/* ✅ 기존 sticky Topbar(조잡한 상태바) 삭제됨 */}
 
       {/* Content */}
-      <div className="relative mx-auto max-w-[1200px] px-6 py-6 space-y-5">
+      <div className="relative w-full max-w-none px-6 py-6 space-y-5">
         {error ? (
           <div
             className={cn(
