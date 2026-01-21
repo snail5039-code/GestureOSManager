@@ -25,83 +25,108 @@ import com.example.gestureOSManager.websocket.AgentSessionRegistry;
 @CrossOrigin(origins = "http://localhost:5173")
 public class ControlController {
 
-  private final ControlService controlService;
-  private final AgentSessionRegistry registry;
-  private final StatusService statusService;
+	private final ControlService controlService;
+	private final AgentSessionRegistry registry;
+	private final StatusService statusService;
 
-  public ControlController(ControlService controlService, AgentSessionRegistry registry, StatusService statusService) {
-    this.controlService = controlService;
-    this.registry = registry;
-    this.statusService = statusService;
-  }
+	public ControlController(ControlService controlService, AgentSessionRegistry registry,
+			StatusService statusService) {
+		this.controlService = controlService;
+		this.registry = registry;
+		this.statusService = statusService;
+	}
 
-  @GetMapping("/status")
-  public AgentStatus status() {
-    AgentStatus out = statusService.getSnapshot();
-    out.setConnected(registry.isConnected());
+	@GetMapping("/status")
+	public AgentStatus status() {
+		AgentStatus out = statusService.getSnapshot();
 
-    // MOUSE 모드에서만 pointerX/Y를 OS 커서로 덮어쓰기
-    // RUSH 모드에서는 left/right 포인터가 핵심이므로 절대 overwrite 금지
-    if (out.getMode() == ModeType.MOUSE) {
-      try {
-        Point p = MouseInfo.getPointerInfo().getLocation();
-        Dimension d = Toolkit.getDefaultToolkit().getScreenSize();
-        out.setPointerX(p.getX() / d.getWidth());
-        out.setPointerY(p.getY() / d.getHeight());
-        out.setTracking(Boolean.TRUE);
-      } catch (Exception ignore) {
-        // headless 등 예외 무시
-      }
-    }
+		// ✅ (중요) 서버 시작 직후 snapshot이 null이면 500 터짐 방지
+		if (out == null)
+			out = new AgentStatus();
 
-    return out;
-  }
+		out.setConnected(registry.isConnected());
 
-  @PostMapping("/start")
-  public ResponseEntity<?> start() {
-    boolean ok = controlService.start();
-    if (ok) {
-      AgentStatus curr = statusService.getSnapshot();
-      statusService.update(curr.toBuilder().enabled(true).build());
-    }
-    return ResponseEntity.ok(Map.of("ok", ok));
-  }
+		// MOUSE 모드에서만 pointerX/Y를 OS 커서로 덮어쓰기
+		// RUSH 모드에서는 left/right 포인터가 핵심이므로 절대 overwrite 금지
+		if (out.getMode() == ModeType.MOUSE) {
+			try {
+				Point p = MouseInfo.getPointerInfo().getLocation();
+				Dimension d = Toolkit.getDefaultToolkit().getScreenSize();
+				out.setPointerX(p.getX() / d.getWidth());
+				out.setPointerY(p.getY() / d.getHeight());
+				out.setTracking(Boolean.TRUE);
+			} catch (Exception ignore) {
+				// headless 등 예외 무시
+			}
+		}
 
-  @PostMapping("/stop")
-  public ResponseEntity<?> stop() {
-    boolean ok = controlService.stop();
-    if (ok) {
-      AgentStatus curr = statusService.getSnapshot();
-      statusService.update(curr.toBuilder().enabled(false).build());
-    }
-    return ResponseEntity.ok(Map.of("ok", ok));
-  }
+		return out;
+	}
 
-  @PostMapping("/mode")
-  public ResponseEntity<?> mode(@RequestParam(name = "mode") String mode) {
-    ModeType m;
-    try {
-      m = ModeType.valueOf(mode.trim().toUpperCase());
-    } catch (Exception e) {
-      return ResponseEntity.badRequest().body(Map.of("ok", false, "error", "Unknown mode: " + mode));
-    }
+	@PostMapping("/start")
+	public ResponseEntity<?> start() {
+		boolean ok = controlService.start();
+		if (ok) {
+			AgentStatus curr = statusService.getSnapshot();
+			if (curr != null)
+				statusService.update(curr.toBuilder().enabled(true).build());
+		}
+		return ResponseEntity.ok(Map.of("ok", ok));
+	}
 
-    boolean ok = controlService.setMode(m);
-    if (ok) {
-      AgentStatus curr = statusService.getSnapshot();
-      statusService.update(curr.toBuilder().mode(m).build());
-    }
-    return ResponseEntity.ok(Map.of("ok", ok, "mode", m.name()));
-  }
+	@PostMapping("/stop")
+	public ResponseEntity<?> stop() {
+		boolean ok = controlService.stop();
+		if (ok) {
+			AgentStatus curr = statusService.getSnapshot();
+			if (curr != null)
+				statusService.update(curr.toBuilder().enabled(false).build());
+		}
+		return ResponseEntity.ok(Map.of("ok", ok));
+	}
 
-  @PostMapping("/preview")
-  public ResponseEntity<?> preview(@RequestParam(name="enabled") boolean enabled) {
-	  System.out.println("[SPRING] /preview enabled=" + enabled);
-    boolean ok = controlService.setPreview(enabled);
-    if (ok) {
-      AgentStatus curr = statusService.getSnapshot();
-      statusService.update(curr.toBuilder().preview(enabled).build());
-    }
-    return ResponseEntity.ok(Map.of("ok", ok, "enabled", enabled));
-  }
+	@PostMapping("/mode")
+	public ResponseEntity<?> mode(@RequestParam(name = "mode") String mode) {
+		ModeType m;
+		try {
+			m = ModeType.valueOf(mode.trim().toUpperCase());
+		} catch (Exception e) {
+			return ResponseEntity.badRequest().body(Map.of("ok", false, "error", "Unknown mode: " + mode));
+		}
+
+		boolean ok = controlService.setMode(m);
+		if (ok) {
+			AgentStatus curr = statusService.getSnapshot();
+			if (curr != null)
+				statusService.update(curr.toBuilder().mode(m).build());
+		}
+		return ResponseEntity.ok(Map.of("ok", ok, "mode", m.name()));
+	}
+
+	@PostMapping("/preview")
+	public ResponseEntity<?> preview(@RequestParam(name = "enabled") boolean enabled) {
+		System.out.println("[SPRING] /preview enabled=" + enabled);
+		boolean ok = controlService.setPreview(enabled);
+		if (ok) {
+			AgentStatus curr = statusService.getSnapshot();
+			if (curr != null)
+				statusService.update(curr.toBuilder().preview(enabled).build());
+		}
+		return ResponseEntity.ok(Map.of("ok", ok, "enabled", enabled));
+	}
+
+	@PostMapping("/lock")
+	public ResponseEntity<?> lock(@RequestParam(name = "enabled") boolean enabled) {
+		System.out.println("[SPRING] /lock enabled=" + enabled);
+		boolean ok = controlService.setUiLock(enabled);
+
+		// (선택) 프론트 즉시 반영용 스냅샷 업데이트 (python이 곧 STATUS로 덮어씀)
+		if (ok) {
+			AgentStatus curr = statusService.getSnapshot();
+			if (curr != null)
+				statusService.update(curr.toBuilder().locked(enabled).build());
+		}
+
+		return ResponseEntity.ok(Map.of("ok", ok, "enabled", enabled));
+	}
 }
