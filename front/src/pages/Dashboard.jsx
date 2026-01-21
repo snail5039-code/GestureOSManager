@@ -2,6 +2,7 @@
 import axios from "axios";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { THEME } from "../theme/themeTokens";
+import ProfileCard from "../components/ProfileCard";
 
 const POLL_MS = 500;
 
@@ -40,15 +41,37 @@ function formatNum(n, digits = 1) {
 ========================= */
 function IconPlay() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="opacity-90">
-      <path d="M8 5v14l12-7-12-7Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      className="opacity-90"
+    >
+      <path
+        d="M8 5v14l12-7-12-7Z"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
 function IconStop() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="opacity-90">
-      <path d="M7 7h10v10H7V7Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      className="opacity-90"
+    >
+      <path
+        d="M7 7h10v10H7V7Z"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
@@ -73,29 +96,67 @@ function IconRefresh({ spinning }) {
 }
 function IconEye() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="opacity-90">
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      className="opacity-90"
+    >
       <path
         d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"
         stroke="currentColor"
         strokeWidth="1.7"
         strokeLinejoin="round"
       />
-      <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" stroke="currentColor" strokeWidth="1.7" />
+      <path
+        d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"
+        stroke="currentColor"
+        strokeWidth="1.7"
+      />
     </svg>
   );
 }
 function IconLock() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="opacity-90">
-      <path d="M8 11V8a4 4 0 0 1 8 0v3" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-      <path d="M7 11h10v10H7V11Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      className="opacity-90"
+    >
+      <path
+        d="M8 11V8a4 4 0 0 1 8 0v3"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+      />
+      <path
+        d="M7 11h10v10H7V11Z"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
 function IconChevron() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="opacity-85">
-      <path d="m9 6 6 6-6 6" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      className="opacity-85"
+    >
+      <path
+        d="m9 6 6 6-6 6"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
@@ -111,10 +172,27 @@ function Badge({ t, children, tone = "slate" }) {
     yellow: cn("bg-amber-500/14 ring-amber-400/25", t.text2, "ring-1"),
     red: cn("bg-rose-500/12 ring-rose-400/25", t.text2, "ring-1"),
   };
-  return <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-xs", map[tone] || map.slate)}>{children}</span>;
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full px-2 py-0.5 text-xs",
+        map[tone] || map.slate,
+      )}
+    >
+      {children}
+    </span>
+  );
 }
 
-function Card({ t, title, right, children, accent = "slate" }) {
+function Card({
+  t,
+  title,
+  right,
+  children,
+  accent = "slate",
+  className,
+  bodyClassName,
+}) {
   const topLine = {
     slate: "from-slate-400/18 via-transparent to-transparent",
     blue: "from-sky-400/20 via-transparent to-transparent",
@@ -129,13 +207,33 @@ function Card({ t, title, right, children, accent = "slate" }) {
     : "shadow-[0_12px_40px_rgba(0,0,0,0.25)]";
 
   return (
-    <div className={cn("rounded-2xl ring-1 overflow-hidden", t.panel, shadow, "transition-transform duration-200 hover:-translate-y-[1px]")}>
-      <div className={cn("h-px w-full bg-gradient-to-r", topLine[accent] || topLine.slate)} />
-      <div className={cn("flex items-center justify-between px-5 py-4 border-b", isBright ? "border-slate-200" : "border-white/10")}>
+    <div
+      className={cn(
+        "rounded-2xl ring-1 overflow-hidden flex flex-col",
+        t.panel,
+        shadow,
+        "transition-transform duration-200 hover:-translate-y-[1px]",
+        className,
+      )}
+    >
+      <div
+        className={cn(
+          "h-px w-full bg-gradient-to-r",
+          topLine[accent] || topLine.slate,
+        )}
+      />
+      <div
+        className={cn(
+          "flex items-center justify-between px-5 py-4 border-b",
+          isBright ? "border-slate-200" : "border-white/10",
+        )}
+      >
         <div className={cn("text-sm font-semibold", t.text)}>{title}</div>
         {right}
       </div>
-      <div className="px-5 py-4">{children}</div>
+      <div className={cn("px-5 py-4 flex-1 min-h-0", bodyClassName)}>
+        {children}
+      </div>
     </div>
   );
 }
@@ -146,27 +244,50 @@ function Btn({ t, className, ...props }) {
       className={cn(
         "w-full rounded-2xl py-3 text-sm font-semibold ring-1 transition disabled:opacity-50 disabled:cursor-not-allowed",
         t.btn,
-        className
+        className,
       )}
       {...props}
     />
   );
 }
 
-function ActionTile({ t, tone = "slate", icon, title, desc, className, ...props }) {
+function ActionTile({
+  t,
+  tone = "slate",
+  icon,
+  title,
+  desc,
+  className,
+  ...props
+}) {
   const isBright = t._isBright ?? false;
 
   const map = {
-    slate: cn(isBright ? "bg-white" : "bg-white/5", isBright ? "ring-slate-200" : "ring-white/12"),
-    green: cn("bg-emerald-500/8", isBright ? "ring-emerald-300/70" : "ring-emerald-400/25"),
-    red: cn("bg-rose-500/8", isBright ? "ring-rose-300/70" : "ring-rose-400/25"),
+    slate: cn(
+      isBright ? "bg-white" : "bg-white/5",
+      isBright ? "ring-slate-200" : "ring-white/12",
+    ),
+    green: cn(
+      "bg-emerald-500/8",
+      isBright ? "ring-emerald-300/70" : "ring-emerald-400/25",
+    ),
+    red: cn(
+      "bg-rose-500/8",
+      isBright ? "ring-rose-300/70" : "ring-rose-400/25",
+    ),
     blue: cn("bg-sky-500/8", isBright ? "ring-sky-300/70" : "ring-sky-400/25"),
   };
 
   const chipMap = {
     slate: cn(t.chip),
-    green: cn("bg-emerald-500/10", isBright ? "ring-emerald-300/70" : "ring-emerald-400/25"),
-    red: cn("bg-rose-500/10", isBright ? "ring-rose-300/70" : "ring-rose-400/25"),
+    green: cn(
+      "bg-emerald-500/10",
+      isBright ? "ring-emerald-300/70" : "ring-emerald-400/25",
+    ),
+    red: cn(
+      "bg-rose-500/10",
+      isBright ? "ring-rose-300/70" : "ring-rose-400/25",
+    ),
     blue: cn("bg-sky-500/10", isBright ? "ring-sky-300/70" : "ring-sky-400/25"),
   };
 
@@ -174,14 +295,21 @@ function ActionTile({ t, tone = "slate", icon, title, desc, className, ...props 
     <button
       className={cn(
         "w-full rounded-2xl p-4 ring-1 transition text-left disabled:opacity-50 disabled:cursor-not-allowed",
-        isBright ? "shadow-[0_10px_30px_rgba(15,23,42,0.08)]" : "shadow-[0_10px_35px_rgba(0,0,0,0.25)]",
+        isBright
+          ? "shadow-[0_10px_30px_rgba(15,23,42,0.08)]"
+          : "shadow-[0_10px_35px_rgba(0,0,0,0.25)]",
         map[tone] || map.slate,
-        className
+        className,
       )}
       {...props}
     >
       <div className="flex items-center gap-3">
-        <div className={cn("h-11 w-11 rounded-2xl ring-1 grid place-items-center", chipMap[tone] || chipMap.slate)}>
+        <div
+          className={cn(
+            "h-11 w-11 rounded-2xl ring-1 grid place-items-center",
+            chipMap[tone] || chipMap.slate,
+          )}
+        >
           <div className={cn(t.text)}>{icon}</div>
         </div>
 
@@ -210,13 +338,18 @@ function Switch({ t, checked, onChange, disabled }) {
         checked
           ? "bg-sky-500/25 ring-sky-300/70"
           : isBright
-          ? "bg-slate-200 ring-slate-300"
-          : "bg-slate-800/70 ring-white/12"
+            ? "bg-slate-200 ring-slate-300"
+            : "bg-slate-800/70 ring-white/12",
       )}
       aria-checked={checked}
       role="switch"
     >
-      <span className={cn("inline-block h-5 w-5 transform rounded-full bg-white transition", checked ? "translate-x-5" : "translate-x-1")} />
+      <span
+        className={cn(
+          "inline-block h-5 w-5 transform rounded-full bg-white transition",
+          checked ? "translate-x-5" : "translate-x-1",
+        )}
+      />
     </button>
   );
 }
@@ -226,17 +359,29 @@ function StatTile({ t, label, value, tone = "slate" }) {
 
   const ring =
     tone === "green"
-      ? isBright ? "ring-emerald-300/70" : "ring-emerald-400/25"
+      ? isBright
+        ? "ring-emerald-300/70"
+        : "ring-emerald-400/25"
       : tone === "blue"
-      ? isBright ? "ring-sky-300/70" : "ring-sky-400/25"
-      : tone === "yellow"
-      ? isBright ? "ring-amber-300/70" : "ring-amber-400/25"
-      : tone === "red"
-      ? isBright ? "ring-rose-300/70" : "ring-rose-400/25"
-      : isBright ? "ring-slate-200" : "ring-white/12";
+        ? isBright
+          ? "ring-sky-300/70"
+          : "ring-sky-400/25"
+        : tone === "yellow"
+          ? isBright
+            ? "ring-amber-300/70"
+            : "ring-amber-400/25"
+          : tone === "red"
+            ? isBright
+              ? "ring-rose-300/70"
+              : "ring-rose-400/25"
+            : isBright
+              ? "ring-slate-200"
+              : "ring-white/12";
 
   return (
-    <div className={cn("rounded-xl ring-1 p-3 overflow-hidden", t.panelSoft, ring)}>
+    <div
+      className={cn("rounded-xl ring-1 p-3 overflow-hidden", t.panelSoft, ring)}
+    >
       <div className={cn("mt-1 text-xs", t.muted)}>{label}</div>
       <div className={cn("mt-1 font-semibold text-sm", t.text)}>{value}</div>
     </div>
@@ -254,11 +399,18 @@ function PointerMiniMap({ t, theme, x, y }) {
   const forceWhiteMap = theme === "rose" || theme === "kuromi";
 
   return (
-    <div className={cn("rounded-xl ring-1 p-3 overflow-hidden", t.panelSoft, isBright ? "ring-slate-200" : "ring-white/12")}>
+    <div
+      className={cn(
+        "rounded-xl ring-1 p-3 overflow-hidden",
+        t.panelSoft,
+        isBright ? "ring-slate-200" : "ring-white/12",
+      )}
+    >
       <div className="flex items-center justify-between">
         <div className={cn("text-xs", t.muted)}>포인터</div>
         <div className={cn("text-xs tabular-nums", t.muted)}>
-          {cx === null ? "-" : cx.toFixed(3)} / {cy === null ? "-" : cy.toFixed(3)}
+          {cx === null ? "-" : cx.toFixed(3)} /{" "}
+          {cy === null ? "-" : cy.toFixed(3)}
         </div>
       </div>
 
@@ -268,8 +420,8 @@ function PointerMiniMap({ t, theme, x, y }) {
           forceWhiteMap
             ? "bg-white ring-violet-200"
             : isBright
-            ? "bg-white ring-slate-200"
-            : "bg-slate-900/35 ring-white/12"
+              ? "bg-white ring-slate-200"
+              : "bg-slate-900/35 ring-white/12",
         )}
       >
         <div className="absolute inset-0 opacity-[0.18]">
@@ -278,7 +430,11 @@ function PointerMiniMap({ t, theme, x, y }) {
 
         <div
           className={cn("absolute h-2.5 w-2.5 rounded-full", t.dot)}
-          style={{ left: `${left}%`, top: `${top}%`, transform: "translate(-50%,-50%)" }}
+          style={{
+            left: `${left}%`,
+            top: `${top}%`,
+            transform: "translate(-50%,-50%)",
+          }}
         />
       </div>
     </div>
@@ -288,7 +444,11 @@ function PointerMiniMap({ t, theme, x, y }) {
 /* =========================
    Dashboard
 ========================= */
-export default function Dashboard({ onHudState, onHudActions, theme = "dark" } = {}) {
+export default function Dashboard({
+  onHudState,
+  onHudActions,
+  theme = "dark",
+} = {}) {
   const [status, setStatus] = useState(null);
   const [mode, setMode] = useState("MOUSE");
   const [loading, setLoading] = useState(true);
@@ -328,7 +488,12 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
       serverPreview: typeof s.preview === "boolean" ? s.preview : undefined,
       pointerX: typeof s.pointerX === "number" ? s.pointerX : null,
       pointerY: typeof s.pointerY === "number" ? s.pointerY : null,
-      tracking: typeof s.tracking === "boolean" ? s.tracking : (typeof s.isTracking === "boolean" ? s.isTracking : null),
+      tracking:
+        typeof s.tracking === "boolean"
+          ? s.tracking
+          : typeof s.isTracking === "boolean"
+            ? s.isTracking
+            : null,
     };
   }, [status, mode]);
 
@@ -337,10 +502,13 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
       connText: derived.connected ? "연결됨" : "끊김",
       enabledText: derived.enabled ? "실행 중" : "정지",
       lockText: derived.locked ? "잠금" : "해제",
-      moveText: derived.canMove === null ? "-" : derived.canMove ? "가능" : "불가",
-      clickText: derived.canClick === null ? "-" : derived.canClick ? "가능" : "불가",
+      moveText:
+        derived.canMove === null ? "-" : derived.canMove ? "가능" : "불가",
+      clickText:
+        derived.canClick === null ? "-" : derived.canClick ? "가능" : "불가",
       scrollText: derived.scrollActive ? "활성" : "비활성",
-      trackingText: derived.tracking === null ? "-" : derived.tracking ? "ON" : "OFF",
+      trackingText:
+        derived.tracking === null ? "-" : derived.tracking ? "ON" : "OFF",
       modeText: MODE_LABEL[derived.mode] ?? derived.mode,
     };
   }, [derived]);
@@ -351,7 +519,9 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
     abortRef.current = controller;
 
     try {
-      const { data } = await api.get("/control/status", { signal: controller.signal });
+      const { data } = await api.get("/control/status", {
+        signal: controller.signal,
+      });
 
       setStatus(data);
       setMode((prev) => data?.mode ?? prev);
@@ -415,7 +585,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
         setBusy(false);
       }
     },
-    [fetchStatus]
+    [fetchStatus],
   );
 
   const start = useCallback(() => postJson("/control/start"), [postJson]);
@@ -469,7 +639,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
         setBusy(false);
       }
     },
-    [fetchStatus, derived.enabled]
+    [fetchStatus, derived.enabled],
   );
 
   const setLock = useCallback(
@@ -477,7 +647,9 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
       setBusy(true);
       setError("");
       try {
-        await api.post("/control/lock", null, { params: { enabled: !!nextLocked } });
+        await api.post("/control/lock", null, {
+          params: { enabled: !!nextLocked },
+        });
         await fetchStatus();
       } catch (e) {
         const msg = e?.response
@@ -488,14 +660,28 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
         setBusy(false);
       }
     },
-    [fetchStatus]
+    [fetchStatus],
   );
 
   useEffect(() => {
-    onHudActions?.({ start, stop, applyMode, togglePreview, fetchStatus, setLock });
-  }, [onHudActions, start, stop, applyMode, togglePreview, fetchStatus, setLock]);
+    onHudActions?.({
+      start,
+      stop,
+      applyMode,
+      togglePreview,
+      fetchStatus,
+      setLock,
+    });
+  }, [
+    onHudActions,
+    start,
+    stop,
+    applyMode,
+    togglePreview,
+    fetchStatus,
+    setLock,
+  ]);
 
-  // ✅ TitleBar에서 쓰게: 연결/잠금/모드까지 올려줌
   useEffect(() => {
     onHudState?.({
       status,
@@ -505,7 +691,14 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
       modeText: view.modeText,
       modeOptions: MODE_OPTIONS,
     });
-  }, [onHudState, status, derived.connected, derived.locked, derived.mode, view.modeText]);
+  }, [
+    onHudState,
+    status,
+    derived.connected,
+    derived.locked,
+    derived.mode,
+    view.modeText,
+  ]);
 
   const copyRaw = useCallback(async () => {
     try {
@@ -524,26 +717,26 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
   const isBright = theme === "light" || theme === "rose";
 
   return (
-    <div className={cn("w-full h-full min-h-0 relative", t.page)}>
-
-      {/* ✅ 기존 sticky Topbar(조잡한 상태바) 삭제됨 */}
-
+    <div className={cn("w-full min-h-full relative", t.page)}>
       {/* Content */}
-      <div className="relative w-full max-w-none px-6 py-6 space-y-5">
+      <div className="relative w-full max-w-none px-5 py-5 md:px-6 md:py-6 space-y-5 pb-8">
         {error ? (
           <div
             className={cn(
               "rounded-2xl ring-1 px-5 py-4 text-sm",
-              isBright ? "bg-rose-50 ring-rose-200 text-slate-900" : "bg-rose-950/30 ring-rose-900/60 text-rose-100"
+              isBright
+                ? "bg-rose-50 ring-rose-200 text-slate-900"
+                : "bg-rose-950/30 ring-rose-900/60 text-rose-100",
             )}
           >
             {error}
           </div>
         ) : null}
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 flex-1 min-h-0">
           {/* left */}
-          <div className="lg:col-span-5 space-y-5">
+          <div className="lg:col-span-5 min-h-0 flex flex-col gap-5">
+            <ProfileCard t={t} theme={theme} />
             <Card t={t} title="모드" accent="blue">
               <div className="space-y-3">
                 <select
@@ -553,7 +746,9 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
                   className={cn(
                     "w-full rounded-xl ring-1 px-3 py-2 text-sm outline-none focus:ring-2 disabled:opacity-50",
                     t.input,
-                    isBright ? "focus:ring-sky-400/40" : "focus:ring-sky-500/45"
+                    isBright
+                      ? "focus:ring-sky-400/40"
+                      : "focus:ring-sky-500/45",
                   )}
                 >
                   {MODE_OPTIONS.map((m) => (
@@ -569,81 +764,223 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
               t={t}
               title="빠른 동작"
               accent="green"
-              right={busy ? <Badge t={t} tone="blue">처리 중</Badge> : <Badge t={t} tone="slate">대기</Badge>}
+              right={
+                busy ? (
+                  <Badge t={t} tone="blue">
+                    처리 중
+                  </Badge>
+                ) : (
+                  <Badge t={t} tone="slate">
+                    대기
+                  </Badge>
+                )
+              }
             >
               <div className="grid grid-cols-2 gap-3">
-                <ActionTile t={t} tone="green" icon={<IconPlay />} title="시작" desc="Start" onClick={start} disabled={!canStart} />
-                <ActionTile t={t} tone="red" icon={<IconStop />} title="정지" desc="Stop" onClick={stop} disabled={!canStop} />
+                <ActionTile
+                  t={t}
+                  tone="green"
+                  icon={<IconPlay />}
+                  title="시작"
+                  desc="Start"
+                  onClick={start}
+                  disabled={!canStart}
+                />
+                <ActionTile
+                  t={t}
+                  tone="red"
+                  icon={<IconStop />}
+                  title="정지"
+                  desc="Stop"
+                  onClick={stop}
+                  disabled={!canStop}
+                />
               </div>
 
-              <div className={cn("mt-4 rounded-2xl ring-1 p-4 space-y-3", t.panelSoft)}>
+              <div
+                className={cn(
+                  "mt-4 rounded-2xl ring-1 p-4 space-y-3",
+                  t.panelSoft,
+                )}
+              >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <span className={cn(t.text2)}><IconEye /></span>
+                    <span className={cn(t.text2)}>
+                      <IconEye />
+                    </span>
                     <div>
-                      <div className={cn("text-sm font-semibold", t.text)}>프리뷰</div>
-                      <div className={cn("text-xs", t.muted)}>카메라/랜드마크 미리보기</div>
+                      <div className={cn("text-sm font-semibold", t.text)}>
+                        프리뷰
+                      </div>
+                      <div className={cn("text-xs", t.muted)}>
+                        카메라/랜드마크 미리보기
+                      </div>
                     </div>
                   </div>
-                  <Switch t={t} checked={preview} onChange={() => togglePreview()} disabled={busy} />
+                  <Switch
+                    t={t}
+                    checked={preview}
+                    onChange={() => togglePreview()}
+                    disabled={busy}
+                  />
                 </div>
 
                 <div className={cn("h-px", t.divider)} />
 
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <span className={cn(t.text2)}><IconLock /></span>
+                    <span className={cn(t.text2)}>
+                      <IconLock />
+                    </span>
                     <div>
-                      <div className={cn("text-sm font-semibold", t.text)}>잠금</div>
-                      <div className={cn("text-xs", t.muted)}>제스처 입력 잠금/해제</div>
+                      <div className={cn("text-sm font-semibold", t.text)}>
+                        잠금
+                      </div>
+                      <div className={cn("text-xs", t.muted)}>
+                        제스처 입력 잠금/해제
+                      </div>
                     </div>
                   </div>
-                  <Switch t={t} checked={derived.locked} onChange={(v) => setLock(!!v)} disabled={busy} />
+                  <Switch
+                    t={t}
+                    checked={derived.locked}
+                    onChange={(v) => setLock(!!v)}
+                    disabled={busy}
+                  />
                 </div>
               </div>
 
-              <Btn t={t} onClick={fetchStatus} disabled={busy} className="mt-4 flex items-center justify-center gap-2">
+              <Btn
+                t={t}
+                onClick={fetchStatus}
+                disabled={busy}
+                className="mt-4 flex items-center justify-center gap-2"
+              >
                 <IconRefresh spinning={busy} />
                 새로고침
               </Btn>
 
               <div className="mt-4 grid grid-cols-2 gap-2">
-                <StatTile t={t} label="FPS" value={formatNum(derived.fps, 1)} tone="blue" />
-                <StatTile t={t} label="현재 제스처" value={derived.gesture} tone="slate" />
+                <StatTile
+                  t={t}
+                  label="FPS"
+                  value={formatNum(derived.fps, 1)}
+                  tone="blue"
+                />
+                <StatTile
+                  t={t}
+                  label="현재 제스처"
+                  value={derived.gesture}
+                  tone="slate"
+                />
               </div>
             </Card>
           </div>
 
           {/* right */}
-          <div className="lg:col-span-7 space-y-5">
+          <div className="lg:col-span-7 min-h-0 grid grid-rows-[auto_1fr] gap-5">
             <Card
               t={t}
               title="상태"
               accent="blue"
-              right={loading ? <Badge t={t} tone="yellow">불러오는 중</Badge> : <Badge t={t} tone="slate">라이브</Badge>}
+              right={
+                loading ? (
+                  <Badge t={t} tone="yellow">
+                    불러오는 중
+                  </Badge>
+                ) : (
+                  <Badge t={t} tone="slate">
+                    라이브
+                  </Badge>
+                )
+              }
             >
               <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                <StatTile t={t} label="연결" value={view.connText} tone={derived.connected ? "blue" : "red"} />
-                <StatTile t={t} label="실행" value={view.enabledText} tone={derived.enabled ? "green" : "slate"} />
-                <StatTile t={t} label="잠금" value={view.lockText} tone={derived.locked ? "yellow" : "slate"} />
+                <StatTile
+                  t={t}
+                  label="연결"
+                  value={view.connText}
+                  tone={derived.connected ? "blue" : "red"}
+                />
+                <StatTile
+                  t={t}
+                  label="실행"
+                  value={view.enabledText}
+                  tone={derived.enabled ? "green" : "slate"}
+                />
+                <StatTile
+                  t={t}
+                  label="잠금"
+                  value={view.lockText}
+                  tone={derived.locked ? "yellow" : "slate"}
+                />
 
-                <StatTile t={t} label="이동" value={view.moveText} tone={derived.canMove ? "green" : "slate"} />
-                <StatTile t={t} label="클릭" value={view.clickText} tone={derived.canClick ? "green" : "slate"} />
-                <StatTile t={t} label="스크롤" value={view.scrollText} tone={derived.scrollActive ? "blue" : "slate"} />
+                <StatTile
+                  t={t}
+                  label="이동"
+                  value={view.moveText}
+                  tone={derived.canMove ? "green" : "slate"}
+                />
+                <StatTile
+                  t={t}
+                  label="클릭"
+                  value={view.clickText}
+                  tone={derived.canClick ? "green" : "slate"}
+                />
+                <StatTile
+                  t={t}
+                  label="스크롤"
+                  value={view.scrollText}
+                  tone={derived.scrollActive ? "blue" : "slate"}
+                />
 
-                <StatTile t={t} label="트래킹" value={view.trackingText} tone={derived.tracking ? "green" : "slate"} />
-                <StatTile t={t} label="포인터 X" value={derived.pointerX === null ? "-" : formatNum(derived.pointerX, 3)} tone="slate" />
-                <StatTile t={t} label="포인터 Y" value={derived.pointerY === null ? "-" : formatNum(derived.pointerY, 3)} tone="slate" />
+                <StatTile
+                  t={t}
+                  label="트래킹"
+                  value={view.trackingText}
+                  tone={derived.tracking ? "green" : "slate"}
+                />
+                <StatTile
+                  t={t}
+                  label="포인터 X"
+                  value={
+                    derived.pointerX === null
+                      ? "-"
+                      : formatNum(derived.pointerX, 3)
+                  }
+                  tone="slate"
+                />
+                <StatTile
+                  t={t}
+                  label="포인터 Y"
+                  value={
+                    derived.pointerY === null
+                      ? "-"
+                      : formatNum(derived.pointerY, 3)
+                  }
+                  tone="slate"
+                />
               </div>
 
               <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-                <PointerMiniMap t={t} theme={theme} x={derived.pointerX} y={derived.pointerY} />
+                <PointerMiniMap
+                  t={t}
+                  theme={theme}
+                  x={derived.pointerX}
+                  y={derived.pointerY}
+                />
                 <div className={cn("rounded-xl ring-1 p-3", t.panelSoft)}>
                   <div className={cn("text-xs", t.muted)}>요약</div>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    <Badge t={t} tone="slate">제스처: {derived.gesture}</Badge>
-                    <Badge t={t} tone={preview ? "blue" : "slate"}>{preview ? "Preview ON" : "Preview OFF"}</Badge>
-                    <Badge t={t} tone="slate">Mode: {view.modeText}</Badge>
+                    <Badge t={t} tone="slate">
+                      제스처: {derived.gesture}
+                    </Badge>
+                    <Badge t={t} tone={preview ? "blue" : "slate"}>
+                      {preview ? "Preview ON" : "Preview OFF"}
+                    </Badge>
+                    <Badge t={t} tone="slate">
+                      Mode: {view.modeText}
+                    </Badge>
                   </div>
                 </div>
               </div>
@@ -653,10 +990,15 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
               t={t}
               title="Debug"
               accent="slate"
+              className="min-h-0"
+              bodyClassName="min-h-0"
               right={
                 <div className="flex items-center gap-2">
                   <button
-                    className={cn("px-3 py-1.5 text-xs rounded-full ring-1 transition disabled:opacity-50", t.btn)}
+                    className={cn(
+                      "px-3 py-1.5 text-xs rounded-full ring-1 transition disabled:opacity-50",
+                      t.btn,
+                    )}
                     onClick={copyRaw}
                     disabled={!status}
                     type="button"
@@ -664,7 +1006,10 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
                     {copied ? "Copied" : "Copy JSON"}
                   </button>
                   <button
-                    className={cn("px-3 py-1.5 text-xs rounded-full ring-1 transition disabled:opacity-50", t.btn)}
+                    className={cn(
+                      "px-3 py-1.5 text-xs rounded-full ring-1 transition disabled:opacity-50",
+                      t.btn,
+                    )}
                     onClick={() => setShowRaw((v) => !v)}
                     disabled={loading}
                     type="button"
@@ -674,13 +1019,25 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
                 </div>
               }
             >
-              {showRaw ? (
-                <pre className={cn("text-xs leading-relaxed overflow-auto max-h-96 rounded-xl ring-1 p-4", t.panelSolid || t.panel2 || t.panel, t.input)}>
-                  {status ? JSON.stringify(status, null, 2) : loading ? "Loading..." : "No data"}
-                </pre>
-              ) : (
-                <div className="h-2" />
-              )}
+              <div className="h-full min-h-0 flex flex-col">
+                {showRaw ? (
+                  <pre
+                    className={cn(
+                      "text-xs leading-relaxed overflow-auto flex-1 min-h-0 rounded-xl ring-1 p-4",
+                      t.panelSolid || t.panel2 || t.panel,
+                      t.input,
+                    )}
+                  >
+                    {status
+                      ? JSON.stringify(status, null, 2)
+                      : loading
+                        ? "Loading..."
+                        : "No data"}
+                  </pre>
+                ) : (
+                  <div className="flex-1 min-h-0" />
+                )}
+              </div>
             </Card>
           </div>
         </div>

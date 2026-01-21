@@ -24,6 +24,53 @@ export default function App() {
     const v = localStorage.getItem("osHudOn");
     return v === null ? true : v === "1";
   });
+  useEffect(() => {
+    if (!window.managerWin?.onDeepLink) return;
+
+    const off = window.managerWin.onDeepLink(async (rawUrl) => {
+      try {
+        // gestureos://auth?code=...
+        let code = null;
+
+        try {
+          const u = new URL(rawUrl);
+          code = u.searchParams.get("code");
+        } catch {
+          // 혹시 URL 파싱 실패하면 fallback
+          const qs = rawUrl.split("?")[1] || "";
+          code = new URLSearchParams(qs).get("code");
+        }
+
+        if (!code) return;
+
+        const res = await fetch("/api/auth/bridge/consume", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          credentials: "include",
+          body: JSON.stringify({ code }),
+        });
+
+        if (!res.ok) throw new Error(`consume failed: ${res.status}`);
+
+        const data = await res.json();
+
+        // accessToken 저장(너가 이미 ProfileCard에서 이걸 쓰고있음)
+        if (data?.accessToken) {
+          localStorage.setItem("accessToken", data.accessToken);
+        }
+
+        // 가장 단순/확실: 새로고침해서 “내정보 로드 로직”이 다시 돌게 함
+        window.location.reload();
+      } catch (e) {
+        console.error("deeplink auth failed:", e);
+      }
+    });
+
+    return off;
+  }, []);
 
   useEffect(() => {
     localStorage.setItem("hudOn", hudOn ? "1" : "0");
@@ -31,7 +78,9 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem("osHudOn", osHudOn ? "1" : "0");
-    fetch(`/api/hud/show?enabled=${osHudOn ? "true" : "false"}`, { method: "POST" }).catch(() => {});
+    fetch(`/api/hud/show?enabled=${osHudOn ? "true" : "false"}`, {
+      method: "POST",
+    }).catch(() => {});
   }, [osHudOn]);
 
   const toggleHud = () => setHudOn((x) => !x);
@@ -126,11 +175,24 @@ export default function App() {
   return (
     <div
       data-theme={theme}
-      className={cn("w-[100dvw] h-[100dvh] flex flex-col overflow-hidden min-w-0 min-h-0 relative", t.page)}
+      className={cn(
+        "w-[100dvw] h-[100dvh] flex flex-col overflow-hidden min-w-0 min-h-0 relative",
+        t.page,
+      )}
     >
       <div className="pointer-events-none fixed inset-0 z-0">
-        <div className={cn("absolute -top-40 -left-40 h-[520px] w-[520px] rounded-full blur-3xl", t.glow1)} />
-        <div className={cn("absolute -bottom-52 -right-48 h-[560px] w-[560px] rounded-full blur-3xl", t.glow2)} />
+        <div
+          className={cn(
+            "absolute -top-40 -left-40 h-[520px] w-[520px] rounded-full blur-3xl",
+            t.glow1,
+          )}
+        />
+        <div
+          className={cn(
+            "absolute -bottom-52 -right-48 h-[560px] w-[560px] rounded-full blur-3xl",
+            t.glow2,
+          )}
+        />
         <div className={cn("absolute inset-0 bg-[size:60px_60px]", t.grid)} />
       </div>
 
@@ -152,8 +214,18 @@ export default function App() {
         />
       </div>
 
-      <main className={cn("relative z-10 flex-1 min-h-0 min-w-0", screen === "rush" ? "overflow-hidden" : "overflow-auto")}>
-        <div className={cn(screen === "dashboard" ? "block" : "hidden", "w-full min-w-0")}>
+      <main
+        className={cn(
+          "relative z-10 flex-1 min-h-0 min-w-0",
+          screen === "rush" ? "overflow-hidden" : "overflow-auto",
+        )}
+      >
+        <div
+          className={cn(
+            screen === "dashboard" ? "block" : "hidden",
+            "w-full h-full min-h-0 min-w-0",
+          )}
+        >
           <Dashboard
             hudOn={hudOn}
             onToggleHud={toggleHud}
@@ -165,7 +237,12 @@ export default function App() {
           />
         </div>
 
-        {screen === "rush" && <Rush3DPage status={hudFeed?.status} connected={hudFeed?.connected ?? true} />}
+        {screen === "rush" && (
+          <Rush3DPage
+            status={hudFeed?.status}
+            connected={hudFeed?.connected ?? true}
+          />
+        )}
         {screen === "settings" && <Settings theme={theme} />}
         {screen === "train" && <TrainingLab theme={theme} />}
       </main>
@@ -177,10 +254,15 @@ export default function App() {
             connected={hudFeed?.connected ?? true}
             modeOptions={hudFeed?.modeOptions}
             onSetMode={(m) => hudActionsRef.current.applyMode?.(m)}
-            onEnableToggle={(next) => (next ? hudActionsRef.current.start?.() : hudActionsRef.current.stop?.())}
+            onEnableToggle={(next) =>
+              next
+                ? hudActionsRef.current.start?.()
+                : hudActionsRef.current.stop?.()
+            }
             onPreviewToggle={() => hudActionsRef.current.togglePreview?.()}
             onLockToggle={(nextLocked) => {
-              if (hudActionsRef.current.setLock) return hudActionsRef.current.setLock(nextLocked);
+              if (hudActionsRef.current.setLock)
+                return hudActionsRef.current.setLock(nextLocked);
               return hudActionsRef.current.lockToggle?.();
             }}
             onRequestHide={() => setHudOn(false)}
