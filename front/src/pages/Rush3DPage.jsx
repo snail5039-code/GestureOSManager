@@ -451,7 +451,7 @@ function RushScene({
       lane: 0,
       z: SPAWN_Z,
       baseSize: 0.78,
-    }))
+    })),
   );
   const noteWriteIdx = useRef(0);
 
@@ -465,7 +465,7 @@ function RushScene({
       rotVel: new THREE.Vector3(),
       scale: new THREE.Vector3(1, 1, 1),
       color: new THREE.Color(),
-    }))
+    })),
   );
 
   const sparks = useRef(
@@ -474,7 +474,7 @@ function RushScene({
       life: 0,
       pos: new THREE.Vector3(),
       vel: new THREE.Vector3(),
-    }))
+    })),
   );
   const sparkPositions = useRef(new Float32Array(SPARK_COUNT * 3));
 
@@ -489,11 +489,11 @@ function RushScene({
   // 테마 색상
   const colLeft = useMemo(
     () => new THREE.Color(themeColors?.left || "#7dd3fc"),
-    [themeColors?.left]
+    [themeColors?.left],
   );
   const colRight = useMemo(
     () => new THREE.Color(themeColors?.right || "#ff4fd8"),
-    [themeColors?.right]
+    [themeColors?.right],
   );
 
   const matLane = useMemo(
@@ -503,7 +503,7 @@ function RushScene({
         roughness: 0.3,
         metalness: 0.7,
       }),
-    [themeColors?.lane]
+    [themeColors?.lane],
   );
 
   const matRail = useMemo(
@@ -513,7 +513,7 @@ function RushScene({
         transparent: true,
         opacity: 0.9,
       }),
-    [themeColors?.rail]
+    [themeColors?.rail],
   );
 
   const matNote = useMemo(
@@ -525,7 +525,7 @@ function RushScene({
         emissive: new THREE.Color(themeColors?.rail || "#2bbcff"),
         emissiveIntensity: 0.25,
       }),
-    [themeColors?.rail]
+    [themeColors?.rail],
   );
 
   const matGlow = useMemo(
@@ -536,7 +536,7 @@ function RushScene({
         opacity: 0.18,
         depthWrite: false,
       }),
-    [themeColors?.left]
+    [themeColors?.left],
   );
 
   const matShard = useMemo(
@@ -550,7 +550,7 @@ function RushScene({
         transparent: true,
         opacity: 1,
       }),
-    [themeColors?.rail]
+    [themeColors?.rail],
   );
 
   const matHitCore = useMemo(
@@ -560,7 +560,7 @@ function RushScene({
         transparent: true,
         opacity: 0.9,
       }),
-    [themeColors?.hitCore]
+    [themeColors?.hitCore],
   );
 
   const matHitGlow = useMemo(
@@ -571,7 +571,7 @@ function RushScene({
         opacity: 0.18,
         depthWrite: false,
       }),
-    [themeColors?.left]
+    [themeColors?.left],
   );
 
   /* =========================
@@ -658,7 +658,7 @@ function RushScene({
         tmpMat.current.compose(
           tmpPos.current,
           tmpQuat.current,
-          tmpScale.current
+          tmpScale.current,
         );
         notesMesh.current.setMatrixAt(i, tmpMat.current);
         glowMesh.current.setMatrixAt(i, tmpMat.current);
@@ -676,7 +676,7 @@ function RushScene({
         tmpMat.current.compose(
           tmpPos.current,
           tmpQuat.current,
-          tmpScale.current
+          tmpScale.current,
         );
         shardMesh.current.setMatrixAt(i, tmpMat.current);
       }
@@ -812,7 +812,7 @@ function RushScene({
       pick.rotVel.set(
         2 + Math.random() * 2,
         (dir > 0 ? 1 : -1) * (2 + Math.random() * 3),
-        (dir > 0 ? -1 : 1) * (1 + Math.random() * 2)
+        (dir > 0 ? -1 : 1) * (1 + Math.random() * 2),
       );
 
       if (splitAxis === "Y") {
@@ -846,7 +846,7 @@ function RushScene({
       sp.vel.set(
         Math.cos(ang) * spd,
         3 + Math.random() * 6,
-        -2 - Math.random() * 4
+        -2 - Math.random() * 4,
       );
     }
   };
@@ -878,7 +878,7 @@ function RushScene({
         x - halfW - pad,
         x + halfW + pad,
         y - halfH - pad,
-        y + halfH + pad
+        y + halfH + pad,
       );
       if (!info) continue;
 
@@ -988,7 +988,7 @@ function RushScene({
     const dtSec = clamp(
       (tNowMs - curRef.current._euroLastT) / 1000,
       0.001,
-      0.2
+      0.2,
     );
 
     const dx = (rawX - curRef.current._euroLastX) / dtSec;
@@ -1185,13 +1185,13 @@ function RushScene({
       leftNdc,
       cursorL,
       usingMouseFallback ? true : isNewSample,
-      usingMouseFallback ? tNowMouse : tNowHands
+      usingMouseFallback ? tNowMouse : tNowHands,
     );
     updateCursorFromNdc(
       rightNdc,
       cursorR,
       usingMouseFallback ? true : isNewSample,
-      usingMouseFallback ? tNowMouse : tNowHands
+      usingMouseFallback ? tNowMouse : tNowHands,
     );
 
     {
@@ -1213,7 +1213,7 @@ function RushScene({
         const lambda = clamp(
           curRef.current.tracking ? base : base * 0.65,
           18,
-          120
+          120,
         );
         const k = 1 - Math.exp(-dt * lambda);
 
@@ -1306,7 +1306,7 @@ function RushScene({
           tmpMat.current.compose(
             tmpPos.current,
             tmpQuat.current,
-            tmpScale.current
+            tmpScale.current,
           );
           notesMesh.current.setMatrixAt(i, tmpMat.current);
           glowMesh.current.setMatrixAt(i, tmpMat.current);
@@ -1325,7 +1325,7 @@ function RushScene({
         tmpMat.current.compose(
           tmpPos.current,
           tmpQuat.current,
-          tmpScale.current
+          tmpScale.current,
         );
         notesMesh.current.setMatrixAt(i, tmpMat.current);
 
@@ -1334,7 +1334,7 @@ function RushScene({
         tmpMat.current.compose(
           tmpPos.current,
           tmpQuat.current,
-          tmpScale.current
+          tmpScale.current,
         );
         glowMesh.current.setMatrixAt(i, tmpMat.current);
 
@@ -1361,7 +1361,7 @@ function RushScene({
       cursorMeshL.current.position.set(
         cursorL.current.x,
         cursorL.current.y,
-        CURSOR_Z
+        CURSOR_Z,
       );
     }
     if (cursorMeshR.current) {
@@ -1369,7 +1369,7 @@ function RushScene({
       cursorMeshR.current.position.set(
         cursorR.current.x,
         cursorR.current.y,
-        CURSOR_Z
+        CURSOR_Z,
       );
     }
 
@@ -1388,7 +1388,7 @@ function RushScene({
           tmpMat.current.compose(
             tmpPos.current,
             tmpQuat.current,
-            tmpScale.current
+            tmpScale.current,
           );
           shardMesh.current.setMatrixAt(i, tmpMat.current);
           continue;
@@ -1404,7 +1404,7 @@ function RushScene({
           tmpMat.current.compose(
             tmpPos.current,
             tmpQuat.current,
-            tmpScale.current
+            tmpScale.current,
           );
           shardMesh.current.setMatrixAt(i, tmpMat.current);
           continue;
@@ -1764,7 +1764,7 @@ export default function Rush3DPage({ status, connected = true }) {
         seed: 33,
       },
     ],
-    []
+    [],
   );
 
   const [selectedId, setSelectedId] = useState(SONGS[0].id);
@@ -1920,7 +1920,7 @@ export default function Rush3DPage({ status, connected = true }) {
         `/api/control/mode?mode=${encodeURIComponent(modeParam)}`,
         {
           method: "POST",
-        }
+        },
       );
       if (!r1.ok) {
         const txt = await r1.text().catch(() => "");
@@ -2021,26 +2021,25 @@ export default function Rush3DPage({ status, connected = true }) {
     acc >= 0.95
       ? "S"
       : acc >= 0.9
-      ? "A"
-      : acc >= 0.8
-      ? "B"
-      : acc >= 0.65
-      ? "C"
-      : "D";
+        ? "A"
+        : acc >= 0.8
+          ? "B"
+          : acc >= 0.65
+            ? "C"
+            : "D";
 
   const modeU = String(statusRef.current?.mode || "").toUpperCase();
   const rushOk =
-  connected &&
-  ["RUSH", "RUSH_HAND", "RUSH_COLOR"].includes(modeU) &&
-  !!statusRef.current?.enabled;
-
+    connected &&
+    ["RUSH", "RUSH_HAND", "RUSH_COLOR"].includes(modeU) &&
+    !!statusRef.current?.enabled;
 
   const judgeColor =
     judge?.lane === 0
       ? "text-info"
       : judge?.lane === 1
-      ? "text-secondary"
-      : "text-base-content";
+        ? "text-secondary"
+        : "text-base-content";
 
   return (
     <div
@@ -2094,10 +2093,6 @@ export default function Rush3DPage({ status, connected = true }) {
                     RHYTHM RUSH
                   </div>
                   <div className="text-2xl font-black mt-1">Lobby</div>
-                  <div className="text-sm text-base-content/60 mt-1">
-                    로비에서 입력 방식 고르고, Start Game 누르면 에이전트 모드도
-                    같이 바뀜
-                  </div>
                 </div>
 
                 <div className="text-right">
@@ -2112,10 +2107,6 @@ export default function Rush3DPage({ status, connected = true }) {
                     <span className="text-xs font-semibold">
                       {rushOk ? "RUSH READY" : "CHECK MANAGER"}
                     </span>
-                  </div>
-                  <div className="mt-2 text-xs text-base-content/60">
-                    connected: {String(connected)} / mode: {modeU || "?"} /
-                    enabled: {String(!!statusRef.current?.enabled)}
                   </div>
                 </div>
               </div>
@@ -2134,15 +2125,9 @@ export default function Rush3DPage({ status, connected = true }) {
                           : "bg-base-200/30 border-base-300/35 hover:bg-base-300/30")
                       }
                     >
-                      <div className="text-sm tracking-[0.25em] text-base-content/60">
-                        TRACK
-                      </div>
                       <div className="text-lg font-bold mt-1">{s.title}</div>
                       <div className="text-xs text-base-content/60 mt-1">
                         BPM {s.bpm}
-                      </div>
-                      <div className="text-xs text-base-content/50 mt-1">
-                        Seed {s.seed}
                       </div>
                     </button>
                   );
@@ -2163,12 +2148,8 @@ export default function Rush3DPage({ status, connected = true }) {
                         RUSH INPUT
                       </div>
                       <div className="text-sm text-base-content/60 mt-1">
-                        로비에서 입력 방식을 고르면 Start Game 시 적용됨
+                        입력 방식 선택
                       </div>
-                    </div>
-                    <div className="text-right text-xs text-base-content/70">
-                      desired:{" "}
-                      <span className="font-semibold">{desiredLabel}</span>
                     </div>
                   </div>
 
@@ -2200,13 +2181,8 @@ export default function Rush3DPage({ status, connected = true }) {
                       disabled={applyBusy}
                       title="지금 바로 RUSH 모드+START 적용"
                     >
-                      {applyBusy ? "Applying..." : "Apply Now"}
+                      {applyBusy ? "Applying..." : "모드 선택"}
                     </button>
-
-                    <div className="ml-auto text-xs text-base-content/60 tabular-nums">
-                      current agent mode:{" "}
-                      <span className="font-semibold">{modeU || "-"}</span>
-                    </div>
                   </div>
 
                   {applyErr ? (
@@ -2219,11 +2195,8 @@ export default function Rush3DPage({ status, connected = true }) {
                 {/* offset 컨트롤 */}
                 <div className="mt-4 flex items-center justify-between">
                   <div>
-                    <div className="text-xs tracking-[0.25em] text-base-content/70">
-                      BEAT OFFSET
-                    </div>
                     <div className="text-sm text-base-content/60 mt-1">
-                      첫 박 시작 시점(노트가 밀리면 여기만 조절)
+                      첫 박 시작 시점(박자가 맞지 않으면 조정하세요)
                     </div>
                   </div>
                   <div className="text-xs text-base-content/70 tabular-nums">
@@ -2257,9 +2230,7 @@ export default function Rush3DPage({ status, connected = true }) {
 
               <div className="mt-5 flex items-center justify-between gap-3">
                 <div className="text-xs text-base-content/60 leading-5">
-                  컨트롤: 손/펜 트래킹이 안 잡히면 Manager/Agent 상태부터 확인.
-                  <br />
-                  (손 모션 전용: 마우스 fallback은 OFF)
+                  문제 발생 시 Manager 상태 확인
                 </div>
 
                 <button
@@ -2269,10 +2240,6 @@ export default function Rush3DPage({ status, connected = true }) {
                 >
                   Start Game
                 </button>
-              </div>
-
-              <div className="mt-3 text-xs text-base-content/50">
-                theme: <span className="font-semibold">{themeKey}</span>
               </div>
             </div>
           </div>
@@ -2449,21 +2416,6 @@ export default function Rush3DPage({ status, connected = true }) {
           백엔드 연결 OFF
         </div>
       )}
-
-      <div className="absolute bottom-4 right-4 bg-base-200/55 border border-base-300/35 rounded-xl px-3 py-2 text-xs leading-5 pointer-events-none">
-        <div>phase: {phase}</div>
-        <div>playing: {String(playing)}</div>
-        <div>theme: {themeKey}</div>
-        <div>input: {desiredLabel}</div>
-        <div>songTime: {hud.songTime?.toFixed?.(2) ?? "0.00"}</div>
-        <div>offset: {hud.beatOffsetSec?.toFixed?.(2) ?? "0.00"}s</div>
-        <div>
-          tracking L/R: {String(hud.trackingL)} / {String(hud.trackingR)}
-        </div>
-        <div>
-          gesture L/R: {String(hud.gestureL)} / {String(hud.gestureR)}
-        </div>
-      </div>
     </div>
   );
 }

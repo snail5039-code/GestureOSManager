@@ -20,6 +20,25 @@ html, body, #root {
 /* body 스크롤은 막고 main만 스크롤 */
 body { overflow: hidden; }
 
+/* ---------------------------
+   ✅ Professional Radius Pack
+   - DaisyUI 전역 radius 변수 낮추기
+---------------------------- */
+:root,
+[data-theme]{
+  --rounded-box: 0.9rem;     /* 기존보다 덜 둥글게 */
+  --rounded-btn: 0.65rem;
+  --rounded-badge: 0.6rem;
+
+  /* 옵션: input/select도 통일하고 싶으면 */
+  --tab-radius: 0.65rem;
+}
+
+/* 모달 박스도 확실히 radius 적용 */
+.modal-box {
+  border-radius: var(--rounded-box);
+}
+
 /* 스크롤바(선택) */
 main::-webkit-scrollbar { width: 10px; }
 main::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 999px; }
