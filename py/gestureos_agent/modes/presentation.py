@@ -19,41 +19,39 @@ def _pick_token(gesture: str, mapping: Dict[str, str], order: list[str]) -> Opti
 
 @dataclass
 class PresentationHandler:
-    """PRESENTATION mode (PPT)
+    """PRESENTATION mode (PPT) - 안전/직관 버전 (전역 '양손 브이'와 겹침 방지)
 
-    사용자 설정 바인딩:
-      - bindings["NAV"] : {NEXT, PREV}
-      - bindings["INTERACT"] : {TAB, SHIFT_TAB, ACTIVATE, PLAY_PAUSE}
-      - bindings["INTERACT_HOLD"] : other-hand gate gesture
-
-    고정(2손) 제스처:
-      - 양손 OPEN_PALM  : F5
-      - 양손 PINCH_INDEX : ESC
+    제스처 기능 요약:
+      - (커서 손) OPEN_PALM       : 커서 이동(※ 이동은 hands_agent에서 처리)
+      - (커서 손) PINCH_INDEX     : 좌클릭 (복귀/선택)
+      - (커서 손) FIST            : 다음 슬라이드 (Right)
+      - (커서 손) V_SIGN          : 이전 슬라이드 (Left)
+      - (양손) OPEN_PALM+OPEN_PALM : F5 (발표 시작)
+      - (양손) FIST+FIST 길게       : ESC (발표 종료)   ※ 오작동 방지
+      - (양손) PINCH_INDEX+PINCH_INDEX 길게 : ALT+TAB (직전 앱으로) ※ 링크/영상 갔다가 복귀용
+        (전역 '양손 브이' = 모드 메뉴와 겹치지 않게 변경)
     """
 
     stable_frames: int = 3
-    interaction_grace_sec: float = 0.80
 
+    # 길게 유지(hold)로 오작동 방지
     hold_sec: dict = field(default_factory=lambda: {
         "NEXT": 0.08,
         "PREV": 0.08,
         "START": 0.20,
-        "END": 0.20,
-        "TAB": 0.22,
-        "SHIFT_TAB": 0.22,
-        "ACTIVATE": 0.10,
-        "PLAY_PAUSE": 0.12,
+        "END": 0.75,          # ✅ 종료는 길게
+        "ACTIVATE": 0.10,     # 클릭
+        "SWITCH_APP": 0.45,   # ✅ Alt+Tab도 길게(튐 방지)
     })
 
+    # 연타 방지(특히 Alt+Tab은 토글이라 쿨다운 길게)
     cooldown_sec: dict = field(default_factory=lambda: {
         "NEXT": 0.30,
         "PREV": 0.30,
         "START": 0.80,
-        "END": 0.80,
-        "TAB": 0.95,
-        "SHIFT_TAB": 0.95,
-        "ACTIVATE": 0.40,
-        "PLAY_PAUSE": 0.60,
+        "END": 0.90,
+        "ACTIVATE": 0.35,
+        "SWITCH_APP": 1.20,   # ✅ 왕복 토글 방지
     })
 
     last_token: str | None = None
@@ -61,14 +59,16 @@ class PresentationHandler:
     token_start_ts: float = 0.0
     armed: bool = True
 
-    interaction_until: float = 0.0
-
     last_fire_map: dict = field(default_factory=lambda: {
-        "NEXT": 0.0, "PREV": 0.0, "START": 0.0, "END": 0.0,
-        "TAB": 0.0, "SHIFT_TAB": 0.0, "ACTIVATE": 0.0, "PLAY_PAUSE": 0.0,
+        "NEXT": 0.0,
+        "PREV": 0.0,
+        "START": 0.0,
+        "END": 0.0,
+        "ACTIVATE": 0.0,
+        "SWITCH_APP": 0.0,
     })
 
-    # hands_agent에서 참고하는 필드(호환용)
+    # hands_agent 호환용 필드
     mod_until: float = 0.0
 
     def reset(self):
@@ -77,7 +77,6 @@ class PresentationHandler:
         self.token_start_ts = 0.0
         self.armed = True
         self.mod_until = 0.0
-        self.interaction_until = 0.0
         for k in list(self.last_fire_map.keys()):
             self.last_fire_map[k] = 0.0
 
@@ -90,14 +89,12 @@ class PresentationHandler:
             pyautogui.press("f5")
         elif token == "END":
             pyautogui.press("esc")
-        elif token == "TAB":
-            pyautogui.press("tab")
-        elif token == "SHIFT_TAB":
-            pyautogui.hotkey("shift", "tab")
         elif token == "ACTIVATE":
-            pyautogui.press("enter")
-        elif token == "PLAY_PAUSE":
-            pyautogui.hotkey("alt", "p")
+            # ✅ 링크/영상/브라우저 등 “복귀/선택”은 Enter보다 클릭이 확실
+            pyautogui.click(button="left")
+        elif token == "SWITCH_APP":
+            # ✅ 직전 앱 토글(대부분 브라우저↔PPT 복귀용으로 잘 먹힘)
+            pyautogui.hotkey("alt", "tab")
 
     def update(
         self,
@@ -116,9 +113,8 @@ class PresentationHandler:
         bindings = bindings or {}
         nav: Dict[str, str] = dict(bindings.get("NAV") or {})
         inter: Dict[str, str] = dict(bindings.get("INTERACT") or {})
-        inter_hold: str = str(bindings.get("INTERACT_HOLD") or "FIST").upper()
 
-        # 예전 로직 호환: KNIFE → OPEN_PALM
+        # 예전 로직 호환
         if cursor_gesture == "KNIFE":
             cursor_gesture = "OPEN_PALM"
         if other_gesture == "KNIFE":
@@ -126,22 +122,27 @@ class PresentationHandler:
 
         token = None
 
-        # 2손 고정(START/END) 우선
+        # -------------------------
+        # 2손 고정 제스처(우선)
+        # -------------------------
         if got_cursor and got_other:
+            # ✅ ALT+TAB (양손 PINCH)  ← 전역 '양손 브이'와 겹치지 않게 변경
             if cursor_gesture == "PINCH_INDEX" and other_gesture == "PINCH_INDEX":
+                token = "SWITCH_APP"
+            # ✅ ESC 종료 (양손 FIST 길게)
+            elif cursor_gesture == "FIST" and other_gesture == "FIST":
                 token = "END"
+            # ✅ F5 시작 (양손 OPEN)
             elif cursor_gesture == "OPEN_PALM" and other_gesture == "OPEN_PALM":
                 token = "START"
 
-        # 인터랙션 게이트(보조 손)
-        if got_other and other_gesture == inter_hold:
-            self.interaction_until = t + float(self.interaction_grace_sec or 0.0)
-        interaction_mode = (t < self.interaction_until)
-
-        # 1손 토큰 선택
+        # -------------------------
+        # 1손 제스처
+        # -------------------------
         if token is None and got_cursor:
-            if interaction_mode:
-                token = _pick_token(cursor_gesture, inter, ["TAB", "SHIFT_TAB", "ACTIVATE", "PLAY_PAUSE"])
+            # ✅ 클릭은 항상 허용 (게이트 없음)
+            if cursor_gesture == inter.get("ACTIVATE"):
+                token = "ACTIVATE"
             else:
                 token = _pick_token(cursor_gesture, nav, ["NEXT", "PREV"])
 
@@ -152,7 +153,7 @@ class PresentationHandler:
             self.armed = True
             return
 
-        # 안정화
+        # 안정화(stable_frames)
         if token == self.last_token:
             self.streak += 1
         else:
@@ -164,25 +165,23 @@ class PresentationHandler:
         if self.streak < self.stable_frames:
             return
 
-        need_hold = self.hold_sec.get(token, 0.12)
+        need_hold = float(self.hold_sec.get(token, 0.12))
         if (t - self.token_start_ts) < need_hold:
             return
 
-        repeatable = token in ("TAB", "SHIFT_TAB")
-
-        if not repeatable and not self.armed:
+        if not self.armed:
             return
 
-        cd = self.cooldown_sec.get(token, 0.30)
-        last_fire = self.last_fire_map.get(token, 0.0)
+        cd = float(self.cooldown_sec.get(token, 0.30))
+        last_fire = float(self.last_fire_map.get(token, 0.0))
         if t < last_fire + cd:
             return
 
         self._fire(token)
         self.last_fire_map[token] = t
 
-        # repeatable은 계속 허용, 나머지는 단발
-        self.armed = True if repeatable else False
+        # 단발 트리거(연속 클릭/연속 토글 방지)
+        self.armed = False
 
 
 __all__ = ["PresentationHandler"]
