@@ -67,7 +67,7 @@ RushLRPicker = _safe_import("gestureos_agent.modes.rush_lr", "RushLRPicker")
 ColorStickTracker = _safe_import("gestureos_agent.modes.rush_color", "ColorStickTracker")
 
 from ..bindings import DEFAULT_SETTINGS, deep_copy, merge_settings, get_binding
-from ..learner_proto import ProtoLearner
+from ..learner_mlp import MLPLearner
 from collections import deque, Counter
 
 
@@ -318,10 +318,13 @@ class HandsAgent:
             min_tracking_confidence=0.5,
         )
 
-        # learner (prototype training)
-        self.learner = ProtoLearner()
+        # learner (personalized MLP)
+        self.learner = MLPLearner()
 
-        # ✅ mode -> learner profile 자동 매핑
+        # ✅ 프로필은 Training 페이지에서 유저별(u{id}__*)로 선택/저장하는 게 기본.
+        #    모드 전환 때마다 프로필을 강제로 바꾸면 "학습 저장"이 깨지므로 기본 OFF.
+        #    필요 시 환경변수로 켤 수 있음.
+        self._learn_profile_by_mode = (os.getenv("LEARN_PROFILE_BY_MODE", "0") == "1")
         self._mode_profile_map = {
             "MOUSE": "mouse",
             "KEYBOARD": "keyboard",
@@ -331,11 +334,6 @@ class HandsAgent:
             "RUSH_HAND": "rush",
             "RUSH_COLOR": "rush",
         }
-
-        try:
-            self.learner.set_profile(self._mode_profile_map.get(str(self.mode).upper(), "default"))
-        except Exception:
-            pass
 
         self.pred_hist = {
             "cursor": deque(maxlen=5),
@@ -687,11 +685,16 @@ class HandsAgent:
             self.draw.reset()
 
         self.mode = nm
-        # ✅ 모드 바뀌면 learner 프로필도 자동 전환
-        try:
-            self.learner.set_profile(self._mode_profile_map.get(str(self.mode).upper(), "default"))
-        except Exception:
-            pass
+
+        # ✅ 모드 바뀌면 learner 프로필도 자동 전환 (옵션)
+        # - 유저 프로필(u{id}__*)을 선택한 경우에는 기본적으로 유지
+        if self._learn_profile_by_mode:
+            cur_p = str(getattr(self.learner, "profile", "default"))
+            if "__" not in cur_p:  # user namespace 프로필은 유지
+                try:
+                    self.learner.set_profile(self._mode_profile_map.get(str(self.mode).upper(), "default"))
+                except Exception:
+                    pass
 
         print("[PY] apply_set_mode ->", self.mode, flush=True)
 

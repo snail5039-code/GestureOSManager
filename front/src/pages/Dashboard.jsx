@@ -3,6 +3,7 @@ import axios from "axios";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { THEME } from "../theme/themeTokens";
 import ProfileCard from "../components/ProfileCard";
+import { useAuth } from "../auth/AuthProvider";
 
 const POLL_MS = 500;
 
@@ -449,6 +450,8 @@ export default function Dashboard({
   onHudActions,
   theme = "dark",
 } = {}) {
+  const { user, isAuthed } = useAuth();
+
   const [status, setStatus] = useState(null);
   const [mode, setMode] = useState("MOUSE");
   const [loading, setLoading] = useState(true);
@@ -467,6 +470,43 @@ export default function Dashboard({
 
   const [showRaw, setShowRaw] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  // ✅ 로그인 유저의 학습 프로필(u{id}__main)을 자동 적용(반자동 개인화)
+  // - system profile(default/mouse/keyboard/...) 상태일 때만 적용해서, 사용자가 수동으로 고른 프로필은 건드리지 않음
+  const memberIdRaw = useMemo(
+    () => user?.id ?? user?.memberId ?? user?.member_id ?? user?.email ?? null,
+    [user]
+  );
+  const autoProfileDoneRef = useRef(false);
+  useEffect(() => {
+    const connected = !!status?.connected;
+    if (!connected) return;
+    if (!isAuthed || !memberIdRaw) return;
+    if (autoProfileDoneRef.current) return;
+
+    const cur = String(status?.learnProfile || "default").toLowerCase();
+    const system = new Set(["default", "mouse", "keyboard", "ppt", "draw", "vkey", "rush"]);
+    if (!system.has(cur)) {
+      autoProfileDoneRef.current = true;
+      return;
+    }
+
+    const target = `u${String(memberIdRaw)}__main`;
+
+    (async () => {
+      try {
+        await api.post(
+          `/train/profile/set?name=${encodeURIComponent(target)}`,
+          null,
+          { headers: { "X-User-Id": String(memberIdRaw) } }
+        );
+        autoProfileDoneRef.current = true;
+      } catch {
+        // 실패해도 기능 자체는 optional. 다음 poll에 다시 시도하지 않도록 1회만 시도.
+        autoProfileDoneRef.current = true;
+      }
+    })();
+  }, [status?.connected, status?.learnProfile, isAuthed, memberIdRaw, status]);
 
   useEffect(() => {
     previewRef.current = preview;

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import GestureSettingsPanel from "./GestureSettingsPanel";
+// ✅ PNG 대신 SVG 로고 컴포넌트로 교체 (여백/테두리 문제 해결)
+// import gaLogo from "../assets/ga-logo.png";
 
 function cn(...xs) {
   return xs.filter(Boolean).join(" ");
@@ -17,8 +19,8 @@ function StatusChip({ tone = "neutral", children, title }) {
     tone === "ok"
       ? "bg-emerald-500/10 ring-emerald-400/25 text-base-content"
       : tone === "bad"
-      ? "bg-rose-500/10 ring-rose-400/25 text-base-content"
-      : "bg-base-100/20 ring-base-300/50 text-base-content opacity-95";
+        ? "bg-rose-500/10 ring-rose-400/25 text-base-content"
+        : "bg-base-100/20 ring-base-300/50 text-base-content opacity-95";
 
   return (
     <span className={cn(base, toneCls)} title={title}>
@@ -28,12 +30,90 @@ function StatusChip({ tone = "neutral", children, title }) {
 }
 
 /* =========================
+   Brand Logo (SVG)
+   - No outer border/box
+   - Bigger, tighter fill
+========================= */
+function LogoMark({ className = "" }) {
+  return (
+    <svg
+      viewBox="0 0 64 64"
+      className={className}
+      aria-hidden="true"
+      focusable="false"
+    >
+      <defs>
+        <linearGradient id="gaGrad" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#22d3ee" />
+          <stop offset="1" stopColor="#3b82f6" />
+        </linearGradient>
+
+        <filter id="gaGlow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="2.4" result="b" />
+          <feColorMatrix
+            in="b"
+            type="matrix"
+            values="
+              0 0 0 0 0.10
+              0 0 0 0 0.75
+              0 0 0 0 1.00
+              0 0 0 0.80 0
+            "
+            result="c"
+          />
+          <feMerge>
+            <feMergeNode in="c" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+      </defs>
+
+      {/* Subtle slash */}
+      <path
+        d="M9 50 C20 43, 34 40, 56 39"
+        fill="none"
+        stroke="url(#gaGrad)"
+        strokeWidth="3.3"
+        strokeLinecap="round"
+        opacity="0.75"
+      />
+
+      {/* GA */}
+      <g filter="url(#gaGlow)">
+        <text
+          x="7"
+          y="44"
+          fontSize="38"
+          fontFamily="ui-sans-serif, system-ui, Inter, Arial"
+          fontWeight="900"
+          letterSpacing="-2"
+          fill="url(#gaGrad)"
+        >
+          GA
+        </text>
+      </g>
+
+      {/* Pixel sparks */}
+      <rect x="49.5" y="10" width="4.2" height="4.2" rx="1.1" fill="#22d3ee" opacity="0.98" />
+      <rect x="55.2" y="14" width="3.2" height="3.2" rx="1" fill="#60a5fa" opacity="0.9" />
+      <rect x="47.6" y="16.2" width="2.6" height="2.6" rx="0.9" fill="#93c5fd" opacity="0.78" />
+    </svg>
+  );
+}
+
+/* =========================
    Small Icons
 ========================= */
 function IconChevronDown() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="opacity-70">
-      <path d="m6 9 6 6 6-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path
+        d="m6 9 6 6 6-6"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
@@ -51,21 +131,36 @@ function IconTraining() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="opacity-85">
       <path d="M4 19V5m0 14h16" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-      <path d="M8 15l3-3 2 2 5-6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <path
+        d="M8 15l3-3 2 2 5-6"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
 function IconBolt() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="opacity-85">
-      <path d="M13 2 3 14h8l-1 8 10-12h-8l1-8Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <path
+        d="M13 2 3 14h8l-1 8 10-12h-8l1-8Z"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
 function IconPhone() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="opacity-85">
-      <path d="M8 3h8a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z" stroke="currentColor" strokeWidth="1.6" />
+      <path
+        d="M8 3h8a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"
+        stroke="currentColor"
+        strokeWidth="1.6"
+      />
       <path d="M11 18h2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
   );
@@ -149,7 +244,8 @@ export default function TitleBar({
   agentStatus,
 }) {
   const onMin = () => window.managerWin && window.managerWin.minimize && window.managerWin.minimize();
-  const onMax = () => window.managerWin && window.managerWin.toggleMaximize && window.managerWin.toggleMaximize();
+  const onMax = () =>
+    window.managerWin && window.managerWin.toggleMaximize && window.managerWin.toggleMaximize();
   const onClose = () => window.managerWin && window.managerWin.close && window.managerWin.close();
 
   const THEME_PRESETS = useMemo(
@@ -186,8 +282,7 @@ export default function TitleBar({
     []
   );
 
-  const currentThemeLabel =
-    (THEME_PRESETS.find((t) => t.id === theme) || {}).label || theme || "dark";
+  const currentThemeLabel = (THEME_PRESETS.find((t) => t.id === theme) || {}).label || theme || "dark";
 
   const connected = !!(agentStatus && agentStatus.connected);
   const locked = !!(agentStatus && agentStatus.locked);
@@ -376,10 +471,7 @@ export default function TitleBar({
                       setTheme && setTheme(t.id);
                       setOpen(false);
                     }}
-                    className={cn(
-                      "flex items-center justify-between rounded-lg",
-                      active ? "active font-semibold" : ""
-                    )}
+                    className={cn("flex items-center justify-between rounded-lg", active ? "active font-semibold" : "")}
                   >
                     <span className="whitespace-nowrap">{t.label}</span>
                     {active ? <span className="opacity-70">✓</span> : null}
@@ -490,9 +582,7 @@ export default function TitleBar({
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-base font-semibold whitespace-nowrap">설정</div>
-                <div className="text-[12px] opacity-70 mt-0.5 truncate">
-                  표시 옵션 / 모션(제스처) 세팅
-                </div>
+                <div className="text-[12px] opacity-70 mt-0.5 truncate">표시 옵션 / 모션(제스처) 세팅</div>
               </div>
 
               <button
@@ -524,9 +614,7 @@ export default function TitleBar({
             <div className="flex-1 min-h-0 overflow-auto p-4">
               <div className="rounded-xl ring-1 ring-base-300/45 bg-base-100/10 p-4">
                 <div className="text-sm font-semibold">HUD 표시 옵션 (WEB/OS)</div>
-                <div className="text-[12px] opacity-70 mt-1">
-                  자주 쓰는 토글은 여기서만 관리
-                </div>
+                <div className="text-[12px] opacity-70 mt-1">자주 쓰는 토글은 여기서만 관리</div>
 
                 <div className="mt-4 space-y-3">
                   <ToggleRow
@@ -550,11 +638,7 @@ export default function TitleBar({
             </div>
           ) : (
             <div className="flex-1 min-h-0">
-              <GestureSettingsPanel
-                theme={theme}
-                embedded
-                onRequestClose={() => setSettingsOpen(false)}
-              />
+              <GestureSettingsPanel theme={theme} embedded onRequestClose={() => setSettingsOpen(false)} />
             </div>
           )}
         </div>,
@@ -567,7 +651,8 @@ export default function TitleBar({
   return (
     <div
       className={cn(
-        "navbar h-11 px-3 select-none titlebar-drag",
+        // ✅ 타이틀바 확 키움
+        "navbar h-14 px-4 select-none titlebar-drag",
         "border-b border-base-300/45",
         "bg-base-200/78 backdrop-blur-md",
         "text-base-content"
@@ -576,10 +661,12 @@ export default function TitleBar({
     >
       {/* LEFT */}
       <div className="flex items-center gap-3 min-w-0">
-        <div className="w-6 h-6 rounded-md bg-base-300/30 ring-1 ring-base-300/60 flex items-center justify-center text-xs font-bold">
-          GA
+        {/* ✅ 로고: 더 크고, 테두리/원형 없음 */}
+        <div className="w-14 h-14 flex items-center justify-center shrink-0 overflow-hidden">
+          <LogoMark className="w-12 h-12 pointer-events-none" />
         </div>
-        <span className="font-semibold text-sm whitespace-nowrap">Gesture Agent Manager</span>
+
+        <span className="font-semibold text-[15px] whitespace-nowrap">Gesture Agent Manager</span>
 
         {/* PAGE dropdown */}
         <button

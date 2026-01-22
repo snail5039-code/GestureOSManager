@@ -6,9 +6,16 @@ import { useAuth } from "../auth/AuthProvider";
 const POLL_MS = 120;
 
 const LABELS = ["OPEN_PALM", "FIST", "V_SIGN", "PINCH_INDEX", "OTHER"];
+const LABEL_LABEL = {
+  OPEN_PALM: "오픈 팜",
+  FIST: "피스트",
+  V_SIGN: "브이",
+  PINCH_INDEX: "핀치",
+  OTHER: "기타",
+};
 const HANDS = [
-  { id: "cursor", label: "Cursor(주 손)" },
-  { id: "other", label: "Other(보조 손)" },
+  { id: "cursor", label: "주 손(커서)" },
+  { id: "other", label: "보조 손" },
 ];
 
 const api = axios.create({
@@ -136,14 +143,14 @@ function drawHands(canvas, opts) {
     cursorLm,
     "rgba(0,255,255,0.9)",
     "rgba(0,255,255,0.9)",
-    cursorLabel || "CURSOR",
+    cursorLabel || "주 손",
     18
   );
   drawOne(
     otherLm,
     "rgba(255,0,255,0.9)",
     "rgba(255,0,255,0.9)",
-    otherLabel || "OTHER",
+    otherLabel || "보조 손",
     36
   );
 }
@@ -377,7 +384,7 @@ export default function TrainingLab({ theme = "dark" }) {
     return {
       connected: !!s.connected,
       mode: s.mode || "-",
-      gesture: s.gesture || "NONE",
+      제스처: s.gesture || "NONE",
       otherGesture: s.otherGesture || "NONE",
       fps: typeof s.fps === "number" ? s.fps : null,
       cursorLmOk: isValidLmArr(cursorLm),
@@ -529,8 +536,8 @@ export default function TrainingLab({ theme = "dark" }) {
       cursorLm,
       otherLm,
       theme,
-      cursorLabel: `CURSOR (${derived.gesture})`,
-      otherLabel: `OTHER (${derived.otherGesture})`,
+      cursorLabel: `주 손 (${derived.gesture})`,
+      otherLabel: `보조 손 (${derived.otherGesture})`,
     });
   }, [cursorLm, otherLm, theme, derived.gesture, derived.otherGesture]);
 
@@ -552,7 +559,7 @@ export default function TrainingLab({ theme = "dark" }) {
         hand: st.hand,
         label: st.label,
         mode: status?.mode ?? null,
-        gesture: status?.gesture ?? null,
+        제스처: status?.gesture ?? null,
         otherGesture: status?.otherGesture ?? null,
         landmarks: lm.map((p) => ({ x: p.x, y: p.y, z: p.z })),
       });
@@ -590,7 +597,7 @@ export default function TrainingLab({ theme = "dark" }) {
       hand: handId,
       label,
       mode: status?.mode ?? null,
-      gesture: status?.gesture ?? null,
+      제스처: status?.gesture ?? null,
       otherGesture: status?.otherGesture ?? null,
       landmarks: lm.map((p) => ({ x: p.x, y: p.y, z: p.z })),
     });
@@ -644,7 +651,7 @@ export default function TrainingLab({ theme = "dark" }) {
         },
         headers: userHeaders,
       });
-      setInfo(data?.ok ? "Server capture started" : "Server capture failed");
+      setInfo(data?.ok ? "서버 샘플 수집 시작" : "서버 샘플 수집 실패");
       await fetchStatus();
     } catch (e) {
       const msg = e?.response
@@ -675,12 +682,12 @@ export default function TrainingLab({ theme = "dark" }) {
       const { data } = await api.post("/train/train", null, {
         headers: userHeaders,
       });
-      setInfo(data?.ok ? "Training completed" : "Training failed");
+      setInfo(data?.ok ? "학습 완료" : "학습 실패");
       await fetchStatus();
     } catch (e) {
       const msg = e?.response
-        ? `서버 Train 실패 (HTTP ${e.response.status})`
-        : e?.message || "서버 Train 실패";
+        ? `서버 학습 실패 (HTTP ${e.response.status})`
+        : e?.message || "서버 학습 실패";
       setError(msg);
     } finally {
       setServerBusy(false);
@@ -694,11 +701,11 @@ export default function TrainingLab({ theme = "dark" }) {
     try {
       const next = !learnEnabled;
       const { data } = await api.post("/train/enable", null, {
-        params: { enabled: next },
+        params: { 적용: next },
         headers: userHeaders,
       });
       setInfo(
-        data?.ok ? (next ? "Learner enabled" : "Learner disabled") : "Enable failed"
+        data?.ok ? (next ? "학습 적용 켜짐" : "학습 적용 꺼짐") : "적용 전환 실패"
       );
       await fetchStatus();
     } catch (e) {
@@ -730,7 +737,7 @@ export default function TrainingLab({ theme = "dark" }) {
       const { data } = await api.post("/train/reset", null, {
         headers: userHeaders,
       });
-      setInfo(data?.ok ? "Reset done" : "Reset failed");
+      setInfo(data?.ok ? "초기화 완료" : "초기화 실패");
       await fetchStatus();
     } catch (e) {
       const msg = e?.response
@@ -761,7 +768,7 @@ export default function TrainingLab({ theme = "dark" }) {
       const { data } = await api.post("/train/rollback", null, {
         headers: userHeaders,
       });
-      setInfo(data?.ok ? "Rollback done" : "Rollback failed");
+      setInfo(data?.ok ? "되돌리기 완료" : "되돌리기 실패");
       await fetchStatus();
     } catch (e) {
       const msg = e?.response
@@ -793,7 +800,7 @@ export default function TrainingLab({ theme = "dark" }) {
         params: { name: target },
         headers: userHeaders,
       });
-      setInfo(data?.ok ? `Profile: ${displayProfile(target)}` : "Profile set failed");
+      setInfo(data?.ok ? `프로필: ${displayProfile(target)}` : "프로필 적용 실패");
       await fetchStatus();
       // profile 바꾸면 DB list도 한번 갱신
       if (!isGuest) {
@@ -828,7 +835,7 @@ export default function TrainingLab({ theme = "dark" }) {
         params: { name: serverName, copy: true },
         headers: userHeaders,
       });
-      setInfo(data?.ok ? `Profile created: ${displayProfile(serverName)}` : "Create failed");
+      setInfo(data?.ok ? `프로필 생성: ${displayProfile(serverName)}` : "프로필 생성 실패");
       setNewProfile("");
       await fetchStatus();
 
@@ -860,7 +867,7 @@ export default function TrainingLab({ theme = "dark" }) {
         params: { name: learnProfile },
         headers: userHeaders,
       });
-      setInfo(data?.ok ? `Profile deleted: ${displayProfile(learnProfile)}` : "Delete failed");
+      setInfo(data?.ok ? `프로필 삭제: ${displayProfile(learnProfile)}` : "삭제 실패");
       await fetchStatus();
 
       // DB list 갱신
@@ -899,8 +906,8 @@ export default function TrainingLab({ theme = "dark" }) {
       });
       setInfo(
         data?.ok
-          ? `Renamed: ${displayProfile(learnProfile)} → ${displayProfile(serverTo)}`
-          : "Rename failed"
+          ? `이름 변경: ${displayProfile(learnProfile)} → ${displayProfile(serverTo)}`
+          : "이름 변경 실패"
       );
       setRenameTo("");
       await fetchStatus();
@@ -988,7 +995,7 @@ export default function TrainingLab({ theme = "dark" }) {
     const h = learnCapture.hand || "-";
     const l = learnCapture.label || "-";
     const c = learnCapture.collected ?? 0;
-    return `capturing: ${h} / ${l} / ${c}`;
+    return `수집 중: ${h === "cursor" ? "주 손" : h === "other" ? "보조 손" : h} / ${LABEL_LABEL[l] ?? l} / ${c}`;
   }, [learnCapture]);
 
   const lastTrainText = useMemo(() => {
@@ -1018,7 +1025,7 @@ export default function TrainingLab({ theme = "dark" }) {
               />
             </svg>
             <div className="text-sm leading-snug min-w-[220px]">
-              <div className="font-semibold text-emerald-400">Done</div>
+              <div className="font-semibold text-emerald-400">완료</div>
               <div className="opacity-80">{info}</div>
             </div>
             <button
@@ -1045,7 +1052,7 @@ export default function TrainingLab({ theme = "dark" }) {
               />
             </svg>
             <div className="text-sm leading-snug min-w-[220px]">
-              <div className="font-semibold text-rose-400">Error</div>
+              <div className="font-semibold text-rose-400">오류</div>
               <div className="opacity-80">{error}</div>
             </div>
             <button
@@ -1064,23 +1071,20 @@ export default function TrainingLab({ theme = "dark" }) {
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div className="space-y-2">
           <div className="flex items-baseline gap-3 flex-wrap">
-            <div className="text-2xl font-bold">Training Lab</div>
+            <div className="text-2xl font-bold">트레이닝</div>
             <div className="flex items-center gap-2 flex-wrap">
               <StatusChip tone={isGuest ? "warn" : "ok"} title="로그인 상태">
-                {isGuest ? "GUEST (default only)" : `USER: ${memberKey}`}
+                {isGuest ? "게스트(기본만)" : `사용자: ${memberKey}`}
               </StatusChip>
 
               <StatusChip tone={derived.connected ? "ok" : "bad"} title="Agent WebSocket">
-                {derived.connected ? "CONNECTED" : "DISCONNECTED"}
+                {derived.connected ? "연결됨" : "연결 끊김"}
               </StatusChip>
-              <StatusChip title="현재 모드">MODE: {derived.mode}</StatusChip>
-              <StatusChip title="학습 프로필">PROFILE: {displayProfile(learnProfile)}</StatusChip>
-              <StatusChip tone={learnEnabled ? "ok" : "neutral"} title="Learner 적용 여부">
-                LEARN: {learnEnabled ? "ON" : "OFF"}
+              <StatusChip title="현재 모드">모드: {derived.mode}</StatusChip>
+              <StatusChip title="학습 프로필">프로필: {displayProfile(learnProfile)}</StatusChip>
+              <StatusChip tone={learnEnabled ? "ok" : "neutral"} title="학습 적용 여부">
+                학습: {learnEnabled ? "켜짐" : "꺼짐"}
               </StatusChip>
-              {derived.fps !== null ? (
-                <StatusChip title="FPS">FPS {derived.fps.toFixed(1)}</StatusChip>
-              ) : null}
             </div>
           </div>
 
@@ -1089,8 +1093,8 @@ export default function TrainingLab({ theme = "dark" }) {
               사용 방법(간단)
             </summary>
             <div className="mt-2 text-xs opacity-75 leading-relaxed">
-              1) <b>Profile</b> 선택 → 2) <b>Capture(server)</b>로 샘플 수집(손이 잡힌 상태에서)
-              → 3) <b>Train</b> → 4) <b>Enable</b>로 적용. 문제가 생기면 <b>Rollback</b> 또는 <b>Reset</b>.
+              1) <b>프로필</b> 선택 → 2) <b>샘플 수집</b>으로 데이터 수집(손이 잡힌 상태에서)
+              → 3) <b>학습</b> → 4) <b>적용</b> 켜기. 문제가 생기면 <b>되돌리기</b> 또는 <b>초기화</b>.
               {isGuest ? (
                 <>
                   <br />
@@ -1102,40 +1106,16 @@ export default function TrainingLab({ theme = "dark" }) {
             </div>
           </details>
         </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            className={cn("btn btn-sm", "rounded-xl")}
-            onClick={exportDataset}
-            disabled={!datasetRef.current.samples.length}
-            title="브라우저 로컬에 쌓인 샘플을 JSON으로 내보내기"
-          >
-            Export (JSON)
-          </button>
-          <button
-            type="button"
-            className={cn("btn btn-sm", "btn-ghost", "rounded-xl")}
-            onClick={() => {
-              if (!datasetRef.current.samples.length) return;
-              if (window.confirm("로컬 샘플을 전부 지울까요?")) clearDataset();
-            }}
-            disabled={!datasetRef.current.samples.length}
-            title="브라우저 로컬 샘플 삭제"
-          >
-            Clear
-          </button>
-        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* LEFT: Preview */}
         <div className={cn("rounded-2xl ring-1 ring-base-300/50 bg-base-200/70 shadow-xl overflow-hidden")}>
           <div className="px-5 py-4 border-b border-base-300/40 flex items-center justify-between">
-            <div className="font-semibold">Landmarks Preview</div>
+            <div className="font-semibold">랜드마크 미리보기</div>
             <div className="text-xs opacity-70">
-              {loading ? "loading..." : derived.connected ? "connected" : "disconnected"}
-              {derived.fps !== null ? ` · ${derived.fps.toFixed(1)} fps` : ""}
+              {loading ? "불러오는 중..." : derived.connected ? "연결됨" : "연결 끊김"}
+              
             </div>
           </div>
 
@@ -1146,26 +1126,26 @@ export default function TrainingLab({ theme = "dark" }) {
 
             <div className="mt-3 grid grid-cols-2 gap-2">
               <div className={cn("rounded-xl ring-1 ring-base-300/40 bg-base-100/25 p-3")}>
-                <div className="text-xs opacity-70">Cursor landmarks</div>
+                <div className="text-xs opacity-70">주 손 랜드마크</div>
                 <div className="mt-1 text-sm font-semibold">
                   {derived.cursorLmOk
-                    ? "OK (21)"
+                    ? "정상 (21)"
                     : Array.isArray(cursorLm)
-                    ? `Not ready (${cursorLm.length || 0})`
+                    ? `미인식 (${cursorLm.length || 0})`
                     : "-"}
                 </div>
-                <div className="text-xs opacity-70 mt-1">gesture: {derived.gesture}</div>
+                <div className="text-xs opacity-70 mt-1">제스처: {derived.gesture}</div>
               </div>
               <div className={cn("rounded-xl ring-1 ring-base-300/40 bg-base-100/25 p-3")}>
-                <div className="text-xs opacity-70">Other landmarks</div>
+                <div className="text-xs opacity-70">보조 손 랜드마크</div>
                 <div className="mt-1 text-sm font-semibold">
                   {derived.otherLmOk
-                    ? "OK (21)"
+                    ? "정상 (21)"
                     : Array.isArray(otherLm)
-                    ? `Not ready (${otherLm.length || 0})`
+                    ? `미인식 (${otherLm.length || 0})`
                     : "-"}
                 </div>
-                <div className="text-xs opacity-70 mt-1">gesture: {derived.otherGesture}</div>
+                <div className="text-xs opacity-70 mt-1">제스처: {derived.otherGesture}</div>
               </div>
             </div>
           </div>
@@ -1174,16 +1154,16 @@ export default function TrainingLab({ theme = "dark" }) {
         {/* RIGHT: Controls */}
         <div className={cn("rounded-2xl ring-1 ring-base-300/50 bg-base-200/70 shadow-xl overflow-hidden")}>
           <div className="px-5 py-4 border-b border-base-300/40 flex items-center justify-between gap-3 flex-wrap">
-            <div className="font-semibold">Controls</div>
+            <div className="font-semibold">설정</div>
             <div className="flex items-center gap-2 flex-wrap">
               <StatusChip tone={stepDetect ? "ok" : "warn"} title="선택한 손 랜드마크 상태">
-                {stepDetect ? "HAND OK" : "HAND NOT READY"}
+                {stepDetect ? "손 인식됨" : "손 미인식"}
               </StatusChip>
               <StatusChip tone={stepCollect ? "ok" : "neutral"} title="선택 라벨 서버 샘플 수">
-                SAMPLES {selectedServerCount}/10
+                샘플 {selectedServerCount}/10
               </StatusChip>
               {lastTrainText ? (
-                <StatusChip title="마지막 학습">LAST TRAIN {lastTrainText}</StatusChip>
+                <StatusChip title="마지막 학습">최근 학습 {lastTrainText}</StatusChip>
               ) : null}
             </div>
           </div>
@@ -1192,19 +1172,19 @@ export default function TrainingLab({ theme = "dark" }) {
             {/* quick stepper */}
             <div className={cn("rounded-2xl ring-1 ring-base-300/40 bg-base-100/15 p-4")} title="프로필 → 수집 → 학습 → 적용 순서">
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-                <StepDot done={stepProfile} label="1. Profile" hint={displayProfile(learnProfile)} />
-                <StepDot done={stepDetect} label="2. Detect" hint={stepDetect ? "OK" : "손이 안잡힘"} />
-                <StepDot done={stepCollect} label="3. Capture" hint={`${selectedServerCount}/10`} />
-                <StepDot done={stepTrain} label="4. Train" hint={stepTrain ? "완료" : "미실행"} />
-                <StepDot done={stepApply} label="5. Enable" hint={stepApply ? "적용됨" : "OFF"} />
+                <StepDot done={stepProfile} label="1. 프로필" hint={displayProfile(learnProfile)} />
+                <StepDot done={stepDetect} label="2. 인식" hint={stepDetect ? "정상" : "손이 안잡힘"} />
+                <StepDot done={stepCollect} label="3. 수집" hint={`${selectedServerCount}/10`} />
+                <StepDot done={stepTrain} label="4. 학습" hint={stepTrain ? "완료" : "미실행"} />
+                <StepDot done={stepApply} label="5. 적용" hint={stepApply ? "적용됨" : "꺼짐"} />
               </div>
               <div className="mt-3 flex items-center justify-between gap-3 flex-wrap">
                 <div className="text-xs opacity-70">
-                  선택: <b>{handId === "cursor" ? "Cursor" : "Other"}</b> · <b>{label}</b> · {Number(captureSec) || 2}s
+                  선택: <b>{handId === "cursor" ? "주 손" : "보조 손"}</b> · <b>{label}</b> · {Number(captureSec) || 2}초
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
                   {serverCaptureText ? (
-                    <StatusChip tone="warn" title="서버 캡처 중">{serverCaptureText}</StatusChip>
+                    <StatusChip tone="warn" title="서버 수집 중">{serverCaptureText}</StatusChip>
                   ) : null}
                   <button type="button" className={cn("btn btn-xs btn-ghost rounded-xl")} onClick={fetchStatus} title="상태 새로고침">
                     Refresh
@@ -1215,16 +1195,16 @@ export default function TrainingLab({ theme = "dark" }) {
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div>
-                <div className="text-xs opacity-70 mb-1">Label</div>
+                <div className="text-xs opacity-70 mb-1">라벨</div>
                 <select className="select select-sm w-full rounded-xl" value={label} onChange={(e) => setLabel(e.target.value)}>
                   {LABELS.map((l) => (
-                    <option key={l} value={l}>{l}</option>
+                    <option key={l} value={l}>{LABEL_LABEL[l] ?? l}</option>
                   ))}
                 </select>
               </div>
 
               <div>
-                <div className="text-xs opacity-70 mb-1">Hand</div>
+                <div className="text-xs opacity-70 mb-1">손</div>
                 <select className="select select-sm w-full rounded-xl" value={handId} onChange={(e) => setHandId(e.target.value)}>
                   {HANDS.map((h) => (
                     <option key={h.id} value={h.id}>{h.label}</option>
@@ -1233,7 +1213,7 @@ export default function TrainingLab({ theme = "dark" }) {
               </div>
 
               <div>
-                <div className="text-xs opacity-70 mb-1">Seconds</div>
+                <div className="text-xs opacity-70 mb-1">시간(초)</div>
                 <input
                   className="input input-sm w-full rounded-xl"
                   type="number"
@@ -1246,55 +1226,17 @@ export default function TrainingLab({ theme = "dark" }) {
               </div>
             </div>
 
-            {/* 로컬 캡처 */}
-            <details className="rounded-xl ring-1 ring-base-300/40 bg-base-100/20 p-4">
-              <summary className="cursor-pointer select-none flex items-center justify-between gap-2">
-                <span className="font-semibold text-sm">Local dataset (optional)</span>
-                <span className="text-xs opacity-70">
-                  samples: <b className="opacity-90">{datasetRef.current.samples.length}</b>
-                </span>
-              </summary>
-
-              <div className="mt-3">
-                <div className="text-xs opacity-70">
-                  브라우저에 샘플 저장 → Export(JSON) 용(서버 학습에는 직접 안 씀)
-                </div>
-
-                <div className="flex items-center gap-2 flex-wrap mt-3">
-                  <button
-                    type="button"
-                    className={cn("btn btn-sm rounded-xl", capturing ? "btn-disabled" : "btn-primary")}
-                    onClick={startCapture}
-                    disabled={capturing || !selectedLmOk}
-                    title={!selectedLmOk ? "손 랜드마크가 잡혀야 수집돼" : ""}
-                  >
-                    {capturing ? `Capturing... (${capturedCount})` : "Capture (local)"}
-                  </button>
-
-                  <button
-                    type="button"
-                    className={cn("btn btn-sm rounded-xl")}
-                    onClick={addSnapshot}
-                    disabled={!selectedLmOk}
-                    title={!selectedLmOk ? "손 랜드마크가 잡혀야 저장돼" : ""}
-                  >
-                    Add snapshot
-                  </button>
-                </div>
-              </div>
-            </details>
-
             {/* 서버 learner + profile */}
             <div className="rounded-xl ring-1 ring-base-300/40 bg-base-100/20 p-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="font-semibold text-sm">Server learner</div>
-                  <div className="text-xs opacity-70 mt-1">샘플 수집 → 학습 → 적용(Enable)</div>
+                  <div className="font-semibold text-sm">서버 학습기</div>
+                  <div className="text-xs opacity-70 mt-1">샘플 수집 → 학습 → 적용</div>
                 </div>
                 <div className="text-xs opacity-70">
-                  enabled:{" "}
+                  적용:{" "}
                   <span className={cn("font-semibold", learnEnabled ? "text-success" : "opacity-70")}>
-                    {learnEnabled ? "ON" : "OFF"}
+                    {learnEnabled ? "켜짐" : "꺼짐"}
                   </span>
                 </div>
               </div>
@@ -1302,7 +1244,7 @@ export default function TrainingLab({ theme = "dark" }) {
               {/* profile controls */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
                 <div>
-                  <div className="text-xs opacity-70 mb-1">Profile</div>
+                  <div className="text-xs opacity-70 mb-1">프로필</div>
                   <select
                     className="select select-sm w-full rounded-xl"
                     value={learnProfile}
@@ -1316,12 +1258,12 @@ export default function TrainingLab({ theme = "dark" }) {
                 </div>
 
                 <div>
-                  <div className="text-xs opacity-70 mb-1">New profile</div>
+                  <div className="text-xs opacity-70 mb-1">새 프로필</div>
                   <input
                     className="input input-sm w-full rounded-xl"
                     value={newProfile}
                     onChange={(e) => setNewProfile(e.target.value)}
-                    placeholder="e.g. mouse, ppt, myhand"
+                    placeholder="예: main, office, myhand"
                     disabled={serverBusy || isGuest}
                   />
                 </div>
@@ -1333,23 +1275,23 @@ export default function TrainingLab({ theme = "dark" }) {
                     disabled={serverBusy || isGuest || !newProfile.trim()}
                     title={isGuest ? "게스트 모드에서는 프로필 생성 불가" : ""}
                   >
-                    Create(copy)
+                    생성(복사)
                   </button>
                 </div>
               </div>
 
               <details className="mt-3 rounded-xl ring-1 ring-base-300/40 bg-base-100/10 p-3">
-                <summary className="cursor-pointer select-none text-sm font-semibold">고급: Rename / Delete</summary>
+                <summary className="cursor-pointer select-none text-sm font-semibold">고급: 이름 변경 / 삭제</summary>
 
                 <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
                   <div className="md:col-span-2">
-                    <div className="text-xs opacity-70 mb-1">Rename (current → new)</div>
+                    <div className="text-xs opacity-70 mb-1">이름 변경(현재 → 새 이름)</div>
                     <input
                       className="input input-sm w-full rounded-xl"
                       value={renameTo}
                       onChange={(e) => setRenameTo(e.target.value)}
                       placeholder={
-                        isGuest ? "게스트는 rename 불가" : learnProfile === "default" ? "default는 rename 불가" : "new name"
+                        isGuest ? "게스트는 이름 변경 불가" : learnProfile === "default" ? "default는 이름 변경 불가" : "새 이름"
                       }
                       disabled={
                         serverBusy ||
@@ -1371,7 +1313,7 @@ export default function TrainingLab({ theme = "dark" }) {
                         !renameTo.trim()
                       }
                     >
-                      Rename
+                      이름 변경
                     </button>
                   </div>
                 </div>
@@ -1392,7 +1334,7 @@ export default function TrainingLab({ theme = "dark" }) {
                       !String(learnProfile).startsWith(NS)
                     }
                   >
-                    Delete current profile
+                    현재 프로필 삭제
                   </button>
                 </div>
               </details>
@@ -1411,7 +1353,7 @@ export default function TrainingLab({ theme = "dark" }) {
                     !String(learnProfile).startsWith(NS)
                   }
                 >
-                  Capture (server)
+                  샘플 수집
                 </button>
 
                 <button
@@ -1428,7 +1370,7 @@ export default function TrainingLab({ theme = "dark" }) {
                   }
                   title={!stepCollect ? `샘플이 부족함: ${selectedServerCount}/10` : ""}
                 >
-                  Train
+                  학습
                 </button>
 
                 <button
@@ -1436,9 +1378,9 @@ export default function TrainingLab({ theme = "dark" }) {
                   className={cn("btn btn-sm rounded-xl", learnEnabled ? "btn-warning" : "btn-success")}
                   onClick={serverToggleEnable}
                   disabled={serverBusy || !derived.connected || (!learnEnabled && !stepTrain)}
-                  title={!learnEnabled && !stepTrain ? "Enable 전에 Train을 한 번 해줘" : ""}
+                  title={!learnEnabled && !stepTrain ? "적용 전에 학습을 먼저 해줘" : ""}
                 >
-                  {learnEnabled ? "Disable" : "Enable"}
+                  {learnEnabled ? "적용 끄기" : "적용 켜기"}
                 </button>
 
                 <button
@@ -1446,7 +1388,7 @@ export default function TrainingLab({ theme = "dark" }) {
                   className={cn("btn btn-sm btn-ghost rounded-xl")}
                   onClick={() => {
                     if (isGuest) return;
-                    if (window.confirm("서버 learner를 초기화할까요? (프로필 모델이 리셋돼요)")) serverReset();
+                    if (window.confirm("서버 학습기를 초기화할까요? (프로필 모델이 리셋돼요)")) serverReset();
                   }}
                   disabled={
                     serverBusy ||
@@ -1489,13 +1431,13 @@ export default function TrainingLab({ theme = "dark" }) {
 
               {lastTrainText ? (
                 <div className="mt-1 text-xs opacity-70">
-                  lastTrain: <span className="font-semibold opacity-90">{lastTrainText}</span>
+                  최근 학습: <span className="font-semibold opacity-90">{lastTrainText}</span>
                 </div>
               ) : null}
 
               <details className="mt-3 rounded-xl ring-1 ring-base-300/40 bg-base-100/10 p-3">
                 <summary className="cursor-pointer select-none text-sm font-semibold">
-                  Counts (server) / lastPred
+                  서버 샘플 수 / 최근 예측
                 </summary>
                 <div className="mt-3">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -1515,55 +1457,9 @@ export default function TrainingLab({ theme = "dark" }) {
                       </div>
                     ))}
                   </div>
-
-                  {learnLastPred ? (
-                    <div className="mt-3 text-xs opacity-70">
-                      lastPred:{" "}
-                      <span className="font-semibold opacity-90">
-                        {String(learnLastPred.label ?? "null")}
-                      </span>{" "}
-                      (score{" "}
-                      {typeof learnLastPred.score === "number"
-                        ? Number(learnLastPred.score).toFixed(3)
-                        : "-"}
-                      )
-                      {" · rule "}
-                      <span className="opacity-90">{String(learnLastPred.rule ?? "-")}</span>
-                    </div>
-                  ) : null}
                 </div>
               </details>
             </div>
-
-            <details className="mt-1 rounded-xl ring-1 ring-base-300/40 bg-base-100/10 p-3">
-              <summary className="cursor-pointer select-none text-sm font-semibold">
-                Local dataset counts
-              </summary>
-              <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-                {HANDS.map((h) => (
-                  <div key={h.id} className="rounded-xl ring-1 ring-base-300/40 bg-base-100/25 p-3">
-                    <div className="text-xs opacity-70">{h.label}</div>
-                    <div className="mt-2 grid grid-cols-2 gap-2">
-                      {LABELS.map((l) => (
-                        <div key={l} className="flex items-center justify-between text-sm">
-                          <span className="opacity-80">{l}</span>
-                          <span className="font-semibold">{counts?.[h.id]?.[l] ?? 0}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </details>
-
-            <details className="mt-2">
-              <summary className="cursor-pointer text-sm font-semibold">
-                Raw status (debug)
-              </summary>
-              <pre className="mt-2 text-xs overflow-auto max-h-64 rounded-xl ring-1 ring-base-300/40 bg-base-100/20 p-3">
-                {JSON.stringify(status, null, 2)}
-              </pre>
-            </details>
           </div>
         </div>
       </div>
