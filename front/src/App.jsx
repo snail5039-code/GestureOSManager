@@ -168,6 +168,7 @@ export default function App() {
       connected: !!hudFeed?.connected,
       locked: !!hudFeed?.locked,
       mode: hudFeed?.mode ?? "DEFAULT",
+      cameraPresent: hudFeed?.cameraPresent ?? null,
       modeText: hudFeed?.modeText ?? undefined,
     };
   }, [hudFeed]);
