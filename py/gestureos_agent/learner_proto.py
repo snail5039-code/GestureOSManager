@@ -47,7 +47,7 @@ class ProtoLearner:
 
         # 전역 토글(모드 바뀌어도 유지되는 게 사용자 경험 좋음)
         self.enabled: bool = False
-        self.min_samples: int = 10
+        self.min_samples: int = 50
         self.min_conf: float = 0.55
 
         # samples[hand][label] = [vec, vec, ...]
@@ -453,7 +453,7 @@ class ProtoLearner:
                 obj = json.load(f)
             # enabled는 전역처럼 쓰고싶으면 여기서 로드 안 하도록 바꿔도 됨.
             self.enabled = bool(obj.get("enabled", self.enabled))
-            self.min_samples = int(obj.get("min_samples", self.min_samples))
+            self.min_samples = max(50, int(obj.get("min_samples", self.min_samples)))
             self.min_conf = float(obj.get("min_conf", self.min_conf))
             self.last_train_ts = obj.get("last_train_ts", None)
             self.model = obj.get("model", self.model) or self.model

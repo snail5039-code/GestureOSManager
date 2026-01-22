@@ -5,6 +5,9 @@ import { useAuth } from "../auth/AuthProvider";
 
 const POLL_MS = 120;
 
+// 학습/저장(서버 트레이닝) 가능 최소 샘플 수
+const MIN_TRAIN_SAMPLES = 50;
+
 const LABELS = ["OPEN_PALM", "FIST", "V_SIGN", "PINCH_INDEX", "OTHER"];
 const LABEL_LABEL = {
   OPEN_PALM: "오픈 팜",
@@ -222,6 +225,12 @@ export default function TrainingLab({ theme = "dark" }) {
   const [capturing, setCapturing] = useState(false);
   const captureRef = useRef(null);
 
+  // ✅ 수집 시작 전 준비(카운트다운)
+  const [prepDelaySec, setPrepDelaySec] = useState(2);
+  const [armLeftSec, setArmLeftSec] = useState(0);
+  const armRef = useRef(null); // { kind, fireAt, hand, label, seconds, hz }
+  const armTimerRef = useRef(null);
+
   // ✅ 서버 learner 작업 중 표시
   const [serverBusy, setServerBusy] = useState(false);
 
@@ -358,6 +367,12 @@ export default function TrainingLab({ theme = "dark" }) {
   const unmountedRef = useRef(false);
   const canvasRef = useRef(null);
 
+  // 최신 status를 비동기 콜백에서도 안전하게 참조
+  const statusRef = useRef(null);
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
+
   const cursorLm = status?.cursorLandmarks ?? [];
   const otherLm = status?.otherLandmarks ?? [];
 
@@ -396,10 +411,25 @@ export default function TrainingLab({ theme = "dark" }) {
     handId === "cursor" ? derived.cursorLmOk : derived.otherLmOk;
   const selectedServerCount = getServerCount(learnCounts, handId, label);
 
+  const isHandOkNow = (hand) => {
+    const s = statusRef.current || status || {};
+    const lm = hand === "cursor" ? s.cursorLandmarks ?? [] : s.otherLandmarks ?? [];
+    return isValidLmArr(lm);
+  };
+
+  const waitForHandOk = async (hand, timeoutMs = 2500) => {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (isHandOkNow(hand)) return true;
+      await new Promise((r) => setTimeout(r, 120));
+    }
+    return isHandOkNow(hand);
+  };
+
   // 사용자 관점 "진행 상태"
   const stepProfile = !!learnProfile;
   const stepDetect = !!selectedLmOk;
-  const stepCollect = selectedServerCount >= 10; // learner 기본 min_samples=10
+  const stepCollect = selectedServerCount >= MIN_TRAIN_SAMPLES; // learner 기본 min_samples
   const stepTrain = Number(learnLastTrainTs || 0) > 0;
   const stepApply = !!learnEnabled;
 
@@ -525,6 +555,7 @@ export default function TrainingLab({ theme = "dark" }) {
       unmountedRef.current = true;
       if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
       if (abortRef.current) abortRef.current.abort();
+      if (armTimerRef.current) clearInterval(armTimerRef.current);
     };
   }, [fetchStatus, scheduleNextPoll]);
 
@@ -626,7 +657,16 @@ export default function TrainingLab({ theme = "dark" }) {
   // =========================
   // ✅ 서버 learner API
   // =========================
-  const serverCapture = async () => {
+  const clearArming = useCallback(() => {
+    if (armTimerRef.current) {
+      clearInterval(armTimerRef.current);
+      armTimerRef.current = null;
+    }
+    armRef.current = null;
+    setArmLeftSec(0);
+  }, []);
+
+  const serverCaptureNow = async (cfg) => {
     setError("");
     setInfo("");
 
@@ -640,14 +680,19 @@ export default function TrainingLab({ theme = "dark" }) {
       return;
     }
 
+    const hand = cfg?.hand ?? handId;
+    const lab = cfg?.label ?? label;
+    const seconds = cfg?.seconds ?? (Number(captureSec) || 2);
+    const hz = cfg?.hz ?? 15;
+
     setServerBusy(true);
     try {
       const { data } = await api.post("/train/capture", null, {
         params: {
-          hand: handId,
-          label,
-          seconds: Number(captureSec) || 2,
-          hz: 15,
+          hand,
+          label: lab,
+          seconds,
+          hz,
         },
         headers: userHeaders,
       });
@@ -661,6 +706,59 @@ export default function TrainingLab({ theme = "dark" }) {
     } finally {
       setServerBusy(false);
     }
+  };
+
+  const armServerCapture = () => {
+    setError("");
+    setInfo("");
+
+    if (denyIfGuest("서버 캡처")) return;
+    if (learnProfile === "default") {
+      setInfo("default는 공용 기본값이라 학습 저장은 새 프로필에서만 가능");
+      return;
+    }
+    if (!String(learnProfile).startsWith(NS)) {
+      setInfo("내 프로필에서만 캡처 가능");
+      return;
+    }
+
+    const delay = Math.max(0, Math.min(10, Number(prepDelaySec) || 0));
+    const cfg = {
+      kind: "server",
+      fireAt: Date.now() + delay * 1000,
+      hand: handId,
+      label,
+      seconds: Number(captureSec) || 2,
+      hz: 15,
+    };
+
+    if (delay <= 0.01) {
+      serverCaptureNow(cfg);
+      return;
+    }
+
+    // 이미 예약 중이면 새로 걸기 전에 정리
+    clearArming();
+
+    armRef.current = cfg;
+    setArmLeftSec(Math.ceil(delay));
+
+    armTimerRef.current = setInterval(() => {
+      const leftMs = cfg.fireAt - Date.now();
+      if (leftMs <= 0) {
+        clearArming();
+        (async () => {
+          const okHand = await waitForHandOk(cfg.hand, 2500);
+          if (!okHand) {
+            setError("손이 아직 안 잡혀서 수집을 시작 못했어. 손을 올린 뒤 다시 눌러줘");
+            return;
+          }
+          await serverCaptureNow(cfg);
+        })();
+      } else {
+        setArmLeftSec(Math.ceil(leftMs / 1000));
+      }
+    }, 100);
   };
 
   const serverTrain = async () => {
@@ -998,6 +1096,14 @@ export default function TrainingLab({ theme = "dark" }) {
     return `수집 중: ${h === "cursor" ? "주 손" : h === "other" ? "보조 손" : h} / ${LABEL_LABEL[l] ?? l} / ${c}`;
   }, [learnCapture]);
 
+  const pendingCaptureText = useMemo(() => {
+    if (!armLeftSec) return null;
+    const cfg = armRef.current;
+    const h = cfg?.hand || handId;
+    const l = cfg?.label || label;
+    return `준비 중: ${h === "cursor" ? "주 손" : h === "other" ? "보조 손" : h} / ${LABEL_LABEL[l] ?? l} / ${armLeftSec}s`;
+  }, [armLeftSec, handId, label]);
+
   const lastTrainText = useMemo(() => {
     const ts = Number(learnLastTrainTs || 0);
     if (!ts) return null;
@@ -1093,8 +1199,7 @@ export default function TrainingLab({ theme = "dark" }) {
               사용 방법(간단)
             </summary>
             <div className="mt-2 text-xs opacity-75 leading-relaxed">
-              1) <b>프로필</b> 선택 → 2) <b>샘플 수집</b>으로 데이터 수집(손이 잡힌 상태에서)
-              → 3) <b>학습</b> → 4) <b>적용</b> 켜기. 문제가 생기면 <b>되돌리기</b> 또는 <b>초기화</b>.
+              1) <b>프로필</b> 선택 → 2) <b>샘플 수집</b> 클릭(준비시간 후 시작) → 3) <b>학습</b> → 4) <b>적용</b> 켜기. 문제가 생기면 <b>되돌리기</b> 또는 <b>초기화</b>.
               {isGuest ? (
                 <>
                   <br />
@@ -1160,7 +1265,7 @@ export default function TrainingLab({ theme = "dark" }) {
                 {stepDetect ? "손 인식됨" : "손 미인식"}
               </StatusChip>
               <StatusChip tone={stepCollect ? "ok" : "neutral"} title="선택 라벨 서버 샘플 수">
-                샘플 {selectedServerCount}/10
+                샘플 {selectedServerCount}/{MIN_TRAIN_SAMPLES}
               </StatusChip>
               {lastTrainText ? (
                 <StatusChip title="마지막 학습">최근 학습 {lastTrainText}</StatusChip>
@@ -1174,7 +1279,7 @@ export default function TrainingLab({ theme = "dark" }) {
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                 <StepDot done={stepProfile} label="1. 프로필" hint={displayProfile(learnProfile)} />
                 <StepDot done={stepDetect} label="2. 인식" hint={stepDetect ? "정상" : "손이 안잡힘"} />
-                <StepDot done={stepCollect} label="3. 수집" hint={`${selectedServerCount}/10`} />
+                <StepDot done={stepCollect} label="3. 수집" hint={`${selectedServerCount}/${MIN_TRAIN_SAMPLES}`} />
                 <StepDot done={stepTrain} label="4. 학습" hint={stepTrain ? "완료" : "미실행"} />
                 <StepDot done={stepApply} label="5. 적용" hint={stepApply ? "적용됨" : "꺼짐"} />
               </div>
@@ -1183,6 +1288,9 @@ export default function TrainingLab({ theme = "dark" }) {
                   선택: <b>{handId === "cursor" ? "주 손" : "보조 손"}</b> · <b>{label}</b> · {Number(captureSec) || 2}초
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
+                  {pendingCaptureText ? (
+                    <StatusChip tone="warn" title="준비 중">{pendingCaptureText}</StatusChip>
+                  ) : null}
                   {serverCaptureText ? (
                     <StatusChip tone="warn" title="서버 수집 중">{serverCaptureText}</StatusChip>
                   ) : null}
@@ -1193,7 +1301,7 @@ export default function TrainingLab({ theme = "dark" }) {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
               <div>
                 <div className="text-xs opacity-70 mb-1">라벨</div>
                 <select className="select select-sm w-full rounded-xl" value={label} onChange={(e) => setLabel(e.target.value)}>
@@ -1222,6 +1330,19 @@ export default function TrainingLab({ theme = "dark" }) {
                   step={0.5}
                   value={captureSec}
                   onChange={(e) => setCaptureSec(e.target.value)}
+                />
+              </div>
+
+              <div>
+                <div className="text-xs opacity-70 mb-1">준비(초)</div>
+                <input
+                  className="input input-sm w-full rounded-xl"
+                  type="number"
+                  min={0}
+                  max={10}
+                  step={0.5}
+                  value={prepDelaySec}
+                  onChange={(e) => setPrepDelaySec(e.target.value)}
                 />
               </div>
             </div>
@@ -1342,18 +1463,29 @@ export default function TrainingLab({ theme = "dark" }) {
               <div className="flex items-center gap-2 flex-wrap mt-3">
                 <button
                   type="button"
-                  className={cn("btn btn-sm rounded-xl", "btn-primary")}
-                  onClick={serverCapture}
+                  className={cn(
+                    "btn btn-sm rounded-xl",
+                    armLeftSec > 0 ? "btn-warning" : "btn-primary"
+                  )}
+                  onClick={() => {
+                    if (armLeftSec > 0) clearArming();
+                    else armServerCapture();
+                  }}
                   disabled={
-                    serverBusy ||
-                    !derived.connected ||
-                    !selectedLmOk ||
-                    isGuest ||
-                    learnProfile === "default" ||
-                    !String(learnProfile).startsWith(NS)
+                    (serverBusy ||
+                      !derived.connected ||
+                      isGuest ||
+                      learnProfile === "default" ||
+                      !String(learnProfile).startsWith(NS)) &&
+                    armLeftSec === 0
+                  }
+                  title={
+                    selectedLmOk
+                      ? ""
+                      : "손이 안 잡혀도 예약 수집 가능. 준비(초) 안에 손을 올려줘"
                   }
                 >
-                  샘플 수집
+                  {armLeftSec > 0 ? `준비중 ${armLeftSec}s · 취소` : "샘플 수집"}
                 </button>
 
                 <button
@@ -1368,7 +1500,7 @@ export default function TrainingLab({ theme = "dark" }) {
                     learnProfile === "default" ||
                     !String(learnProfile).startsWith(NS)
                   }
-                  title={!stepCollect ? `샘플이 부족함: ${selectedServerCount}/10` : ""}
+                  title={!stepCollect ? `샘플이 부족함: ${selectedServerCount}/${MIN_TRAIN_SAMPLES}` : ""}
                 >
                   학습
                 </button>
@@ -1425,6 +1557,9 @@ export default function TrainingLab({ theme = "dark" }) {
                 </button>
               </div>
 
+              {pendingCaptureText ? (
+                <div className="mt-2 text-xs opacity-70">{pendingCaptureText}</div>
+              ) : null}
               {serverCaptureText ? (
                 <div className="mt-2 text-xs opacity-70">{serverCaptureText}</div>
               ) : null}

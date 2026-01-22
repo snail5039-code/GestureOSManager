@@ -87,7 +87,7 @@ class MLPLearner:
         self.profile: str = _sanitize_profile(profile)
 
         self.enabled: bool = False # 학습기 활성화 여부
-        self.min_samples: int = 10 # 학습에 필요한 최소 샘플 수
+        self.min_samples: int = 50 # 학습에 필요한 최소 샘플 수
         self.min_conf: float = 0.70 # 예측 결과의 최소 신뢰도 문턱값
 
         # 수집된 제스처 샘플 저장소 (cursor: 마우스 손, other: 반대 손)
@@ -675,7 +675,7 @@ class MLPLearner:
                 obj = json.load(f)
 
             self.enabled = bool(obj.get("enabled", self.enabled))
-            self.min_samples = int(obj.get("min_samples", self.min_samples))
+            self.min_samples = max(50, int(obj.get("min_samples", self.min_samples)))
             self.min_conf = float(obj.get("min_conf", self.min_conf))
             self.last_train_ts = obj.get("last_train_ts", None)
 
