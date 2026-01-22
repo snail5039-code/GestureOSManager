@@ -399,13 +399,14 @@ export default function TrainingLab({ theme = "dark" }) {
     return {
       connected: !!s.connected,
       mode: s.mode || "-",
-      제스처: s.gesture || "NONE",
+      gesture: s.gesture || "NONE",
       otherGesture: s.otherGesture || "NONE",
       fps: typeof s.fps === "number" ? s.fps : null,
       cursorLmOk: isValidLmArr(cursorLm),
       otherLmOk: isValidLmArr(otherLm),
     };
   }, [status, cursorLm, otherLm]);
+
 
   const selectedLmOk =
     handId === "cursor" ? derived.cursorLmOk : derived.otherLmOk;
@@ -1177,7 +1178,7 @@ export default function TrainingLab({ theme = "dark" }) {
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div className="space-y-2">
           <div className="flex items-baseline gap-3 flex-wrap">
-            <div className="text-2xl font-bold">트레이닝</div>
+            <div className="text-2xl font-bold">Training LAB</div>
             <div className="flex items-center gap-2 flex-wrap">
               <StatusChip tone={isGuest ? "warn" : "ok"} title="로그인 상태">
                 {isGuest ? "게스트(기본만)" : `사용자: ${memberKey}`}

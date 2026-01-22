@@ -1028,20 +1028,46 @@ class HandsAgent:
             cursor_lm = None
             other_lm = None
             if hands_list:
+                # NOTE: frame = cv2.flip(frame, 1) (미러) 상태로 MediaPipe를 돌리면
+                # handedness(Left/Right)가 물리 손 기준으로 뒤집혀 나오는 경우가 많음.
+                # 그래서 여기서 한 번 swap 해서 "사용자 실제 손" 기준으로 맞춘다.
+                hands_phys = []
                 for label, lm in hands_list:
+                    if label == "Left":
+                        plabel = "Right"
+                    elif label == "Right":
+                        plabel = "Left"
+                    else:
+                        plabel = label
+                    hands_phys.append((plabel, lm))
+
+                # ✅ 주손(커서손): 설정된 handedness랑 일치하는 손만 주손으로
+                for label, lm in hands_phys:
                     if label == self.cursor_hand_label:
                         cursor_lm = lm
                         break
-                if cursor_lm is None:
-                    cursor_lm = hands_list[0][1]
 
-                if len(hands_list) >= 2:
-                    for _label, lm in hands_list:
+                # ✅ 보조손: 반대 handedness
+                for label, lm in hands_phys:
+                    if label in ("Left", "Right") and label != self.cursor_hand_label:
+                        other_lm = lm
+                        break
+
+                # handedness가 None으로 오는 경우만 "순서" fallback
+                if cursor_lm is None and other_lm is None:
+                    cursor_lm = hands_phys[0][1]
+                    if len(hands_phys) >= 2:
+                        other_lm = hands_phys[1][1]
+                elif other_lm is None and cursor_lm is not None and len(hands_phys) >= 2:
+                    for _label, lm in hands_phys:
                         if lm is not cursor_lm:
                             other_lm = lm
                             break
 
+            self.learner.tick_capture(cursor_lm=cursor_lm, other_lm=other_lm)
+
             got_cursor = (cursor_lm is not None)
+
 
             if got_cursor:
                 cursor_cx, cursor_cy = palm_center(cursor_lm)
