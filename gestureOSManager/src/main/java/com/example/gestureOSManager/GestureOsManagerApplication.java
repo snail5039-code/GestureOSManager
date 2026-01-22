@@ -1,4 +1,3 @@
-// src/main/java/com/example/gestureOSManager/GestureOsManagerApplication.java
 package com.example.gestureOSManager;
 
 import org.mybatis.spring.annotation.MapperScan;

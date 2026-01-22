@@ -19,6 +19,23 @@ from ..control import ControlMapper
 from ..ws_client import WSClient
 
 # =============================================================================
+# Camera optional behavior
+# =============================================================================
+# 기본: 카메라 없어도 agent는 살아있고 WS/접근은 가능 (NO_CAMERA 상태로 유지)
+# 예전처럼 "카메라 없으면 즉시 종료"하려면:
+#   set GESTUREOS_REQUIRE_CAMERA=1
+REQUIRE_CAMERA = os.environ.get("GESTUREOS_REQUIRE_CAMERA", "0").strip() in (
+    "1",
+    "true",
+    "True",
+    "YES",
+    "yes",
+)
+CAM_RETRY_SEC = float(os.environ.get("GESTUREOS_CAM_RETRY_SEC", "2.0"))
+NO_CAMERA_POLL_SEC = float(os.environ.get("GESTUREOS_NO_CAMERA_POLL_SEC", "0.20"))
+NO_CAMERA_STATUS_SEC = float(os.environ.get("GESTUREOS_NO_CAMERA_STATUS_SEC", "0.25"))
+
+# =============================================================================
 # SAFE imports for modes (import 실패해도 NameError로 죽지 않게)
 # =============================================================================
 _MODE_IMPORT_ERRS = []
@@ -141,6 +158,7 @@ OSK_TOGGLE_COOLDOWN_SEC = 1.2
 # =============================================================================
 UI_LOCK_HOLD_SEC = 2.0
 UI_LOCK_COOLDOWN_SEC = 1.0
+
 
 def _lm_to_payload(lm):
     if lm is None:
@@ -324,7 +342,7 @@ class HandsAgent:
             "other": deque(maxlen=5),
         }
 
-        # ✅✅ pinch debounce / hysteresis (cursor hand)  <-- (원래 _osk_toggle 아래에 있던 걸 여기로 이동)
+        # ✅✅ pinch debounce / hysteresis (cursor hand)
         self._pinch_down = False
         self._pinch_t0 = 0.0  # pinch candidate start time
         self._pinch_hold_ms = 90  # tweakable: 70~140ms
@@ -337,6 +355,13 @@ class HandsAgent:
             self._on_command,
             enabled=(not getattr(cfg, "no_ws", False)),
         )
+
+        # ---- camera state (optional) ----
+        self._cap = None
+        self._cam_ok = False
+        self._cam_err = ""
+        self._cam_last_try_wall = 0.0
+        self._last_nocam_status_wall = 0.0
 
         # boot: start_vkey면 바로 OSK 띄우기
         if str(self.mode).upper() == "VKEY":
@@ -691,6 +716,49 @@ class HandsAgent:
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         return cap
 
+    def _close_camera(self):
+        if self._cap is not None:
+            try:
+                self._cap.release()
+            except Exception:
+                pass
+        self._cap = None
+        self._cam_ok = False
+
+    def _try_open_camera(self) -> bool:
+        self._cam_last_try_wall = time.time()
+        try:
+            self._cap = self._open_camera()
+            self._cam_ok = True
+            self._cam_err = ""
+            print("[PY] camera opened", flush=True)
+            return True
+        except Exception as e:
+            self._cap = None
+            self._cam_ok = False
+            self._cam_err = f"{type(e).__name__}: {e}"
+            print("[PY] camera not available:", self._cam_err, flush=True)
+            return False
+
+    def _send_status_no_camera(self, fps: float = 0.0):
+        # 프론트/허드 접근용: 필드 구조는 그대로 유지하면서 tracking만 false로
+        self.cursor_bubble = f"NO CAMERA • retry {CAM_RETRY_SEC:.1f}s"
+        self._send_status(
+            fps=float(fps),
+            cursor_gesture="NONE",
+            other_gesture="NONE",
+            scroll_active=False,
+            can_mouse=False,
+            can_key=False,
+            rush_left=None,
+            rush_right=None,
+            cursor_lm=None,
+            other_lm=None,
+            cursor_cx=0.5,
+            cursor_cy=0.5,
+            got_cursor=False,
+        )
+
     # -------------------------------------------------------------------------
     # palette modal
     # -------------------------------------------------------------------------
@@ -860,15 +928,62 @@ class HandsAgent:
             flush=True,
         )
 
-        cap = self._open_camera()
+        # ✅ WS를 먼저 시작해서 "카메라 없어도 접근 가능" 상태 확보
         self.ws.start()
+
+        # 최초 카메라 시도
+        self._try_open_camera()
+
+        # 카메라 필수면 여기서 종료
+        if REQUIRE_CAMERA and (self._cap is None):
+            print("[PY] REQUIRE_CAMERA=1 but camera open failed -> exit", flush=True)
+            # 접근 UI에는 상태가 보이게 한 번은 보내고 종료
+            self._send_status_no_camera(fps=0.0)
+            return
 
         prev_t = now()
         fps = 0.0
 
         while True:
-            ok, frame = cap.read()
+            # ==========================
+            # NO CAMERA mode (keep alive)
+            # ==========================
+            if self._cap is None:
+                wall = time.time()
+
+                # preview 창이 열려있으면 닫아버림(카메라 없어도 창이 남는 현상 방지)
+                if self.window_open:
+                    try:
+                        cv2.destroyWindow("GestureOS Agent")
+                    except Exception:
+                        try:
+                            cv2.destroyAllWindows()
+                        except Exception:
+                            pass
+                    self.window_open = False
+                    self._request_close_preview = False
+
+                # 상태를 일정 주기로 계속 보내서 프론트/허드 접근 유지
+                if (wall - self._last_nocam_status_wall) >= NO_CAMERA_STATUS_SEC:
+                    self._last_nocam_status_wall = wall
+                    self._send_status_no_camera(fps=0.0)
+
+                # 주기적으로 카메라 재시도
+                if (wall - self._cam_last_try_wall) >= CAM_RETRY_SEC:
+                    self._try_open_camera()
+
+                time.sleep(max(0.01, NO_CAMERA_POLL_SEC))
+                continue
+
+            # ==========================
+            # CAMERA OK mode
+            # ==========================
+            ok, frame = self._cap.read()
             if not ok or frame is None:
+                # 카메라 끊김 -> NO_CAMERA로 전환하고 재시도 루프로
+                self._cam_ok = False
+                self._cam_err = "camera_read_failed"
+                self._close_camera()
                 continue
 
             frame = cv2.flip(frame, 1)
@@ -998,7 +1113,7 @@ class HandsAgent:
             # ============================================================
             # UI 잠금 토글 (FIST 2초 홀드) : ui_locked 상태에서도 해제 가능해야 함
             # - VKEY의 OSK 토글(FIST 0.8초)과 충돌 방지 위해 우선순위 높게 처리
-            # ============================================================  
+            # ============================================================
             block_osk_toggle_by_ui_lock = False
 
             if self.enabled and got_cursor and (cursor_gesture == "FIST"):
@@ -1019,7 +1134,6 @@ class HandsAgent:
                         if hasattr(self, "_apply_ui_locked_side_effects"):
                             self._apply_ui_locked_side_effects()
                         else:
-                            # 헬퍼 안 만들었으면 최소한 이것들
                             self._reset_side_effects()
                             hud = getattr(self.cfg, "hud", None)
                             if hud and self.palette_active:
@@ -1036,7 +1150,6 @@ class HandsAgent:
                     else:
                         self.cursor_bubble = "UI 해제!"
 
-                    # (선택) 서버/프론트가 이벤트를 듣고 있으면 같이 쏴주기
                     try:
                         self.send_event("UI_LOCK", {"locked": bool(self.ui_locked)})
                     except Exception:
@@ -1044,7 +1157,6 @@ class HandsAgent:
 
             else:
                 self.ui_lock_hold_start = None
-
 
             # ============================================================
             # Palette modal (최우선)  (단, UI 잠금 중이면 제스처로 열지 못하게)
@@ -1061,7 +1173,6 @@ class HandsAgent:
                     cursor_cy=cursor_cy,
                 )
             else:
-                # UI 잠김이면 팔레트가 열려있던 것도 강제 비활성(안전)
                 if self.palette_active:
                     hud = getattr(self.cfg, "hud", None)
                     if hud:
@@ -1087,7 +1198,13 @@ class HandsAgent:
                 )
 
             # ✅ VKEY에서 OSK 토글 사인: 주먹(FIST) 0.8초 홀드 (UI 잠금 중이면 막기)
-            if (not block_by_palette) and (not self.ui_locked) and (not block_osk_toggle_by_ui_lock) and mode_u == "VKEY" and self.enabled:
+            if (
+                (not block_by_palette)
+                and (not self.ui_locked)
+                and (not block_osk_toggle_by_ui_lock)
+                and mode_u == "VKEY"
+                and self.enabled
+            ):
                 if cursor_gesture == "FIST":
                     if self.osk_toggle_hold_start is None:
                         self.osk_toggle_hold_start = t
@@ -1192,10 +1309,13 @@ class HandsAgent:
 
             # VKEY: OSK는 띄우기만, 입력은 OS 커서 이동+클릭으로 처리
             if mode_u == "VKEY":
-                # 기존 정책 유지: gesture lock은 무의미하게 풀어둠
                 self.locked = False
-                # ✅ 하지만 UI 잠금이면 제스처 주입은 막아야 함
-                can_mouse_inject = self.enabled and (t >= self.reacquire_until) and (not no_inject) and (not self.ui_locked)
+                can_mouse_inject = (
+                    self.enabled
+                    and (t >= self.reacquire_until)
+                    and (not no_inject)
+                    and (not self.ui_locked)
+                )
                 can_draw_inject = False
                 can_kb_inject = False
                 can_ppt_inject = False
@@ -1211,15 +1331,12 @@ class HandsAgent:
                 can_vkey_detect = False
                 can_vkey_click = False
 
-            # UI 잠금이면 최종적으로 전부 차단(팔레트보다 바깥 안전망)
+            # UI 잠금이면 최종적으로 전부 차단
             if self.ui_locked:
                 can_mouse_inject = False
                 can_draw_inject = False
                 can_kb_inject = False
                 can_ppt_inject = False
-                # detect는 유지해도 되지만, 클릭/이동은 막아야 하니까 아래에서 move/click이 다 막힘
-                # (STATUS에서 tracking 표시는 계속 가능)
-                # can_vkey_detect/can_vkey_click은 여기서 끄면 OSK 관련도 완전 정지됨
                 can_vkey_detect = False
                 can_vkey_click = False
 
@@ -1294,7 +1411,7 @@ class HandsAgent:
                 if self.ppt:
                     self.ppt.reset()
 
-            # scroll (MOUSE only) ✅ VKEY에서 스크롤 제스처가 OSK 클릭을 방해할 수 있어서 차단
+            # scroll (MOUSE only)
             scroll_active = False
             if (
                 (mode_u == "MOUSE")
@@ -1394,14 +1511,18 @@ class HandsAgent:
                         cv2.destroyWindow("GestureOS Agent")
                     except Exception:
                         try:
-                            cv2.destroyAllWindows() 
+                            cv2.destroyAllWindows()
                         except Exception:
                             pass
                     self.window_open = False
                     self._request_close_preview = False
 
-        cap.release()
-        cv2.destroyAllWindows()
+        # cleanup
+        self._close_camera()
+        try:
+            cv2.destroyAllWindows()
+        except Exception:
+            pass
 
     # -------------------------------------------------------------------------
     # status
@@ -1455,10 +1576,13 @@ class HandsAgent:
             "otherLandmarks": _lm_to_payload(other_lm),
             "connected": bool(self.ws.connected),
 
+            # camera status (추가 키: 프론트가 몰라도 무시됨)
+            "cameraOk": bool(self._cam_ok),
+            "cameraErr": str(self._cam_err) if self._cam_err else "",
+
             # learner status
             "learnProfile": str(getattr(self.learner, "profile", "default")),
             "learnProfiles": list(getattr(self.learner, "list_profiles", lambda: ["default"])()),
-
             "learnEnabled": bool(self.learner.enabled),
             "learnCounts": self.learner.counts(),
             "learnLastPred": self.learner.last_pred,
@@ -1466,7 +1590,6 @@ class HandsAgent:
             "learnCapture": self.learner.capture,
             "learnProfile": getattr(self.learner, "profile", "default"),
             "learnHasBackup": bool(getattr(self.learner, "has_backup", lambda: False)()),
-
         }
 
         if getattr(self, "cursor_bubble", None):

@@ -1,4 +1,3 @@
-// src/main/java/com/example/gestureOSManager/service/LearnerProfileFileStore.java
 package com.example.gestureOSManager.service;
 
 import java.nio.charset.StandardCharsets;
