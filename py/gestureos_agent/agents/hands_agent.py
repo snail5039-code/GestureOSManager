@@ -614,10 +614,40 @@ class HandsAgent:
 
     def apply_settings(self, incoming: dict):
         try:
+            # 1) 설정 merge
             self.settings = merge_settings(self.settings, incoming)
             print("[PY] apply_settings -> version", self.settings.get("version"), flush=True)
+
+            # 2) ✅ gain(control_gain) 반영
+            # 들어오는 키가 control_gain / gain / controlGain 등으로 올 수 있으니 모두 허용
+            g = None
+            if isinstance(incoming, dict):
+                g = incoming.get("control_gain", None)
+                if g is None:
+                    g = incoming.get("gain", None)
+                if g is None:
+                    g = incoming.get("controlGain", None)
+
+            if g is not None:
+                try:
+                    g = float(g)
+                    # 서버/프론트와 동일하게 클램프
+                    g = max(0.2, min(4.0, g))
+
+                    # ControlMapper가 set_gain을 제공하면 그걸 우선 사용
+                    if hasattr(self.control, "set_gain") and callable(getattr(self.control, "set_gain")):
+                        self.control.set_gain(g)
+                    else:
+                        # 없으면 직접 필드 갱신
+                        setattr(self.control, "gain", g)
+
+                    print(f"[PY] control_gain applied -> {g}", flush=True)
+                except Exception as e:
+                    print("[PY] control_gain apply failed:", repr(e), flush=True)
+
         except Exception as e:
             print("[PY] apply_settings failed:", e, flush=True)
+
 
     # ---------- VKEY helpers ----------
     def _enter_vkey_mode(self):
@@ -1619,6 +1649,8 @@ class HandsAgent:
             "learnCapture": self.learner.capture,
             "learnProfile": getattr(self.learner, "profile", "default"),
             "learnHasBackup": bool(getattr(self.learner, "has_backup", lambda: False)()),
+
+            "gain": float(getattr(self.control, "gain", 1.0)),
         }
 
         if getattr(self, "cursor_bubble", None):

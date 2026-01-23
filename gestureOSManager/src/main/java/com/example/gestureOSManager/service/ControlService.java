@@ -63,6 +63,15 @@ public class ControlService {
     return send(AgentCommand.lock(enabled));
   }
 
+  // ✅ NEW: 감도(gain) - 기존 UPDATE_SETTINGS로 보냄 (python은 UPDATE_SETTINGS를 이미 처리함)
+  // 파이썬 쪽 키는 control_gain(AgentConfig 필드명)으로 보내는 게 안전함
+  public boolean setGain(double gain) {
+    double g = Math.max(0.2, Math.min(4.0, gain));
+    System.out.println("[SPRING] setGain(" + g + ") isConnected=" + sessions.isConnected());
+    log.info("[CTRL] registryRef={}", System.identityHashCode(sessions));
+    return send(AgentCommand.ofSettings(Map.of("control_gain", g)));
+  }
+
   // =========================
   // ✅ Training commands
   // =========================
