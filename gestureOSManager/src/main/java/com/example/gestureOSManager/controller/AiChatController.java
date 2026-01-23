@@ -135,7 +135,7 @@ public class AiChatController {
 
 	private static boolean looksLikeGestureQuestion(String msg) {
 		String s = normalizeForIntent(msg);
-
+  
 		// ✅ 가이드/제스처/모션 계열
 		if (s.contains("가이드") || s.contains("모션") || s.contains("제스처") || s.contains("gesture"))
 			return true;
