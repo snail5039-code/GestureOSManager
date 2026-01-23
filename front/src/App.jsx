@@ -21,7 +21,12 @@ export default function App() {
   const toggleHud = () => setHudOn((x) => !x);
 
   // 화면 전환
-  const [screen, setScreen] = useState("dashboard");
+// 화면 전환
+const [screen, setScreen] = useState(() => {
+  // 개발 중에는 gamePage로 바로 진입
+  if (import.meta.env.DEV) return "gamePage";
+  return "dashboard";
+});
 
   // Dashboard에서 올라오는 HUD 표시용 데이터
   const [hudFeed, setHudFeed] = useState(null);
