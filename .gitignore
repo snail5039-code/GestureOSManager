@@ -80,3 +80,7 @@ logs/
 .project
 .classpath
 .settings/
+
+# OpenAI 설정 파일 제외
+openai.yml
+**/src/main/resources/openai.yml

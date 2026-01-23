@@ -24,19 +24,18 @@ export default function App() {
     const v = localStorage.getItem("osHudOn");
     return v === null ? true : v === "1";
   });
+
   useEffect(() => {
     if (!window.managerWin?.onDeepLink) return;
 
     const off = window.managerWin.onDeepLink(async (rawUrl) => {
       try {
-        // gestureos://auth?code=...
         let code = null;
 
         try {
           const u = new URL(rawUrl);
           code = u.searchParams.get("code");
         } catch {
-          // 혹시 URL 파싱 실패하면 fallback
           const qs = rawUrl.split("?")[1] || "";
           code = new URLSearchParams(qs).get("code");
         }
@@ -57,12 +56,10 @@ export default function App() {
 
         const data = await res.json();
 
-        // accessToken 저장(너가 이미 ProfileCard에서 이걸 쓰고있음)
         if (data?.accessToken) {
           localStorage.setItem("accessToken", data.accessToken);
         }
 
-        // 가장 단순/확실: 새로고침해서 “내정보 로드 로직”이 다시 돌게 함
         window.location.reload();
       } catch (e) {
         console.error("deeplink auth failed:", e);
@@ -181,6 +178,7 @@ export default function App() {
         t.page,
       )}
     >
+      {/* background */}
       <div className="pointer-events-none fixed inset-0 z-0">
         <div
           className={cn(
@@ -197,6 +195,7 @@ export default function App() {
         <div className={cn("absolute inset-0 bg-[size:60px_60px]", t.grid)} />
       </div>
 
+      {/* TitleBar */}
       <div className="relative z-30">
         <TitleBar
           hudOn={hudOn}
@@ -215,18 +214,15 @@ export default function App() {
         />
       </div>
 
+      {/* ✅ 핵심: HUD(오버레이)가 바닥을 덮어도 콘텐츠가 안 가려지게 main에 bottom padding */}
       <main
         className={cn(
-          "relative z-10 flex-1 min-h-0 min-w-0",
+          "relative z-10 flex-1 min-h-0 min-w-0 text-sm",
           screen === "rush" ? "overflow-hidden" : "overflow-auto",
+          screen !== "rush" ? (hudOn ? "pb-28" : "pb-6") : "",
         )}
       >
-        <div
-          className={cn(
-            screen === "dashboard" ? "block" : "hidden",
-            "w-full h-full min-h-0 min-w-0",
-          )}
-        >
+        <div className={cn(screen === "dashboard" ? "block" : "hidden", "w-full min-w-0")}>
           <Dashboard
             hudOn={hudOn}
             onToggleHud={toggleHud}
@@ -239,15 +235,13 @@ export default function App() {
         </div>
 
         {screen === "rush" && (
-          <Rush3DPage
-            status={hudFeed?.status}
-            connected={hudFeed?.connected ?? true}
-          />
+          <Rush3DPage status={hudFeed?.status} connected={hudFeed?.connected ?? true} />
         )}
         {screen === "settings" && <Settings theme={theme} />}
         {screen === "train" && <TrainingLab theme={theme} />}
       </main>
 
+      {/* overlays */}
       <div className="relative z-40">
         {hudOn && (
           <AgentHud
@@ -256,14 +250,11 @@ export default function App() {
             modeOptions={hudFeed?.modeOptions}
             onSetMode={(m) => hudActionsRef.current.applyMode?.(m)}
             onEnableToggle={(next) =>
-              next
-                ? hudActionsRef.current.start?.()
-                : hudActionsRef.current.stop?.()
+              next ? hudActionsRef.current.start?.() : hudActionsRef.current.stop?.()
             }
             onPreviewToggle={() => hudActionsRef.current.togglePreview?.()}
             onLockToggle={(nextLocked) => {
-              if (hudActionsRef.current.setLock)
-                return hudActionsRef.current.setLock(nextLocked);
+              if (hudActionsRef.current.setLock) return hudActionsRef.current.setLock(nextLocked);
               return hudActionsRef.current.lockToggle?.();
             }}
             onRequestHide={() => setHudOn(false)}

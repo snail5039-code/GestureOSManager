@@ -11,8 +11,6 @@ export default defineConfig({
 
   server: {
     proxy: {
-      // ✅ 회원/인증만 Spring(8082)로 보낸다
-      // (순서 중요: 아래 "/api" 보다 위에 있어야 함)
       "/api/members": {
         target: "http://localhost:8082",
         changeOrigin: true,
@@ -34,15 +32,19 @@ export default defineConfig({
         secure: false,
       },
 
-      // ✅ 그 외 /api는 전부 Agent(8080)
-      // - /api/status, /api/train/stats, /api/pairing, /api/hud/show, /api/settings ...
       "/api": {
         target: "http://localhost:8080",
         changeOrigin: true,
         secure: false,
       },
 
-      // 필요하면 WS도 8080으로
+      // ✅ 추가
+      "/motion": {
+        target: "http://localhost:8080",
+        changeOrigin: true,
+        secure: false,
+      },
+
       // "/ws": { target: "ws://localhost:8080", ws: true, changeOrigin: true },
     },
   },

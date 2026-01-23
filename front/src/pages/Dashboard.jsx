@@ -1,4 +1,3 @@
-// src/pages/Dashboard.jsx
 import axios from "axios";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -10,7 +9,6 @@ import DebugChat from "../components/DebugChat";
 const POLL_MS = 500;
 
 const MODE_OPTIONS = ["MOUSE", "KEYBOARD", "PRESENTATION", "DRAW", "VKEY"];
-
 const MODE_LABEL = {
   MOUSE: "마우스",
   KEYBOARD: "키보드",
@@ -39,12 +37,6 @@ function formatNum(n, digits = 1) {
   return Number(n).toFixed(digits);
 }
 
-/**
- * 카메라(비디오 입력) 장치 존재 여부 체크
- * - true: videoinput 존재
- * - false: videoinput 없음
- * - null: 환경/권한 등으로 판별 불가 (이 경우는 기능을 막지 않음)
- */
 async function detectCameraPresent() {
   try {
     if (!navigator.mediaDevices?.enumerateDevices) return null;
@@ -61,12 +53,7 @@ async function detectCameraPresent() {
 function IconPlay() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="opacity-90">
-      <path
-        d="M8 5v14l12-7-12-7Z"
-        stroke="currentColor"
-        strokeWidth="1.7"
-        strokeLinejoin="round"
-      />
+      <path d="M8 5v14l12-7-12-7Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -74,12 +61,7 @@ function IconPlay() {
 function IconStop() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="opacity-90">
-      <path
-        d="M7 7h10v10H7V7Z"
-        stroke="currentColor"
-        strokeWidth="1.7"
-        strokeLinejoin="round"
-      />
+      <path d="M7 7h10v10H7V7Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -127,12 +109,7 @@ function IconLock() {
         strokeWidth="1.7"
         strokeLinecap="round"
       />
-      <path
-        d="M7 11h10v10H7V11Z"
-        stroke="currentColor"
-        strokeWidth="1.7"
-        strokeLinejoin="round"
-      />
+      <path d="M7 11h10v10H7V11Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -186,7 +163,7 @@ function Card({ t, title, right, children, accent = "slate", className, bodyClas
   return (
     <div
       className={cn(
-        "rounded-2xl ring-1 overflow-hidden flex flex-col",
+        "rounded-xl ring-1 overflow-hidden flex flex-col",
         t.panel,
         shadow,
         "transition-transform duration-200 hover:-translate-y-[1px]",
@@ -196,14 +173,14 @@ function Card({ t, title, right, children, accent = "slate", className, bodyClas
       <div className={cn("h-px w-full bg-gradient-to-r", topLine[accent] || topLine.slate)} />
       <div
         className={cn(
-          "flex items-center justify-between px-5 py-4 border-b",
+          "flex items-center justify-between px-4 py-2.5 border-b",
           isBright ? "border-slate-200" : "border-white/10",
         )}
       >
         <div className={cn("text-sm font-semibold", t.text)}>{title}</div>
         {right}
       </div>
-      <div className={cn("px-5 py-4 flex-1 min-h-0", bodyClassName)}>{children}</div>
+      <div className={cn("px-4 py-3", bodyClassName)}>{children}</div>
     </div>
   );
 }
@@ -212,7 +189,7 @@ function Btn({ t, className, ...props }) {
   return (
     <button
       className={cn(
-        "w-full rounded-2xl py-3 text-sm font-semibold ring-1 transition disabled:opacity-50 disabled:cursor-not-allowed",
+        "w-full rounded-xl py-2.25 text-sm font-semibold ring-1 transition disabled:opacity-50 disabled:cursor-not-allowed",
         t.btn,
         className,
       )}
@@ -241,7 +218,7 @@ function ActionTile({ t, tone = "slate", icon, title, desc, className, ...props 
   return (
     <button
       className={cn(
-        "w-full rounded-2xl p-4 ring-1 transition text-left disabled:opacity-50 disabled:cursor-not-allowed",
+        "w-full rounded-xl p-2.5 ring-1 transition text-left disabled:opacity-50 disabled:cursor-not-allowed",
         isBright ? "shadow-[0_10px_30px_rgba(15,23,42,0.08)]" : "shadow-[0_10px_35px_rgba(0,0,0,0.25)]",
         map[tone] || map.slate,
         className,
@@ -249,7 +226,7 @@ function ActionTile({ t, tone = "slate", icon, title, desc, className, ...props 
       {...props}
     >
       <div className="flex items-center gap-3">
-        <div className={cn("h-11 w-11 rounded-2xl ring-1 grid place-items-center", chipMap[tone] || chipMap.slate)}>
+        <div className={cn("h-10 w-10 rounded-xl ring-1 grid place-items-center", chipMap[tone] || chipMap.slate)}>
           <div className={cn(t.text)}>{icon}</div>
         </div>
 
@@ -284,9 +261,7 @@ function Switch({ t, checked, onChange, disabled }) {
       aria-checked={checked}
       role="switch"
     >
-      <span
-        className={cn("inline-block h-5 w-5 transform rounded-full bg-white transition", checked ? "translate-x-5" : "translate-x-1")}
-      />
+      <span className={cn("inline-block h-5 w-5 transform rounded-full bg-white transition", checked ? "translate-x-5" : "translate-x-1")} />
     </button>
   );
 }
@@ -316,9 +291,9 @@ function StatTile({ t, label, value, tone = "slate" }) {
               : "ring-white/12";
 
   return (
-    <div className={cn("rounded-lg ring-1 px-3 py-2 overflow-hidden", t.panelSoft, ring)}>
-      <div className={cn("text-[11px] leading-4", t.muted)}>{label}</div>
-      <div className={cn("mt-0.5 font-semibold text-[12px] leading-4", t.text)}>{value}</div>
+    <div className={cn("rounded-md ring-1 px-3 py-1.5 overflow-hidden", t.panelSoft, ring)}>
+      <div className={cn("text-[10px] leading-4", t.muted)}>{label}</div>
+      <div className={cn("mt-0.5 font-semibold text-[11px] leading-4", t.text)}>{value}</div>
     </div>
   );
 }
@@ -345,7 +320,11 @@ function PointerMiniMap({ t, theme, x, y }) {
       <div
         className={cn(
           "mt-3 relative h-20 rounded-lg ring-1 overflow-hidden",
-          forceWhiteMap ? "bg-white ring-violet-200" : isBright ? "bg-white ring-slate-200" : "bg-slate-900/35 ring-white/12",
+          forceWhiteMap
+            ? "bg-white ring-violet-200"
+            : isBright
+              ? "bg-white ring-slate-200"
+              : "bg-slate-900/35 ring-white/12",
         )}
       >
         <div className="absolute inset-0 opacity-[0.18]">
@@ -384,12 +363,8 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
   const unmountedRef = useRef(false);
 
   const [showRaw, setShowRaw] = useState(false);
-  const [copied, setCopied] = useState(false);
 
-  // ✅ 카메라 연결 여부(TitleBar로 올릴 값)
-  const [cameraPresent, setCameraPresent] = useState(null); // null=모름/판별불가
-
-  // ✅ 모달(카메라 미연결 등)
+  const [cameraPresent, setCameraPresent] = useState(null);
   const [modal, setModal] = useState({ open: false, title: "", message: "" });
 
   const closeModal = useCallback(() => {
@@ -400,7 +375,6 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
     setModal({ open: true, title, message });
   }, []);
 
-  // ESC로 모달 닫기
   useEffect(() => {
     if (!modal.open) return;
     const onKey = (e) => {
@@ -410,7 +384,6 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
     return () => window.removeEventListener("keydown", onKey);
   }, [modal.open, closeModal]);
 
-  // 최초 1회 카메라 존재 체크
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -422,12 +395,12 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
     };
   }, []);
 
-  // ✅ 로그인 유저의 학습 프로필(u{id}__main)을 자동 적용(반자동 개인화)
   const memberIdRaw = useMemo(
     () => user?.id ?? user?.memberId ?? user?.member_id ?? user?.email ?? null,
     [user],
   );
   const autoProfileDoneRef = useRef(false);
+
   useEffect(() => {
     const connected = !!status?.connected;
     if (!connected) return;
@@ -448,8 +421,9 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
         await api.post(`/train/profile/set?name=${encodeURIComponent(target)}`, null, {
           headers: { "X-User-Id": String(memberIdRaw) },
         });
-        autoProfileDoneRef.current = true;
       } catch {
+        // ignore
+      } finally {
         autoProfileDoneRef.current = true;
       }
     })();
@@ -481,6 +455,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
           : typeof s.isTracking === "boolean"
             ? s.isTracking
             : null,
+      controlGain: typeof s.controlGain === "number" ? s.controlGain : null,
     };
   }, [status, mode]);
 
@@ -570,7 +545,6 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
     [fetchStatus],
   );
 
-  // ✅ 시작: 카메라 없으면 모달 + (채팅 탭이 열려있으면) 채팅에도 안내
   const start = useCallback(
     async (ctx = { source: "ui" }) => {
       const ok = await detectCameraPresent();
@@ -578,11 +552,9 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
 
       if (ok === false) {
         openModal("카메라 미연결", "카메라를 연결하세요.");
-
         if (ctx?.source !== "chat") {
-          window.__GOS_CHAT_LOG__?.("카메라 연결 후 사용 가능.");
+          window.__GOS_CHAT_LOG__?.("system", "카메라 연결 후 사용 가능");
         }
-
         return { ok: false, reason: "camera", message: "카메라 연결 후 사용 가능." };
       }
 
@@ -607,7 +579,6 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
 
   const stop = useCallback(() => postJson("/control/stop"), [postJson]);
 
-  // ✅ 프리뷰 토글: 켜려고 할 때 카메라 없으면 모달 + (채팅 탭이면 메시지로)
   const togglePreview = useCallback(
     async (want, ctx = { source: "ui" }) => {
       if (previewBusyRef.current) return { ok: false, reason: "busy" };
@@ -625,11 +596,9 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
 
         if (ok === false) {
           openModal("카메라 미연결", "카메라를 연결하세요.");
-
           if (ctx?.source !== "chat") {
-            window.__GOS_CHAT_LOG__?.("카메라 연결 후 Preview 사용 가능.");
+            window.__GOS_CHAT_LOG__?.("system", "카메라 연결 후 Preview 사용 가능");
           }
-
           return { ok: false, reason: "camera", message: "카메라 연결 후 Preview 사용 가능." };
         }
       }
@@ -662,7 +631,6 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
     [fetchStatus, openModal],
   );
 
-  // ✅ 모드 변경: 실행이 꺼져있으면 자동 start 하는데, 이때도 카메라 없으면 모달 + 채팅 안내
   const applyMode = useCallback(
     async (nextMode, ctx = { source: "ui" }) => {
       setMode(nextMode);
@@ -675,11 +643,9 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
 
           if (ok === false) {
             openModal("카메라 미연결", "카메라를 연결하세요.");
-
             if (ctx?.source !== "chat") {
-              window.__GOS_CHAT_LOG__?.("카메라 연결 후 모드 변경 가능.");
+              window.__GOS_CHAT_LOG__?.("system", "카메라 연결 후 모드 변경 가능");
             }
-
             return { ok: false, reason: "camera", message: "카메라 연결 후 모드 변경 가능." };
           }
 
@@ -721,11 +687,35 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
     [fetchStatus],
   );
 
-  useEffect(() => {
-    onHudActions?.({ start, stop, applyMode, togglePreview, fetchStatus, setLock });
-  }, [onHudActions, start, stop, applyMode, togglePreview, fetchStatus, setLock]);
+  const setGain = useCallback(
+    async (gain) => {
+      const g = Math.max(0.2, Math.min(4.0, Number(gain)));
 
-  // ✅ TitleBar로 카메라 미연결 칩 올림
+      setBusy(true);
+      setError("");
+      try {
+        await api.post("/control/gain", null, { params: { gain: g } });
+        localStorage.setItem("gos_control_gain", String(g));
+        await fetchStatus();
+        return { ok: true, gain: g };
+      } catch (e) {
+        const msg = e?.response
+          ? `감도 변경 실패 (HTTP ${e.response.status})${e.response.data ? `: ${String(e.response.data)}` : ""}`
+          : e?.message || "감도 변경 실패";
+        setError(msg);
+        return { ok: false, reason: "http", message: msg };
+      } finally {
+        setBusy(false);
+      }
+    },
+    [fetchStatus],
+  );
+
+  useEffect(() => {
+    // ✅ setGain도 같이 넘겨둬 (나중에 HUD/다른 화면에서도 쓸 수 있게)
+    onHudActions?.({ start, stop, applyMode, togglePreview, fetchStatus, setLock, setGain });
+  }, [onHudActions, start, stop, applyMode, togglePreview, fetchStatus, setLock, setGain]);
+
   useEffect(() => {
     onHudState?.({
       status,
@@ -743,9 +733,8 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
   const isBright = theme === "light" || theme === "rose";
 
   return (
-    <div className={cn("w-full h-full min-h-0 overflow-hidden relative", t.page)}>
-      {/* Content */}
-      <div className="relative w-full h-full min-h-0 px-5 pt-0 pb-0 md:px-6 md:pt-6 md:pb-0 flex flex-col gap-5">
+    <div className={cn("w-full min-w-0 relative", t.page)}>
+      <div className="relative w-full min-w-0 px-4 pt-0 pb-10 md:px-6 md:pt-4 md:pb-10 flex flex-col gap-4">
         {error ? (
           <div
             className={cn(
@@ -757,10 +746,9 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
           </div>
         ) : null}
 
-        {/* ✅ FIX 1) items-start: 오른쪽이 왼쪽 높이에 맞춰 '늘어나는(stretch)' 현상 제거 */}
-        <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-          {/* left (그대로 유지) */}
-          <div className="lg:col-span-5 min-h-0 flex flex-col gap-5">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
+          {/* left */}
+          <div className="lg:col-span-5 flex flex-col gap-4">
             <ProfileCard t={t} theme={theme} />
 
             <Card t={t} title="모드" accent="blue">
@@ -770,7 +758,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
                   onChange={(e) => applyMode(e.target.value)}
                   disabled={busy}
                   className={cn(
-                    "w-full rounded-xl ring-1 px-3 py-2 text-sm outline-none focus:ring-2 disabled:opacity-50",
+                    "w-full rounded-xl ring-1 px-3 py-1.5 text-sm outline-none focus:ring-2 disabled:opacity-50",
                     t.input,
                     isBright ? "focus:ring-sky-400/40" : "focus:ring-sky-500/45",
                   )}
@@ -821,7 +809,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
                 />
               </div>
 
-              <div className={cn("mt-4 rounded-2xl ring-1 p-4 space-y-3", t.panelSoft)}>
+              <div className={cn("mt-3 rounded-xl ring-1 p-3 space-y-3", t.panelSoft)}>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <span className={cn(t.text2)}>
@@ -854,12 +842,12 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
                 </div>
               </div>
 
-              <Btn t={t} onClick={fetchStatus} disabled={busy} className="mt-4 flex items-center justify-center gap-2">
+              <Btn t={t} onClick={fetchStatus} disabled={busy} className="mt-3 flex items-center justify-center gap-2">
                 <IconRefresh spinning={busy} />
                 새로고침
               </Btn>
 
-              <div className="mt-4 grid grid-cols-2 gap-2">
+              <div className="mt-3 grid grid-cols-2 gap-2">
                 <StatTile t={t} label="FPS" value={formatNum(derived.fps, 1)} tone="blue" />
                 <StatTile t={t} label="현재 제스처" value={derived.gesture} tone="slate" />
               </div>
@@ -867,8 +855,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
           </div>
 
           {/* right */}
-          {/* ✅ FIX 2) rows 두번째를 1fr로 안 늘리고 auto로: 오른쪽만 위로 올라가게 */}
-          <div className="lg:col-span-7 grid gap-5 grid-rows-[minmax(260px,45vh)_auto]">
+          <div className="lg:col-span-7 grid gap-4 grid-rows-[auto_auto]">
             <Card
               t={t}
               title="상태"
@@ -914,27 +901,20 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
                 <div className={cn("rounded-xl ring-1 p-3", t.panelSoft)}>
                   <div className={cn("text-xs", t.muted)}>요약</div>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    <Badge t={t} tone="slate">
-                      제스처: {derived.gesture}
-                    </Badge>
-                    <Badge t={t} tone={preview ? "blue" : "slate"}>
-                      {preview ? "Preview ON" : "Preview OFF"}
-                    </Badge>
-                    <Badge t={t} tone="slate">
-                      Mode: {view.modeText}
-                    </Badge>
+                    <Badge t={t} tone="slate">제스처: {derived.gesture}</Badge>
+                    <Badge t={t} tone={preview ? "blue" : "slate"}>{preview ? "Preview ON" : "Preview OFF"}</Badge>
+                    <Badge t={t} tone="slate">Mode: {view.modeText}</Badge>
                   </div>
                 </div>
               </div>
             </Card>
 
-            <Card t={t} title="명령 채팅창" accent="slate" className="min-h-0" bodyClassName="min-h-0">
-              {/* ✅ FIX 3) 채팅 영역 높이를 '고정/상한'으로 잡아서 내부 스크롤이 항상 생기게 */}
-              <div className="h-[min(46vh,325px)] min-h-0 flex flex-col">
+            <Card t={t} title="명령 채팅창" accent="slate">
+              <div className="h-[min(42vh,300px)] flex flex-col">
                 {showRaw ? (
                   <pre
                     className={cn(
-                      "text-xs leading-relaxed overflow-auto flex-1 min-h-0 rounded-xl ring-1 p-4",
+                      "text-xs leading-relaxed overflow-auto flex-1 rounded-xl ring-1 p-4",
                       t.panelSolid || t.panel2 || t.panel,
                       t.input,
                     )}
@@ -948,6 +928,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
                     preview={preview}
                     derived={derived}
                     view={view}
+                    cameraPresent={cameraPresent}
                     actions={{
                       start: (ctx) => start(ctx ?? { source: "ui" }),
                       stop,
@@ -955,6 +936,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
                       togglePreview,
                       fetchStatus,
                       setLock,
+                      setGain,
                     }}
                   />
                 )}
@@ -964,7 +946,6 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
         </div>
       </div>
 
-      {/* ✅ Modal (Portal) — 모달 유지 / X 버튼 제거 */}
       {modal.open
         ? createPortal(
             <div
