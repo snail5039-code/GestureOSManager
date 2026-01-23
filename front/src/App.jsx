@@ -231,6 +231,7 @@ export default function App() {
               hudActionsRef.current = actions || {};
             }}
             theme={theme}
+            onChangeScreen={setScreen}
           />
         </div>
 

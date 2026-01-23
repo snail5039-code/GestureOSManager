@@ -343,7 +343,7 @@ function PointerMiniMap({ t, theme, x, y }) {
 /* =========================
    Dashboard
 ========================= */
-export default function Dashboard({ onHudState, onHudActions, theme = "dark" } = {}) {
+export default function Dashboard({ onHudState, onHudActions, theme = "dark", onChangeScreen} = {}) {
   const { user, isAuthed } = useAuth();
 
   const [status, setStatus] = useState(null);
@@ -749,7 +749,9 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark" } =
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
           {/* left */}
           <div className="lg:col-span-5 flex flex-col gap-4">
-            <ProfileCard t={t} theme={theme} />
+            <ProfileCard t={t} theme={theme}
+            onOpenTraining={() => onChangeScreen && onChangeScreen("train")} 
+          />
 
             <Card t={t} title="모드" accent="blue">
               <div className="space-y-3">
