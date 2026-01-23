@@ -233,7 +233,16 @@ class HandsAgent:
             self.locked = False
 
         self.preview = (not getattr(cfg, "headless", False))
+
+        # ✅ 기본: 오른손이 주손(커서손)
         self.cursor_hand_label = "Left" if getattr(cfg, "force_cursor_left", False) else "Right"
+        print(
+            "[CFG] force_cursor_left=",
+            getattr(cfg, "force_cursor_left", None),
+            "cursor_hand_label=",
+            self.cursor_hand_label,
+            flush=True,
+        )
 
         self.control = ControlMapper(
             control_box=getattr(cfg, "control_box", (0.3, 0.35, 0.7, 0.92)),
@@ -310,6 +319,8 @@ class HandsAgent:
 
         # mediapipe hands
         self.mp_hands = mp.solutions.hands
+
+        # ✅ (양손 인식이 끊기면 아래 두 값을 0.4로 낮춰도 됨)
         self.hands = self.mp_hands.Hands(
             static_image_mode=False,
             max_num_hands=2,
@@ -648,7 +659,6 @@ class HandsAgent:
         except Exception as e:
             print("[PY] apply_settings failed:", e, flush=True)
 
-
     # ---------- VKEY helpers ----------
     def _enter_vkey_mode(self):
         """VKEY 진입 시: 윈도우 가상 키보드(터치 키보드/osk) 띄우기."""
@@ -819,7 +829,6 @@ class HandsAgent:
 
         return self._pinch_down
 
-    # ---------- palette modal ----------
     def _update_palette_modal(
         self,
         t: float,
@@ -841,9 +850,7 @@ class HandsAgent:
             self.palette_cancel_start = None
             return False
 
-        # -----------------------
-        # open trigger (inactive -> active)
-        # -----------------------
+        # open trigger
         if (
             (not self.palette_active)
             and self.enabled
@@ -900,7 +907,7 @@ class HandsAgent:
                 self.palette_cancel_start = None
                 self._reset_side_effects()
 
-                # ✅ 팔레트 닫힌 뒤 복구: 결과가 VKEY이고, 열기 전 OSK가 켜져있었으면 다시 켜기
+                # ✅ 팔레트 닫힌 뒤 복구
                 if str(self.mode).upper() == "VKEY" and self.palette_prev_osk_open:
                     self._osk_open()
                 self.palette_prev_osk_open = False
@@ -917,7 +924,7 @@ class HandsAgent:
                 self.palette_cancel_start = None
                 self._reset_side_effects()
 
-                # ✅ 취소도 복구: 현재 모드가 VKEY이고, 열기 전 OSK가 켜져있었으면 다시 켜기
+                # ✅ 취소도 복구
                 if str(self.mode).upper() == "VKEY" and self.palette_prev_osk_open:
                     self._osk_open()
                 self.palette_prev_osk_open = False
@@ -927,7 +934,7 @@ class HandsAgent:
         return bool(self.palette_active)
 
     # -------------------------------------------------------------------------
-    # main loop
+    # main loop helpers
     # -------------------------------------------------------------------------
     def _smooth_pred(self, hand: str, pred, score: float, rule: str):
         if pred is None:
@@ -951,7 +958,9 @@ class HandsAgent:
 
         return (lab, avg)
 
-    # ---------- main loop ----------
+    # -------------------------------------------------------------------------
+    # main loop
+    # -------------------------------------------------------------------------
     def run(self):
         print("[PY] running:", os.path.abspath(__file__), flush=True)
         print(
@@ -970,7 +979,6 @@ class HandsAgent:
         # 카메라 필수면 여기서 종료
         if REQUIRE_CAMERA and (self._cap is None):
             print("[PY] REQUIRE_CAMERA=1 but camera open failed -> exit", flush=True)
-            # 접근 UI에는 상태가 보이게 한 번은 보내고 종료
             self._send_status_no_camera(fps=0.0)
             return
 
@@ -984,7 +992,6 @@ class HandsAgent:
             if self._cap is None:
                 wall = time.time()
 
-                # preview 창이 열려있으면 닫아버림(카메라 없어도 창이 남는 현상 방지)
                 if self.window_open:
                     try:
                         cv2.destroyWindow("GestureOS Agent")
@@ -996,12 +1003,10 @@ class HandsAgent:
                     self.window_open = False
                     self._request_close_preview = False
 
-                # 상태를 일정 주기로 계속 보내서 프론트/허드 접근 유지
                 if (wall - self._last_nocam_status_wall) >= NO_CAMERA_STATUS_SEC:
                     self._last_nocam_status_wall = wall
                     self._send_status_no_camera(fps=0.0)
 
-                # 주기적으로 카메라 재시도
                 if (wall - self._cam_last_try_wall) >= CAM_RETRY_SEC:
                     self._try_open_camera()
 
@@ -1013,13 +1018,12 @@ class HandsAgent:
             # ==========================
             ok, frame = self._cap.read()
             if not ok or frame is None:
-                # 카메라 끊김 -> NO_CAMERA로 전환하고 재시도 루프로
                 self._cam_ok = False
                 self._cam_err = "camera_read_failed"
                 self._close_camera()
                 continue
 
-            frame = cv2.flip(frame, 1)
+            frame = cv2.flip(frame, 1)  # mirror
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
             t = now()
@@ -1055,49 +1059,40 @@ class HandsAgent:
                 except Exception as e:
                     print("[RUSH_COLOR] tracker error:", e, flush=True)
 
+            # ============================================================
+            # ✅✅ 핵심 수정:
+            # - handedness(Left/Right) 신뢰하지 말고, 화면 x 위치로 왼손/오른손을 분리
+            # - mirror(frame flip) 기준에서 "오른손=화면 오른쪽"을 주손으로 선택
+            # ============================================================
             cursor_lm = None
             other_lm = None
             if hands_list:
-                # NOTE: frame = cv2.flip(frame, 1) (미러) 상태로 MediaPipe를 돌리면
-                # handedness(Left/Right)가 물리 손 기준으로 뒤집혀 나오는 경우가 많음.
-                # 그래서 여기서 한 번 swap 해서 "사용자 실제 손" 기준으로 맞춘다.
-                hands_phys = []
+                hands_with_pos = []
                 for label, lm in hands_list:
-                    if label == "Left":
-                        plabel = "Right"
-                    elif label == "Right":
-                        plabel = "Left"
+                    try:
+                        cx, cy = palm_center(lm)
+                    except Exception:
+                        cx, cy = (0.5, 0.5)
+                    hands_with_pos.append((cx, label, lm))
+
+                hands_with_pos.sort(key=lambda x: x[0])  # left -> right (screen)
+
+                if len(hands_with_pos) == 1:
+                    cursor_lm = hands_with_pos[0][2]
+                    other_lm = None
+                else:
+                    left_lm = hands_with_pos[0][2]
+                    right_lm = hands_with_pos[-1][2]
+                    if self.cursor_hand_label == "Right":
+                        cursor_lm = right_lm
+                        other_lm = left_lm
                     else:
-                        plabel = label
-                    hands_phys.append((plabel, lm))
-
-                # ✅ 주손(커서손): 설정된 handedness랑 일치하는 손만 주손으로
-                for label, lm in hands_phys:
-                    if label == self.cursor_hand_label:
-                        cursor_lm = lm
-                        break
-
-                # ✅ 보조손: 반대 handedness
-                for label, lm in hands_phys:
-                    if label in ("Left", "Right") and label != self.cursor_hand_label:
-                        other_lm = lm
-                        break
-
-                # handedness가 None으로 오는 경우만 "순서" fallback
-                if cursor_lm is None and other_lm is None:
-                    cursor_lm = hands_phys[0][1]
-                    if len(hands_phys) >= 2:
-                        other_lm = hands_phys[1][1]
-                elif other_lm is None and cursor_lm is not None and len(hands_phys) >= 2:
-                    for _label, lm in hands_phys:
-                        if lm is not cursor_lm:
-                            other_lm = lm
-                            break
+                        cursor_lm = left_lm
+                        other_lm = right_lm
 
             self.learner.tick_capture(cursor_lm=cursor_lm, other_lm=other_lm)
 
             got_cursor = (cursor_lm is not None)
-
 
             if got_cursor:
                 cursor_cx, cursor_cy = palm_center(cursor_lm)
@@ -1170,13 +1165,12 @@ class HandsAgent:
             effective_locked = bool(self.ui_locked) or bool(self.locked)
 
             # ============================================================
-            # UI 잠금 토글 (FIST 2초 홀드) : ui_locked 상태에서도 해제 가능해야 함
-            # - VKEY의 OSK 토글(FIST 0.8초)과 충돌 방지 위해 우선순위 높게 처리
+            # UI 잠금 토글 (FIST 2초 홀드)
             # ============================================================
             block_osk_toggle_by_ui_lock = False
 
             if self.enabled and got_cursor and (cursor_gesture == "FIST"):
-                block_osk_toggle_by_ui_lock = True  # FIST 잡고있는 동안은 OSK 토글 막기
+                block_osk_toggle_by_ui_lock = True
 
                 if self.ui_lock_hold_start is None:
                     self.ui_lock_hold_start = t
@@ -1189,7 +1183,6 @@ class HandsAgent:
                     self.ui_lock_hold_start = None
 
                     if self.ui_locked:
-                        # 잠그는 순간: 드래그/키다운/팔레트 등 즉시 정리
                         if hasattr(self, "_apply_ui_locked_side_effects"):
                             self._apply_ui_locked_side_effects()
                         else:
@@ -1244,7 +1237,7 @@ class HandsAgent:
                 self.palette_confirm_start = None
                 self.palette_cancel_start = None
 
-            # UI menu (HUD) (UI 잠금 중이면 제스처 처리 막기)
+            # UI menu (HUD)
             if (not block_by_palette) and (not self.ui_locked) and self.ui_menu:
                 _ = self.ui_menu.update(
                     t=t,
@@ -1279,7 +1272,7 @@ class HandsAgent:
             else:
                 self.osk_toggle_hold_start = None
 
-            # NEXT_MODE when locked: both OPEN_PALM hold (팔레트 중엔 막기, UI 잠금 중엔 막기)
+            # NEXT_MODE when locked: both OPEN_PALM hold
             if (
                 (not block_by_palette)
                 and (not self.ui_locked)
@@ -1309,7 +1302,7 @@ class HandsAgent:
             kb_bindings = ((self.settings.get("bindings") or {}).get("KEYBOARD") or {})
             ppt_bindings = ((self.settings.get("bindings") or {}).get("PRESENTATION") or {})
 
-            # LOCK only in MOUSE (팔레트 중엔 막기, UI 잠금 중엔 막기)
+            # LOCK only in MOUSE
             if (not block_by_palette) and (not self.ui_locked) and mode_u == "MOUSE" and self.mouse_lock:
                 self.locked = self.mouse_lock.update(
                     t=t,
@@ -1647,7 +1640,6 @@ class HandsAgent:
             "learnLastPred": self.learner.last_pred,
             "learnLastTrainTs": float(self.learner.last_train_ts or 0.0),
             "learnCapture": self.learner.capture,
-            "learnProfile": getattr(self.learner, "profile", "default"),
             "learnHasBackup": bool(getattr(self.learner, "has_backup", lambda: False)()),
 
             "gain": float(getattr(self.control, "gain", 1.0)),
