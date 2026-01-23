@@ -1,4 +1,4 @@
-// 예: src/api/agentWs.js
+// src/api/agentWs.js
 let ws;
 
 export function connectAgentWs(url = "ws://127.0.0.1:8080/ws/agent") {

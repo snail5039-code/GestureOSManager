@@ -1,4 +1,4 @@
-# main.py
+# py/main.py
 import os
 import sys
 import time
