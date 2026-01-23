@@ -1,3 +1,4 @@
+// src/pages/Dashboard.jsx
 import axios from "axios";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -52,7 +53,7 @@ async function detectCameraPresent() {
 ========================= */
 function IconPlay() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="opacity-90">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="opacity-90">
       <path d="M8 5v14l12-7-12-7Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
     </svg>
   );
@@ -60,7 +61,7 @@ function IconPlay() {
 
 function IconStop() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="opacity-90">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="opacity-90">
       <path d="M7 7h10v10H7V7Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
     </svg>
   );
@@ -69,8 +70,8 @@ function IconStop() {
 function IconRefresh({ spinning }) {
   return (
     <svg
-      width="18"
-      height="18"
+      width="16"
+      height="16"
       viewBox="0 0 24 24"
       fill="none"
       className={cn("opacity-90", spinning && "animate-spin")}
@@ -88,7 +89,7 @@ function IconRefresh({ spinning }) {
 
 function IconEye() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="opacity-90">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="opacity-90">
       <path
         d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"
         stroke="currentColor"
@@ -102,7 +103,7 @@ function IconEye() {
 
 function IconLock() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="opacity-90">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="opacity-90">
       <path
         d="M8 11V8a4 4 0 0 1 8 0v3"
         stroke="currentColor"
@@ -116,7 +117,7 @@ function IconLock() {
 
 function IconChevron() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="opacity-85">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="opacity-85">
       <path
         d="m9 6 6 6-6 6"
         stroke="currentColor"
@@ -129,7 +130,7 @@ function IconChevron() {
 }
 
 /* =========================
-   Theme-aware UI blocks
+   Theme-aware UI blocks (COMPACT)
 ========================= */
 function Badge({ t, children, tone = "slate" }) {
   const map = {
@@ -140,7 +141,7 @@ function Badge({ t, children, tone = "slate" }) {
     red: cn("bg-rose-500/12 ring-rose-400/25", t.text2, "ring-1"),
   };
   return (
-    <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-xs", map[tone] || map.slate)}>
+    <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[11px]", map[tone] || map.slate)}>
       {children}
     </span>
   );
@@ -157,13 +158,13 @@ function Card({ t, title, right, children, accent = "slate", className, bodyClas
 
   const isBright = t._isBright ?? false;
   const shadow = isBright
-    ? "shadow-[0_10px_30px_rgba(15,23,42,0.08)]"
-    : "shadow-[0_12px_40px_rgba(0,0,0,0.25)]";
+    ? "shadow-[0_10px_26px_rgba(15,23,42,0.08)]"
+    : "shadow-[0_10px_34px_rgba(0,0,0,0.25)]";
 
   return (
     <div
       className={cn(
-        "rounded-xl ring-1 overflow-hidden flex flex-col",
+        "rounded-lg ring-1 overflow-hidden flex flex-col",
         t.panel,
         shadow,
         "transition-transform duration-200 hover:-translate-y-[1px]",
@@ -173,14 +174,14 @@ function Card({ t, title, right, children, accent = "slate", className, bodyClas
       <div className={cn("h-px w-full bg-gradient-to-r", topLine[accent] || topLine.slate)} />
       <div
         className={cn(
-          "flex items-center justify-between px-4 py-2.5 border-b",
+          "flex items-center justify-between px-3 py-2 border-b",
           isBright ? "border-slate-200" : "border-white/10",
         )}
       >
-        <div className={cn("text-sm font-semibold", t.text)}>{title}</div>
+        <div className={cn("text-[13px] font-semibold", t.text)}>{title}</div>
         {right}
       </div>
-      <div className={cn("px-4 py-3", bodyClassName)}>{children}</div>
+      <div className={cn("px-3 py-2.5", bodyClassName)}>{children}</div>
     </div>
   );
 }
@@ -189,7 +190,7 @@ function Btn({ t, className, ...props }) {
   return (
     <button
       className={cn(
-        "w-full rounded-xl py-2.25 text-sm font-semibold ring-1 transition disabled:opacity-50 disabled:cursor-not-allowed",
+        "w-full rounded-lg py-2 text-[13px] font-semibold ring-1 transition disabled:opacity-50 disabled:cursor-not-allowed",
         t.btn,
         className,
       )}
@@ -218,21 +219,21 @@ function ActionTile({ t, tone = "slate", icon, title, desc, className, ...props 
   return (
     <button
       className={cn(
-        "w-full rounded-xl p-2.5 ring-1 transition text-left disabled:opacity-50 disabled:cursor-not-allowed",
-        isBright ? "shadow-[0_10px_30px_rgba(15,23,42,0.08)]" : "shadow-[0_10px_35px_rgba(0,0,0,0.25)]",
+        "w-full rounded-lg p-2 ring-1 transition text-left disabled:opacity-50 disabled:cursor-not-allowed",
+        isBright ? "shadow-[0_10px_26px_rgba(15,23,42,0.08)]" : "shadow-[0_10px_30px_rgba(0,0,0,0.25)]",
         map[tone] || map.slate,
         className,
       )}
       {...props}
     >
-      <div className="flex items-center gap-3">
-        <div className={cn("h-10 w-10 rounded-xl ring-1 grid place-items-center", chipMap[tone] || chipMap.slate)}>
+      <div className="flex items-center gap-2.5">
+        <div className={cn("h-9 w-9 rounded-lg ring-1 grid place-items-center", chipMap[tone] || chipMap.slate)}>
           <div className={cn(t.text)}>{icon}</div>
         </div>
 
         <div className="min-w-0">
-          <div className={cn("text-sm font-semibold", t.text)}>{title}</div>
-          <div className={cn("text-xs mt-0.5 truncate", t.muted)}>{desc}</div>
+          <div className={cn("text-[13px] font-semibold leading-5", t.text)}>{title}</div>
+          <div className={cn("text-[11px] mt-0.5 truncate", t.muted)}>{desc}</div>
         </div>
 
         <div className={cn("ml-auto", t.muted2)}>
@@ -251,7 +252,7 @@ function Switch({ t, checked, onChange, disabled }) {
       disabled={disabled}
       onClick={() => onChange?.(!checked)}
       className={cn(
-        "relative inline-flex h-6 w-11 items-center rounded-full ring-1 transition disabled:opacity-50 disabled:cursor-not-allowed",
+        "relative inline-flex h-5 w-9 items-center rounded-full ring-1 transition disabled:opacity-50 disabled:cursor-not-allowed",
         checked
           ? "bg-sky-500/25 ring-sky-300/70"
           : isBright
@@ -261,7 +262,12 @@ function Switch({ t, checked, onChange, disabled }) {
       aria-checked={checked}
       role="switch"
     >
-      <span className={cn("inline-block h-5 w-5 transform rounded-full bg-white transition", checked ? "translate-x-5" : "translate-x-1")} />
+      <span
+        className={cn(
+          "inline-block h-4 w-4 transform rounded-full bg-white transition",
+          checked ? "translate-x-4" : "translate-x-1",
+        )}
+      />
     </button>
   );
 }
@@ -291,9 +297,9 @@ function StatTile({ t, label, value, tone = "slate" }) {
               : "ring-white/12";
 
   return (
-    <div className={cn("rounded-md ring-1 px-3 py-1.5 overflow-hidden", t.panelSoft, ring)}>
+    <div className={cn("rounded-md ring-1 px-2.5 py-1.5 overflow-hidden", t.panelSoft, ring)}>
       <div className={cn("text-[10px] leading-4", t.muted)}>{label}</div>
-      <div className={cn("mt-0.5 font-semibold text-[11px] leading-4", t.text)}>{value}</div>
+      <div className={cn("mt-0.5 font-semibold text-[12px] leading-4", t.text)}>{value}</div>
     </div>
   );
 }
@@ -309,17 +315,23 @@ function PointerMiniMap({ t, theme, x, y }) {
   const forceWhiteMap = theme === "rose" || theme === "kuromi";
 
   return (
-    <div className={cn("rounded-xl ring-1 p-3 overflow-hidden", t.panelSoft, isBright ? "ring-slate-200" : "ring-white/12")}>
+    <div
+      className={cn(
+        "rounded-lg ring-1 p-2.5 overflow-hidden",
+        t.panelSoft,
+        isBright ? "ring-slate-200" : "ring-white/12",
+      )}
+    >
       <div className="flex items-center justify-between">
-        <div className={cn("text-xs", t.muted)}>포인터</div>
-        <div className={cn("text-xs tabular-nums", t.muted)}>
+        <div className={cn("text-[11px]", t.muted)}>포인터</div>
+        <div className={cn("text-[11px] tabular-nums", t.muted)}>
           {cx === null ? "-" : cx.toFixed(3)} / {cy === null ? "-" : cy.toFixed(3)}
         </div>
       </div>
 
       <div
         className={cn(
-          "mt-3 relative h-20 rounded-lg ring-1 overflow-hidden",
+          "mt-2.5 relative h-16 rounded-md ring-1 overflow-hidden",
           forceWhiteMap
             ? "bg-white ring-violet-200"
             : isBright
@@ -332,7 +344,7 @@ function PointerMiniMap({ t, theme, x, y }) {
         </div>
 
         <div
-          className={cn("absolute h-2.5 w-2.5 rounded-full", t.dot)}
+          className={cn("absolute h-2 w-2 rounded-full", t.dot)}
           style={{ left: `${left}%`, top: `${top}%`, transform: "translate(-50%,-50%)" }}
         />
       </div>
@@ -343,7 +355,7 @@ function PointerMiniMap({ t, theme, x, y }) {
 /* =========================
    Dashboard
 ========================= */
-export default function Dashboard({ onHudState, onHudActions, theme = "dark", onChangeScreen} = {}) {
+export default function Dashboard({ onHudState, onHudActions, theme = "dark", onChangeScreen } = {}) {
   const { user, isAuthed } = useAuth();
 
   const [status, setStatus] = useState(null);
@@ -456,6 +468,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
             ? s.isTracking
             : null,
       controlGain: typeof s.controlGain === "number" ? s.controlGain : null,
+      learnProfile: s.learnProfile ?? "default",
     };
   }, [status, mode]);
 
@@ -712,7 +725,6 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
   );
 
   useEffect(() => {
-    // ✅ setGain도 같이 넘겨둬 (나중에 HUD/다른 화면에서도 쓸 수 있게)
     onHudActions?.({ start, stop, applyMode, togglePreview, fetchStatus, setLock, setGain });
   }, [onHudActions, start, stop, applyMode, togglePreview, fetchStatus, setLock, setGain]);
 
@@ -734,33 +746,40 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
 
   return (
     <div className={cn("w-full min-w-0 relative", t.page)}>
-      <div className="relative w-full min-w-0 px-4 pt-0 pb-10 md:px-6 md:pt-4 md:pb-10 flex flex-col gap-4">
+      {/* COMPACT: padding/gap 줄임 */}
+      <div className="relative w-full min-w-0 px-3 pt-0 pb-7 md:px-4 md:pt-3 md:pb-7 flex flex-col gap-3">
         {error ? (
           <div
             className={cn(
-              "rounded-2xl ring-1 px-5 py-4 text-sm",
-              isBright ? "bg-rose-50 ring-rose-200 text-slate-900" : "bg-rose-950/30 ring-rose-900/60 text-rose-100",
+              "rounded-lg ring-1 px-4 py-3 text-[13px]",
+              isBright
+                ? "bg-rose-50 ring-rose-200 text-slate-900"
+                : "bg-rose-950/30 ring-rose-900/60 text-rose-100",
             )}
           >
             {error}
           </div>
         ) : null}
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-start">
           {/* left */}
-          <div className="lg:col-span-5 flex flex-col gap-4">
-            <ProfileCard t={t} theme={theme}
-            onOpenTraining={() => onChangeScreen && onChangeScreen("train")} 
-          />
+          <div className="lg:col-span-5 flex flex-col gap-3">
+            <ProfileCard
+              t={t}
+              theme={theme}
+              currentProfile={derived.learnProfile}
+              onOpenTraining={() => onChangeScreen && onChangeScreen("train")}
+              onOpenWeb={() => window.open("http://localhost:8082", "_blank", "noreferrer")}
+            />
 
             <Card t={t} title="모드" accent="blue">
-              <div className="space-y-3">
+              <div className="space-y-2.5">
                 <select
                   value={mode}
                   onChange={(e) => applyMode(e.target.value)}
                   disabled={busy}
                   className={cn(
-                    "w-full rounded-xl ring-1 px-3 py-1.5 text-sm outline-none focus:ring-2 disabled:opacity-50",
+                    "w-full rounded-lg ring-1 px-3 py-1.5 text-[13px] outline-none focus:ring-2 disabled:opacity-50",
                     t.input,
                     isBright ? "focus:ring-sky-400/40" : "focus:ring-sky-500/45",
                   )}
@@ -790,7 +809,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
                 )
               }
             >
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-2.5">
                 <ActionTile
                   t={t}
                   tone="green"
@@ -811,15 +830,15 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
                 />
               </div>
 
-              <div className={cn("mt-3 rounded-xl ring-1 p-3 space-y-3", t.panelSoft)}>
+              <div className={cn("mt-2.5 rounded-lg ring-1 p-2.5 space-y-2.5", t.panelSoft)}>
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2.5">
                     <span className={cn(t.text2)}>
                       <IconEye />
                     </span>
                     <div>
-                      <div className={cn("text-sm font-semibold", t.text)}>프리뷰</div>
-                      <div className={cn("text-xs", t.muted)}>카메라/랜드마크 미리보기</div>
+                      <div className={cn("text-[13px] font-semibold leading-5", t.text)}>프리뷰</div>
+                      <div className={cn("text-[11px]", t.muted)}>카메라/랜드마크 미리보기</div>
                     </div>
                   </div>
 
@@ -831,25 +850,25 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
                 <div className={cn("h-px", t.divider)} />
 
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2.5">
                     <span className={cn(t.text2)}>
                       <IconLock />
                     </span>
                     <div>
-                      <div className={cn("text-sm font-semibold", t.text)}>잠금</div>
-                      <div className={cn("text-xs", t.muted)}>제스처 입력 잠금/해제</div>
+                      <div className={cn("text-[13px] font-semibold leading-5", t.text)}>잠금</div>
+                      <div className={cn("text-[11px]", t.muted)}>제스처 입력 잠금/해제</div>
                     </div>
                   </div>
                   <Switch t={t} checked={derived.locked} onChange={(v) => setLock(!!v)} disabled={busy} />
                 </div>
               </div>
 
-              <Btn t={t} onClick={fetchStatus} disabled={busy} className="mt-3 flex items-center justify-center gap-2">
+              <Btn t={t} onClick={fetchStatus} disabled={busy} className="mt-2.5 flex items-center justify-center gap-2">
                 <IconRefresh spinning={busy} />
                 새로고침
               </Btn>
 
-              <div className="mt-3 grid grid-cols-2 gap-2">
+              <div className="mt-2.5 grid grid-cols-2 gap-2">
                 <StatTile t={t} label="FPS" value={formatNum(derived.fps, 1)} tone="blue" />
                 <StatTile t={t} label="현재 제스처" value={derived.gesture} tone="slate" />
               </div>
@@ -857,7 +876,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
           </div>
 
           {/* right */}
-          <div className="lg:col-span-7 grid gap-4 grid-rows-[auto_auto]">
+          <div className="lg:col-span-7 grid gap-3 grid-rows-[auto_auto]">
             <Card
               t={t}
               title="상태"
@@ -874,7 +893,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
                 )
               }
             >
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5">
                 <StatTile t={t} label="연결" value={view.connText} tone={derived.connected ? "blue" : "red"} />
                 <StatTile t={t} label="실행" value={view.enabledText} tone={derived.enabled ? "green" : "slate"} />
                 <StatTile t={t} label="잠금" value={view.lockText} tone={derived.locked ? "yellow" : "slate"} />
@@ -898,25 +917,32 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
                 />
               </div>
 
-              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2.5">
                 <PointerMiniMap t={t} theme={theme} x={derived.pointerX} y={derived.pointerY} />
-                <div className={cn("rounded-xl ring-1 p-3", t.panelSoft)}>
-                  <div className={cn("text-xs", t.muted)}>요약</div>
+                <div className={cn("rounded-lg ring-1 p-2.5", t.panelSoft)}>
+                  <div className={cn("text-[11px]", t.muted)}>요약</div>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    <Badge t={t} tone="slate">제스처: {derived.gesture}</Badge>
-                    <Badge t={t} tone={preview ? "blue" : "slate"}>{preview ? "Preview ON" : "Preview OFF"}</Badge>
-                    <Badge t={t} tone="slate">Mode: {view.modeText}</Badge>
+                    <Badge t={t} tone="slate">
+                      제스처: {derived.gesture}
+                    </Badge>
+                    <Badge t={t} tone={preview ? "blue" : "slate"}>
+                      {preview ? "Preview ON" : "Preview OFF"}
+                    </Badge>
+                    <Badge t={t} tone="slate">
+                      Mode: {view.modeText}
+                    </Badge>
                   </div>
                 </div>
               </div>
             </Card>
 
             <Card t={t} title="명령 채팅창" accent="slate">
-              <div className="h-[min(42vh,300px)] flex flex-col">
+              {/* COMPACT: 높이 줄임 */}
+              <div className="h-[min(38vh,280px)] flex flex-col">
                 {showRaw ? (
                   <pre
                     className={cn(
-                      "text-xs leading-relaxed overflow-auto flex-1 rounded-xl ring-1 p-4",
+                      "text-[11px] leading-relaxed overflow-auto flex-1 rounded-lg ring-1 p-3",
                       t.panelSolid || t.panel2 || t.panel,
                       t.input,
                     )}
@@ -959,17 +985,17 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
             >
               <div className="absolute inset-0 bg-black/45 backdrop-blur-[2px]" />
 
-              <div className={cn("relative w-[min(520px,92vw)] rounded-2xl ring-1 p-5 shadow-2xl", t.panel)}>
+              <div className={cn("relative w-[min(500px,92vw)] rounded-lg ring-1 p-4 shadow-2xl", t.panel)}>
                 <div className="min-w-0">
-                  <div className={cn("text-base font-semibold", t.text)}>{modal.title}</div>
-                  <div className={cn("mt-2 text-sm", t.muted)}>{modal.message}</div>
+                  <div className={cn("text-[15px] font-semibold", t.text)}>{modal.title}</div>
+                  <div className={cn("mt-2 text-[13px]", t.muted)}>{modal.message}</div>
                 </div>
 
-                <div className="mt-5 flex justify-end gap-2">
+                <div className="mt-4 flex justify-end gap-2">
                   <button
                     type="button"
                     onClick={closeModal}
-                    className={cn("px-4 py-2 rounded-xl text-sm font-semibold ring-1 transition", t.btn)}
+                    className={cn("px-4 py-2 rounded-lg text-[13px] font-semibold ring-1 transition", t.btn)}
                   >
                     확인
                   </button>
