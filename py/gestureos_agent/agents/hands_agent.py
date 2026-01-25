@@ -138,12 +138,17 @@ PALETTE_OPEN_HOLD = 0.35
 PALETTE_CONFIRM_HOLD = 0.18
 PALETTE_CANCEL_HOLD = 0.45
 
-# ✅ HUD의 "키보드"를 VKEY(윈도우 OSK)로 매핑
+# ✅ Palette hover 값(qt_menu_overlay)과 1:1 매칭
 PALETTE_MAP = {
     "MOUSE": "MOUSE",
-    "KEYBOARD": "VKEY",
+    "KEYBOARD": "KEYBOARD",        # <- 원래 너 코드처럼 VKEY로 강제매핑하지 말고 키보드면 키보드로
+    "VKEY": "VKEY",
     "DRAW": "DRAW",
+    "PRESENTATION": "PRESENTATION",
+
+    # 호환 키워드(혹시 남아있으면)
     "PPT": "PRESENTATION",
+    "PAINT": "DRAW",
     "OTHER": "MOUSE",
 }
 
