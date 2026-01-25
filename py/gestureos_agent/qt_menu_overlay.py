@@ -1,12 +1,15 @@
 # gestureos_agent/qt_menu_overlay.py
-# Separate process: radial MODE menu overlay (click-through, topmost, no-activate)
-# - Uses Qt logical coords (QCursor.pos, QGuiApplication.screens) to avoid DPI mismatch
-# - Center is FIXED when menu opens (cursor position at activation time)
-# - Emits evt_q: {"type":"HOVER","value": "<MODE or None>"}
+# MODE radial overlay (separate process)
+# - Click-through + topmost + no-activate
+# - Qt logical coords (QCursor.pos / QGuiApplication.screens)
+# - Center fixed on open
 #
-# Redesign:
-# - Manager UI-like: dark glass, thin grid, segmented neon ring, minimal labels
-# - More stable hover: smoothing + debounce to reduce "모드 변경 안됨" 체감
+# Cyber VR "final" redesign:
+# - Prism glass disc + thin segmented arcs + micro ticks + radar sweep + subtle noise
+# - Stable hover (hold + debounce) to prevent flicker
+#
+# Output events:
+#   evt_q.put_nowait({"type":"HOVER","value": <MODE or None>})
 
 import os
 import time
@@ -82,6 +85,15 @@ def _hex_to_rgb(color_hex: str):
     return r, g, b
 
 
+def _wrap360(deg: float) -> float:
+    d = deg % 360.0
+    return d + 360.0 if d < 0 else d
+
+
+def _clamp(v, lo, hi):
+    return lo if v < lo else hi if v > hi else v
+
+
 def run_menu_process(cmd_q, evt_q):
     if os.name != "nt":
         return
@@ -92,25 +104,32 @@ def run_menu_process(cmd_q, evt_q):
     except Exception:
         return
 
-    # ---------- config (look & feel) ----------
-    MENU_SIZE = 640
-    OUTER_R = MENU_SIZE * 0.47
-    RING_THICK = 18
-    GAP_DEG = 7.0
+    DEBUG = (os.getenv("HUD_DEBUG", "0") == "1")
 
-    # hover valid donut
-    INNER_R = OUTER_R - 86
-    HOVER_MIN_R = INNER_R + 10
-    HOVER_MAX_R = OUTER_R - 14
+    # ---------------- CONFIG ----------------
+    MENU_SIZE = 560
 
-    LABEL_R = OUTER_R - 44
-    CENTER_R = 156
+    # disc / rings
+    OUTER_R = MENU_SIZE * 0.475
+    ARC_R = OUTER_R - 22
+    ARC_THICK = 9                 # thin
+    ARC_GAP_DEG = 11.0            # modern segmentation
 
-    # Modes (manager와 동일)
+    # hover stability
+    DEADZONE_R = 44
+    HOVER_MAX_R = OUTER_R - 8
+    HOLD_SECONDS = 0.32           # keep last non-null a bit (prevents pinch timing null)
+    DEBOUNCE_SECONDS = 0.06       # stabilize hover
+
+    # labels
+    LABEL_R = OUTER_R - 60
+    LABEL_W = 158
+    LABEL_H = 34
+
+    # items (output)
     ITEMS = ["PRESENTATION", "MOUSE", "KEYBOARD", "VKEY", "DRAW"]
     N = len(ITEMS)
-
-    START_ANG = -90.0
+    START_ANG = -90.0  # top
     STEP = 360.0 / N
 
     MODE_ACCENT = {
@@ -121,6 +140,13 @@ def run_menu_process(cmd_q, evt_q):
         "VKEY": "#39ff9a",
         "DEFAULT": "#00ffa6",
     }
+
+    # base palette
+    COL_BG_A = QtGui.QColor(10, 16, 22, 190)
+    COL_BG_B = QtGui.QColor(7, 11, 16, 130)
+    COL_EDGE = QtGui.QColor(160, 210, 255, 86)
+    COL_TEXT = QtGui.QColor(235, 248, 255, 245)
+    COL_SUBT = QtGui.QColor(210, 235, 255, 190)
 
     def desktop_union_rect():
         rect = QtCore.QRect()
@@ -141,13 +167,18 @@ def run_menu_process(cmd_q, evt_q):
         y = max(min_y, min(int(y), int(max_y)))
         return x, y
 
-    def _norm_deg(deg: float) -> float:
-        d = deg % 360.0
-        return d + 360.0 if d < 0 else d
+    def _emit_hover(value):
+        if not evt_q:
+            return
+        try:
+            evt_q.put_nowait({"type": "HOVER", "value": value})
+        except Exception:
+            pass
 
     class MenuWindow(QtWidgets.QWidget):
         def __init__(self):
             super().__init__()
+
             self.setWindowFlags(
                 QtCore.Qt.FramelessWindowHint
                 | QtCore.Qt.Tool
@@ -159,23 +190,31 @@ def run_menu_process(cmd_q, evt_q):
             self.resize(MENU_SIZE, MENU_SIZE)
 
             self._active = False
-            self._opacity = 0.88
+            self._opacity = 0.90
 
             self._mode = "DEFAULT"
             self._accent = MODE_ACCENT["DEFAULT"]
 
-            self._center_global = None  # (x,y) logical global
+            self._center_global = None  # logical coords
             self._phase = 0.0
 
             # hover stability
-            self._hover_raw = None
-            self._hover_stable = None
-            self._hover_candidate = None
-            self._hover_since = 0.0
-            self._emit_last = object()
+            self._hover = None
+            self._cand = None
+            self._cand_since = 0.0
+            self._last_nonnull = None
+            self._last_nonnull_t = 0.0
+            self._last_emit = object()
+
+            # deterministic noise dots (no random import)
+            self._dots = []
+            for i in range(120):
+                a = (i * 37.0) % 360.0
+                rr = (OUTER_R * 0.18) + ((i * 53) % int(OUTER_R * 0.74))
+                self._dots.append((a, rr, 0.7 + (i % 5) * 0.35))
 
         def setOpacity(self, v: float):
-            self._opacity = float(max(0.15, min(0.98, v)))
+            self._opacity = float(_clamp(v, 0.20, 0.98))
 
         def setMode(self, m: str):
             m = str(m or "DEFAULT").upper()
@@ -195,7 +234,7 @@ def run_menu_process(cmd_q, evt_q):
                 self.hide()
                 self._center_global = None
                 self._reset_hover()
-                self._emit_hover(None)
+                self._emit(None)
             self._active = on
 
         def setCenter(self, x: int, y: int):
@@ -213,25 +252,22 @@ def run_menu_process(cmd_q, evt_q):
             self.move(x, y)
 
         def _reset_hover(self):
-            self._hover_raw = None
-            self._hover_stable = None
-            self._hover_candidate = None
-            self._hover_since = 0.0
-            self._emit_last = object()
+            self._hover = None
+            self._cand = None
+            self._cand_since = 0.0
+            self._last_nonnull = None
+            self._last_nonnull_t = 0.0
+            self._last_emit = object()
 
-        def _emit_hover(self, value):
-            # evt_q: HOVER only
-            if value == self._emit_last:
+        def _emit(self, value):
+            if value == self._last_emit:
                 return
-            self._emit_last = value
-            if not evt_q:
-                return
-            try:
-                evt_q.put_nowait({"type": "HOVER", "value": value})
-            except Exception:
-                pass
+            self._last_emit = value
+            _emit_hover(value)
+            if DEBUG:
+                print("[MENU] hover =", value, flush=True)
 
-        def _calc_hover(self):
+        def _calc_hover_raw(self):
             if not self._active or not self._center_global:
                 return None
 
@@ -239,35 +275,253 @@ def run_menu_process(cmd_q, evt_q):
             cx, cy = self._center_global
             dx = float(cur.x() - cx)
             dy = float(cur.y() - cy)
-
             r = math.hypot(dx, dy)
-            if r < HOVER_MIN_R or r > HOVER_MAX_R:
+
+            if r < DEADZONE_R:
+                return None
+            if r > HOVER_MAX_R:
                 return None
 
-            ang = math.degrees(math.atan2(dy, dx))  # -180..180 (0:+x)
-            # convert to 0..360 where 0 is START_ANG direction
-            a = _norm_deg(ang - START_ANG)
+            ang = math.degrees(math.atan2(dy, dx))  # -180..180
+            a = _wrap360(ang - START_ANG)
             idx = int(a // STEP) % N
             return ITEMS[idx]
 
         def tick(self, dt: float):
             self._phase += float(dt)
-
-            raw = self._calc_hover()
-            self._hover_raw = raw
-
-            # debounce for stability: 80ms
             now = time.time()
-            if raw != self._hover_candidate:
-                self._hover_candidate = raw
-                self._hover_since = now
+
+            raw = self._calc_hover_raw()
+
+            if raw is not None:
+                self._last_nonnull = raw
+                self._last_nonnull_t = now
+
+            # HOLD last non-null for pinch timing
+            if raw is None and self._last_nonnull is not None:
+                if (now - self._last_nonnull_t) <= HOLD_SECONDS:
+                    raw = self._last_nonnull
+
+            # debounce
+            if raw != self._cand:
+                self._cand = raw
+                self._cand_since = now
             else:
-                if (now - self._hover_since) >= 0.08:
-                    if raw != self._hover_stable:
-                        self._hover_stable = raw
-                        self._emit_hover(raw)
+                if (now - self._cand_since) >= DEBOUNCE_SECONDS:
+                    if raw != self._hover:
+                        self._hover = raw
+                        self._emit(raw)
 
             self.update()
+
+        # ---------- paint helpers ----------
+        def _arc_path(self, rect, start_deg, span_deg):
+            path = QtGui.QPainterPath()
+            path.arcMoveTo(rect, start_deg)
+            path.arcTo(rect, start_deg, span_deg)
+            return path
+
+        def _clip_circle(self, p, cx, cy, r):
+            clip = QtGui.QPainterPath()
+            clip.addEllipse(QtCore.QPointF(cx, cy), r, r)
+            p.setClipPath(clip)
+
+        def _draw_prism_glass(self, p, cx, cy, r):
+            # outer glow haze
+            haze = QtGui.QRadialGradient(QtCore.QPointF(cx, cy), r + 42)
+            haze.setColorAt(0.0, QtGui.QColor(255, 255, 255, 10))
+            haze.setColorAt(0.35, QtGui.QColor(80, 200, 255, 18))
+            haze.setColorAt(0.75, QtGui.QColor(0, 0, 0, 0))
+            haze.setColorAt(1.0, QtGui.QColor(0, 0, 0, 0))
+            p.setPen(QtCore.Qt.NoPen)
+            p.setBrush(haze)
+            p.drawEllipse(QtCore.QPointF(cx, cy), r + 30, r + 30)
+
+            # body
+            body = QtGui.QRadialGradient(QtCore.QPointF(cx, cy), r)
+            body.setColorAt(0.0, COL_BG_A)
+            body.setColorAt(0.55, QtGui.QColor(9, 14, 20, 150))
+            body.setColorAt(1.0, QtGui.QColor(0, 0, 0, 0))
+            p.setPen(QtGui.QPen(COL_EDGE, 1.1))
+            p.setBrush(body)
+            p.drawEllipse(QtCore.QPointF(cx, cy), r, r)
+
+            # prism edge (two-tone rim)
+            rim1 = QtGui.QPen(QtGui.QColor(180, 230, 255, 85), 2.0)
+            rim2 = QtGui.QPen(QtGui.QColor(70, 150, 220, 65), 1.0)
+            p.setPen(rim1)
+            p.setBrush(QtCore.Qt.NoBrush)
+            p.drawEllipse(QtCore.QPointF(cx, cy), r - 6, r - 6)
+            p.setPen(rim2)
+            p.drawEllipse(QtCore.QPointF(cx, cy), r - 12, r - 12)
+
+        def _draw_grid_scan_noise(self, p, cx, cy, r, w, h, accent):
+            p.save()
+            self._clip_circle(p, cx, cy, r)
+
+            # micro grid
+            step = 18
+            ox = int((math.sin(self._phase * 0.65) + 1.0) * 0.5 * step)
+            oy = int((math.cos(self._phase * 0.58) + 1.0) * 0.5 * step)
+            p.setPen(QtGui.QPen(QtGui.QColor(190, 230, 255, 14), 1))
+            for x in range(ox, int(w), step):
+                p.drawLine(x, 0, x, int(h))
+            for y in range(oy, int(h), step):
+                p.drawLine(0, y, int(w), y)
+
+            # scanlines
+            p.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 9), 1))
+            y = 0
+            while y < h:
+                p.drawLine(0, y, w, y)
+                y += 7
+
+            # noise dots (deterministic)
+            p.setPen(QtCore.Qt.NoPen)
+            for (a_deg, rr, sz) in self._dots:
+                ang = math.radians(a_deg + self._phase * 18.0)
+                px = cx + math.cos(ang) * rr
+                py = cy + math.sin(ang) * rr
+                aa = 18 + int((math.sin(self._phase * 1.2 + rr * 0.02) + 1.0) * 0.5 * 22)
+                p.setBrush(QtGui.QColor(accent.red(), accent.green(), accent.blue(), aa))
+                p.drawEllipse(QtCore.QPointF(px, py), sz, sz)
+
+            # radar sweep band
+            sweep_ang = (self._phase * 42.0) % 360.0
+            rect = QtCore.QRectF(cx - r, cy - r, 2 * r, 2 * r)
+            band = 22.0
+            for k in range(10, 0, -1):
+                a = 5 + k * 3
+                pen = QtGui.QPen(QtGui.QColor(accent.red(), accent.green(), accent.blue(), a), 1.2 + k * 0.8)
+                pen.setCapStyle(QtCore.Qt.FlatCap)
+                p.setPen(pen)
+                p.drawPath(self._arc_path(rect, -(START_ANG + sweep_ang), -(band)))
+
+            p.restore()
+
+        def _draw_micro_ticks(self, p, cx, cy, r, accent):
+            # ticks
+            p.setPen(QtGui.QPen(QtGui.QColor(190, 230, 255, 58), 1))
+            for i in range(72):
+                ang = math.radians(START_ANG + i * 5.0)
+                inner = r - (10 if (i % 6) else 20)
+                outer = r + 2
+                x1 = cx + math.cos(ang) * inner
+                y1 = cy + math.sin(ang) * inner
+                x2 = cx + math.cos(ang) * outer
+                y2 = cy + math.sin(ang) * outer
+                p.drawLine(QtCore.QPointF(x1, y1), QtCore.QPointF(x2, y2))
+
+            # crosshair accents
+            p.setPen(QtGui.QPen(QtGui.QColor(accent.red(), accent.green(), accent.blue(), 90), 1))
+            p.drawLine(int(cx), int(cy - r + 30), int(cx), int(cy - r + 78))
+            p.drawLine(int(cx), int(cy + r - 78), int(cx), int(cy + r - 30))
+            p.drawLine(int(cx - r + 30), int(cy), int(cx - r + 78), int(cy))
+            p.drawLine(int(cx + r - 78), int(cy), int(cx + r - 30), int(cy))
+
+        def _draw_segment_arcs(self, p, cx, cy, r, accent):
+            rect = QtCore.QRectF(cx - r, cy - r, 2 * r, 2 * r)
+
+            # base arcs
+            base_pen = QtGui.QPen(QtGui.QColor(155, 205, 245, 85), ARC_THICK)
+            base_pen.setCapStyle(QtCore.Qt.FlatCap)
+            p.setPen(base_pen)
+            p.setBrush(QtCore.Qt.NoBrush)
+
+            for i in range(N):
+                a0 = START_ANG + i * STEP + ARC_GAP_DEG * 0.5
+                span = STEP - ARC_GAP_DEG
+                p.drawPath(self._arc_path(rect, -a0, -span))
+
+            # hover glow stack
+            hv = self._hover
+            if hv:
+                try:
+                    idx = ITEMS.index(hv)
+                    a0 = START_ANG + idx * STEP + ARC_GAP_DEG * 0.5
+                    span = STEP - ARC_GAP_DEG
+
+                    for k in range(7, 0, -1):
+                        g = QtGui.QColor(accent)
+                        g.setAlpha(int(10 + k * 14))
+                        pen = QtGui.QPen(g, ARC_THICK + k * 3.4)
+                        pen.setCapStyle(QtCore.Qt.FlatCap)
+                        p.setPen(pen)
+                        p.drawPath(self._arc_path(rect, -a0, -span))
+
+                    crisp = QtGui.QColor(accent)
+                    crisp.setAlpha(255)
+                    pen2 = QtGui.QPen(crisp, ARC_THICK + 2.2)
+                    pen2.setCapStyle(QtCore.Qt.FlatCap)
+                    p.setPen(pen2)
+                    p.drawPath(self._arc_path(rect, -a0, -span))
+                except Exception:
+                    pass
+
+        def _draw_labels(self, p, cx, cy, accent):
+            hv = self._hover
+
+            p.setFont(QtGui.QFont("Segoe UI", 10, QtGui.QFont.Bold))
+            for i, name in enumerate(ITEMS):
+                mid = math.radians(START_ANG + (i + 0.5) * STEP)
+                lx = cx + math.cos(mid) * LABEL_R
+                ly = cy + math.sin(mid) * LABEL_R
+
+                rect = QtCore.QRectF(lx - LABEL_W * 0.5, ly - LABEL_H * 0.5, LABEL_W, LABEL_H)
+                is_h = (name == hv)
+
+                if is_h:
+                    bg = QtGui.QColor(accent.red(), accent.green(), accent.blue(), 26)
+                    bd = QtGui.QColor(accent.red(), accent.green(), accent.blue(), 210)
+                    tx = QtGui.QColor(240, 250, 255, 255)
+                else:
+                    bg = QtGui.QColor(8, 12, 18, 120)
+                    bd = QtGui.QColor(130, 170, 210, 78)
+                    tx = QtGui.QColor(225, 245, 255, 215)
+
+                # shadow-ish (offset)
+                p.setPen(QtCore.Qt.NoPen)
+                p.setBrush(QtGui.QColor(0, 0, 0, 90))
+                p.drawRoundedRect(rect.translated(2.0, 2.0), 10, 10)
+
+                p.setPen(QtGui.QPen(bd, 1))
+                p.setBrush(bg)
+                p.drawRoundedRect(rect, 10, 10)
+
+                p.setPen(tx)
+                p.drawText(rect, QtCore.Qt.AlignCenter, name)
+
+        def _draw_core(self, p, cx, cy, accent):
+            # core rings
+            p.setPen(QtGui.QPen(QtGui.QColor(180, 230, 255, 70), 1))
+            p.setBrush(QtCore.Qt.NoBrush)
+            p.drawEllipse(QtCore.QPointF(cx, cy), OUTER_R - 108, OUTER_R - 108)
+
+            p.setPen(QtGui.QPen(QtGui.QColor(accent.red(), accent.green(), accent.blue(), 95), 2))
+            p.drawEllipse(QtCore.QPointF(cx, cy), OUTER_R - 134, OUTER_R - 134)
+
+            # central glow orb
+            orb = QtGui.QRadialGradient(QtCore.QPointF(cx, cy), OUTER_R - 150)
+            orb.setColorAt(0.0, QtGui.QColor(accent.red(), accent.green(), accent.blue(), 32))
+            orb.setColorAt(0.7, QtGui.QColor(0, 0, 0, 0))
+            p.setPen(QtCore.Qt.NoPen)
+            p.setBrush(orb)
+            p.drawEllipse(QtCore.QPointF(cx, cy), OUTER_R - 154, OUTER_R - 154)
+
+            # texts
+            hv = self._hover or "-"
+            p.setPen(COL_TEXT)
+            p.setFont(QtGui.QFont("Segoe UI", 18, QtGui.QFont.Bold))
+            p.drawText(QtCore.QRectF(cx - 170, cy - 52, 340, 34), QtCore.Qt.AlignCenter, "MODE")
+
+            p.setPen(QtGui.QColor(accent.red(), accent.green(), accent.blue(), 238))
+            p.setFont(QtGui.QFont("Segoe UI", 10, QtGui.QFont.Bold))
+            p.drawText(QtCore.QRectF(cx - 170, cy - 16, 340, 22), QtCore.Qt.AlignCenter, f"SELECT : {hv}")
+
+            p.setPen(COL_SUBT)
+            p.setFont(QtGui.QFont("Segoe UI", 10))
+            p.drawText(QtCore.QRectF(cx - 220, cy + 12, 440, 26),
+                       QtCore.Qt.AlignCenter, "PINCH = 확정    FIST = 취소")
 
         def paintEvent(self, _ev):
             if not self._active:
@@ -284,162 +538,21 @@ def run_menu_process(cmd_q, evt_q):
             cy = h * 0.5
 
             ar, ag, ab = _hex_to_rgb(self._accent)
+            accent = QtGui.QColor(ar, ag, ab, 255)
 
-            # -------- background glass + vignette --------
-            bg = QtGui.QRadialGradient(QtCore.QPointF(cx, cy), OUTER_R)
-            bg.setColorAt(0.0, QtGui.QColor(8, 14, 20, 150))
-            bg.setColorAt(0.55, QtGui.QColor(6, 10, 16, 96))
-            bg.setColorAt(1.0, QtGui.QColor(0, 0, 0, 0))
-            p.setPen(QtCore.Qt.NoPen)
-            p.setBrush(bg)
-            p.drawEllipse(QtCore.QPointF(cx, cy), OUTER_R + 6, OUTER_R + 6)
+            # prism glass disc
+            self._draw_prism_glass(p, cx, cy, OUTER_R)
 
-            # subtle grid (manager 느낌)
-            p.save()
-            clip = QtGui.QPainterPath()
-            clip.addEllipse(QtCore.QPointF(cx, cy), OUTER_R + 2, OUTER_R + 2)
-            p.setClipPath(clip)
-            gridA = 18
-            p.setPen(QtGui.QPen(QtGui.QColor(170, 210, 255, gridA), 1))
-            step = 18
-            ox = int((math.sin(self._phase * 0.7) + 1) * 0.5 * step)
-            oy = int((math.cos(self._phase * 0.63) + 1) * 0.5 * step)
-            for x in range(0 + ox, int(w), step):
-                p.drawLine(x, 0, x, int(h))
-            for y in range(0 + oy, int(h), step):
-                p.drawLine(0, y, int(w), y)
+            # inner visuals
+            self._draw_grid_scan_noise(p, cx, cy, OUTER_R, w, h, accent)
 
-            # scanlines
-            p.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 10), 1))
-            y = 0
-            while y < h:
-                p.drawLine(0, y, w, y)
-                y += 7
-            p.restore()
+            # micro ticks + arcs
+            self._draw_micro_ticks(p, cx, cy, OUTER_R - 6, accent)
+            self._draw_segment_arcs(p, cx, cy, ARC_R, accent)
 
-            # -------- segmented outer ring --------
-            # glow
-            for i in range(10, 0, -1):
-                g = QtGui.QColor(ar, ag, ab, int(4 + i * 7))
-                p.setPen(QtGui.QPen(g, RING_THICK + i * 2.2))
-                p.setBrush(QtCore.Qt.NoBrush)
-                p.drawEllipse(QtCore.QPointF(cx, cy), OUTER_R - 8, OUTER_R - 8)
-
-            # segments (gapped)
-            ring_pen = QtGui.QPen(QtGui.QColor(ar, ag, ab, 220), RING_THICK)
-            ring_pen.setCapStyle(QtCore.Qt.FlatCap)
-            p.setPen(ring_pen)
-
-            rect = QtCore.QRectF(
-                cx - (OUTER_R - 8),
-                cy - (OUTER_R - 8),
-                (OUTER_R - 8) * 2,
-                (OUTER_R - 8) * 2,
-            )
-
-            for i in range(N):
-                a0 = START_ANG + i * STEP + GAP_DEG * 0.5
-                span = STEP - GAP_DEG
-                # Qt: arc uses degrees counterclockwise from 3 o'clock, but drawArc in Qt uses 1/16 degrees and CCW
-                # We'll use QPainterPath arcTo with negative span to match screen orientation.
-                path = QtGui.QPainterPath()
-                path.arcMoveTo(rect, -a0)
-                path.arcTo(rect, -a0, -span)
-                p.drawPath(path)
-
-            # -------- hover highlight --------
-            hv = self._hover_stable
-            if hv:
-                try:
-                    idx = ITEMS.index(hv)
-                    a0 = START_ANG + idx * STEP + GAP_DEG * 0.5
-                    span = STEP - GAP_DEG
-
-                    # wedge fill
-                    p.setPen(QtCore.Qt.NoPen)
-                    p.setBrush(QtGui.QColor(ar, ag, ab, 26))
-                    wedge = QtGui.QPainterPath()
-                    wedge.moveTo(cx, cy)
-                    wedge.arcTo(rect, -a0, -span)
-                    wedge.closeSubpath()
-                    p.drawPath(wedge)
-
-                    # stronger segment stroke
-                    p.setPen(QtGui.QPen(QtGui.QColor(ar, ag, ab, 255), RING_THICK + 4))
-                    path = QtGui.QPainterPath()
-                    path.arcMoveTo(rect, -a0)
-                    path.arcTo(rect, -a0, -span)
-                    p.drawPath(path)
-                except Exception:
-                    pass
-
-            # -------- inner rings / crosshair --------
-            p.setPen(QtGui.QPen(QtGui.QColor(170, 210, 255, 70), 1))
-            p.setBrush(QtCore.Qt.NoBrush)
-            p.drawEllipse(QtCore.QPointF(cx, cy), INNER_R, INNER_R)
-            p.setPen(QtGui.QPen(QtGui.QColor(ar, ag, ab, 110), 2))
-            p.drawEllipse(QtCore.QPointF(cx, cy), INNER_R - 28, INNER_R - 28)
-
-            p.setPen(QtGui.QPen(QtGui.QColor(170, 210, 255, 60), 1))
-            p.drawLine(int(cx), int(cy - OUTER_R + 24), int(cx), int(cy + OUTER_R - 24))
-            p.drawLine(int(cx - OUTER_R + 24), int(cy), int(cx + OUTER_R - 24), int(cy))
-
-            # -------- labels (thin chip style) --------
-            p.setFont(QtGui.QFont("Segoe UI", 10, QtGui.QFont.Bold))
-            for i, name in enumerate(ITEMS):
-                mid = math.radians(START_ANG + (i + 0.5) * STEP)
-                lx = cx + math.cos(mid) * LABEL_R
-                ly = cy + math.sin(mid) * LABEL_R
-
-                tw = 160
-                th = 30
-                rchip = QtCore.QRectF(lx - tw * 0.5, ly - th * 0.5, tw, th)
-
-                is_hover = (name == hv)
-                # chip bg/border
-                if is_hover:
-                    bgc = QtGui.QColor(ar, ag, ab, 36)
-                    bdc = QtGui.QColor(ar, ag, ab, 190)
-                    txc = QtGui.QColor(235, 248, 255, 255)
-                else:
-                    bgc = QtGui.QColor(6, 12, 18, 110)
-                    bdc = QtGui.QColor(120, 160, 200, 90)
-                    txc = QtGui.QColor(220, 240, 255, 210)
-
-                p.setPen(QtGui.QPen(bdc, 1))
-                p.setBrush(bgc)
-                p.drawRoundedRect(rchip, 10, 10)
-
-                p.setPen(txc)
-                p.drawText(rchip, QtCore.Qt.AlignCenter, name)
-
-            # -------- center text --------
-            p.setPen(QtGui.QColor(230, 245, 255, 245))
-            p.setFont(QtGui.QFont("Segoe UI", 18, QtGui.QFont.Bold))
-            p.drawText(
-                QtCore.QRectF(cx - CENTER_R, cy - 44, CENTER_R * 2, 34),
-                QtCore.Qt.AlignCenter,
-                "MODE",
-            )
-
-            # selected line
-            sel = hv or "-"
-            p.setPen(QtGui.QColor(ar, ag, ab, 235))
-            p.setFont(QtGui.QFont("Segoe UI", 10, QtGui.QFont.Bold))
-            p.drawText(
-                QtCore.QRectF(cx - CENTER_R, cy - 10, CENTER_R * 2, 24),
-                QtCore.Qt.AlignCenter,
-                f"SELECT : {sel}",
-            )
-
-            # hint
-            p.setPen(QtGui.QColor(210, 235, 255, 220))
-            p.setFont(QtGui.QFont("Segoe UI", 10, QtGui.QFont.Normal))
-            p.drawText(
-                QtCore.QRectF(cx - CENTER_R, cy + 18, CENTER_R * 2, 28),
-                QtCore.Qt.AlignCenter,
-                "PINCH = 확정    FIST = 취소",
-            )
+            # labels + core
+            self._draw_labels(p, cx, cy, accent)
+            self._draw_core(p, cx, cy, accent)
 
             p.end()
 
@@ -447,20 +560,19 @@ def run_menu_process(cmd_q, evt_q):
     win = MenuWindow()
     win.hide()
 
-    # apply click-through exstyle
     try:
         _apply_win_exstyle(int(win.winId()), click_through=True)
     except Exception:
         pass
 
     last_t = time.time()
-
     timer = QtCore.QTimer()
     timer.setInterval(16)
 
     def pump_cmd():
         nonlocal last_t
-        # commands
+
+        # handle commands
         while True:
             try:
                 msg = cmd_q.get_nowait()
@@ -474,12 +586,13 @@ def run_menu_process(cmd_q, evt_q):
             if typ == "QUIT":
                 app.quit()
                 return
+
             if typ == "ACTIVE":
                 win.setActive(bool(msg.get("value", False)))
             elif typ == "MODE":
                 win.setMode(msg.get("value", "DEFAULT"))
             elif typ == "OPACITY":
-                win.setOpacity(float(msg.get("value", 0.88)))
+                win.setOpacity(float(msg.get("value", 0.90)))
             elif typ == "CENTER":
                 try:
                     win.setCenter(int(msg.get("x")), int(msg.get("y")))
@@ -491,7 +604,7 @@ def run_menu_process(cmd_q, evt_q):
         last_t = nowt
         win.tick(dt)
 
-        # periodic re-apply win32 exstyle (OS가 리셋하는 경우 방지)
+        # re-apply exstyle sometimes (OS가 가끔 날림)
         if int(nowt * 10) % 60 == 0:
             try:
                 _apply_win_exstyle(int(win.winId()), click_through=True)

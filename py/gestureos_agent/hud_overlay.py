@@ -1,11 +1,12 @@
 # gestureos_agent/hud_overlay.py
 # Windows only: Always-on-top transparent HUD overlay (click-through)
-# PySide6 (Qt) - Cyber / VR HUD redesign
+# PySide6 (Qt) - Clean Cyber/VR HUD redesign
 #
-# KEY FIX:
-# - HUD/Tip/Handle: Qt logical coordinates only (QCursor + QGuiApplication.screens()).
-# - Menu: "freeze center at open" so it does NOT follow the cursor while active.
-# - Robust single-instance + log for crash reasons.
+# FIXES:
+# - Menu hover "latch" (debounce): prevents hover=None at confirm timing.
+# - Menu "freeze center at open": menu does not follow cursor while active.
+# - Cleaner HUD: less noisy glow/scanlines, better spacing, typography.
+# - Robust single-instance + log.
 
 import os
 import time
@@ -35,11 +36,13 @@ run_menu_process = None
 _import_errs = []
 try:
     from gestureos_agent.qt_menu_overlay import run_menu_process as _rmp
+
     run_menu_process = _rmp
 except Exception as e1:
     _import_errs.append(repr(e1))
     try:
         from qt_menu_overlay import run_menu_process as _rmp2
+
         run_menu_process = _rmp2
     except Exception as e2:
         _import_errs.append(repr(e2))
@@ -98,12 +101,14 @@ def _hwnd_int(x) -> int:
 
 
 THEME = {
-    "MOUSE": {"accent": "#00ffa6"},
-    "DRAW": {"accent": "#ffb020"},
-    "PRESENTATION": {"accent": "#3aa0ff"},
-    "KEYBOARD": {"accent": "#b26bff"},
-    "VKEY": {"accent": "#39ff9a"},
-    "DEFAULT": {"accent": "#00ffa6"},
+    "MOUSE": {"accent": "#00FFA6"},
+    "DRAW": {"accent": "#FFB020"},
+    "PRESENTATION": {"accent": "#3AA0FF"},
+    "KEYBOARD": {"accent": "#B26BFF"},
+    "VKEY": {"accent": "#39FF9A"},
+    "RUSH_HAND": {"accent": "#FF3D7F"},
+    "RUSH_COLOR": {"accent": "#FFD23D"},
+    "DEFAULT": {"accent": "#00FFA6"},
 }
 
 
@@ -168,7 +173,7 @@ def _action_draw(st: dict, locked: bool) -> str:
     if g == "OPEN_PALM":
         return "이동"
     if g == "V_SIGN":
-        return "도구변경"
+        return "도구"
     if g == "FIST":
         return "지우기(홀드)"
     return "대기"
@@ -235,7 +240,6 @@ def _action_default(st: dict, locked: bool) -> str:
 
 def _bubble_text(st: dict, mode: str, locked: bool) -> str:
     mode_u = str(mode).upper()
-
     bubble = st.get("cursorBubble", None)
     if bubble is not None:
         return str(bubble).strip()
@@ -300,25 +304,31 @@ def _release_single_instance(h):
             pass
 
 
+# =========================
+# VISUAL TUNING (YOU CAN TWEAK)
+# =========================
 @dataclass
 class _HudGeom:
-    HUD_W: int = 380
-    HUD_H: int = 142
+    HUD_W: int = 360
+    HUD_H: int = 130
 
     HANDLE_W: int = 34
     HANDLE_H: int = 28
     HANDLE_PAD_R: int = 14
     HANDLE_PAD_T: int = 14
 
-    TIP_W_MIN: int = 180
-    TIP_W_MAX: int = 620
-    TIP_H: int = 48
+    TIP_W_MIN: int = 190
+    TIP_W_MAX: int = 640
+    TIP_H: int = 46
     TIP_OX: int = 22
-    TIP_OY: int = -68
+    TIP_OY: int = -64
 
     PAD: int = 10
 
 
+# =========================
+# HUD PROCESS
+# =========================
 def _hud_process_main(cmd_q: mp.Queue, evt_q: mp.Queue):
     if os.name != "nt":
         return
@@ -344,7 +354,7 @@ def _hud_process_main(cmd_q: mp.Queue, evt_q: mp.Queue):
     menu_active = False
     menu_hover = None
 
-    # IMPORTANT: freeze-center at open
+    # freeze center at open
     menu_frozen_center = None  # (x,y) logical global
     prev_menu_active = False
 
@@ -456,6 +466,11 @@ def _hud_process_main(cmd_q: mp.Queue, evt_q: mp.Queue):
             pass
 
     def menu_pump_events():
+        """
+        IMPORTANT:
+        - qt_menu_overlay may emit HOVER None intermittently.
+        - We forward raw events; main OverlayHUD will latch it.
+        """
         nonlocal menu_hover
         if not qt_ok or not qt_evt_q:
             return
@@ -464,7 +479,9 @@ def _hud_process_main(cmd_q: mp.Queue, evt_q: mp.Queue):
                 ev = qt_evt_q.get_nowait()
             except Exception:
                 break
-            if isinstance(ev, dict) and str(ev.get("type", "")).upper() == "HOVER":
+            if not isinstance(ev, dict):
+                continue
+            if str(ev.get("type", "")).upper() == "HOVER":
                 menu_hover = ev.get("value")
                 _evt_forward({"type": "HOVER", "value": menu_hover})
 
@@ -506,16 +523,14 @@ def _hud_process_main(cmd_q: mp.Queue, evt_q: mp.Queue):
         def __init__(self):
             super().__init__()
             self.setWindowFlags(
-                QtCore.Qt.FramelessWindowHint
-                | QtCore.Qt.Tool
-                | QtCore.Qt.WindowStaysOnTopHint
+                QtCore.Qt.FramelessWindowHint | QtCore.Qt.Tool | QtCore.Qt.WindowStaysOnTopHint
             )
             self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
             self.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
             self.resize(geom.HUD_W, geom.HUD_H)
 
             self._mode = "DEFAULT"
-            self._accent = "#00ffa6"
+            self._accent = "#00FFA6"
             self._tracking = False
             self._locked = False
             self._gesture = "NONE"
@@ -523,15 +538,6 @@ def _hud_process_main(cmd_q: mp.Queue, evt_q: mp.Queue):
             self._connected = True
             self._phase = 0.0
             self._menu_active = False
-
-            self._particles = []
-            for i in range(22):
-                self._particles.append({
-                    "x": (i * 37) % geom.HUD_W,
-                    "y": (i * 19) % geom.HUD_H,
-                    "r": 1.5 + (i % 3) * 0.7,
-                    "s": 0.7 + (i % 5) * 0.22
-                })
 
         def setState(self, mode, accent, tracking, locked, gesture, fps, connected, phase, menu_active=False):
             self._mode = mode
@@ -557,73 +563,98 @@ def _hud_process_main(cmd_q: mp.Queue, evt_q: mp.Queue):
             pad = geom.PAD
             rect = QtCore.QRectF(pad, pad, w - pad * 2, h - pad * 2)
 
-            bgA = QtGui.QColor(4, 10, 16, 150)
-            bgB = QtGui.QColor(8, 20, 32, 175)
-            bgC = QtGui.QColor(3, 9, 14, 160)
-
+            # --- base glass ---
+            baseA = 165 if self._tracking else 150
+            base = QtGui.QColor(8, 16, 24, baseA)
+            base2 = QtGui.QColor(4, 10, 16, baseA - 10)
             grad = QtGui.QLinearGradient(rect.topLeft(), rect.bottomRight())
-            grad.setColorAt(0.0, bgB)
-            grad.setColorAt(0.55, bgA)
-            grad.setColorAt(1.0, bgC)
+            grad.setColorAt(0.0, base)
+            grad.setColorAt(1.0, base2)
 
-            glow_base = QtGui.QColor(accent_r, accent_g, accent_b, 40 if self._tracking else 26)
-            for i in range(10, 0, -1):
-                g = QtGui.QColor(glow_base)
-                g.setAlpha(int(6 + i * (6 if self._tracking else 4)))
-                pen = QtGui.QPen(g, 1.0 + i * 1.05)
-                p.setPen(pen)
+            # --- outer subtle glow (reduced loops) ---
+            glow_alpha = 55 if self._tracking else 40
+            for i in range(5, 0, -1):
+                g = QtGui.QColor(accent_r, accent_g, accent_b, int(glow_alpha * (i / 5.0)))
+                p.setPen(QtGui.QPen(g, 1.0 + i * 0.9))
                 p.setBrush(QtCore.Qt.NoBrush)
                 p.drawRoundedRect(rect.adjusted(-i, -i, i, i), 18 + i, 18 + i)
 
-            p.setPen(QtGui.QPen(QtGui.QColor(25, 55, 80, 130), 1.0))
+            # panel
+            p.setPen(QtGui.QPen(QtGui.QColor(60, 110, 150, 140), 1.0))
             p.setBrush(QtGui.QBrush(grad))
             p.drawRoundedRect(rect, 18, 18)
 
+            # top highlight
             hi = QtGui.QLinearGradient(rect.topLeft(), rect.bottomLeft())
-            hi.setColorAt(0.0, QtGui.QColor(255, 255, 255, 38))
-            hi.setColorAt(0.25, QtGui.QColor(255, 255, 255, 10))
+            hi.setColorAt(0.0, QtGui.QColor(255, 255, 255, 40))
+            hi.setColorAt(0.18, QtGui.QColor(255, 255, 255, 12))
             hi.setColorAt(1.0, QtGui.QColor(255, 255, 255, 0))
             p.setPen(QtCore.Qt.NoPen)
             p.setBrush(hi)
-            p.drawRoundedRect(rect.adjusted(2, 2, -2, -2), 16, 16)
+            p.drawRoundedRect(rect.adjusted(1.5, 1.5, -1.5, -1.5), 17, 17)
 
-            p.save()
-            path = QtGui.QPainterPath()
-            path.addRoundedRect(rect, 18, 18)
-            p.setClipPath(path)
+            # --- header line ---
+            p.setPen(QtGui.QPen(QtGui.QColor(accent_r, accent_g, accent_b, 140), 1.5))
+            p.drawLine(QtCore.QPointF(rect.left() + 14, rect.top() + 44), QtCore.QPointF(rect.right() - 14, rect.top() + 44))
 
-            grid_alpha = 22 if self._tracking else 14
-            p.setPen(QtGui.QPen(QtGui.QColor(170, 210, 255, grid_alpha), 1))
-            step = 16
-            ox = 6 + int(math.sin(self._phase * 0.6) * 6.0)
-            oy = 6 + int(math.cos(self._phase * 0.55) * 6.0)
-            for x in range(int(rect.left()) + ox, int(rect.right()), step):
-                p.drawLine(x, int(rect.top()) + 6, x, int(rect.bottom()) - 6)
-            for y in range(int(rect.top()) + oy, int(rect.bottom()), step):
-                p.drawLine(int(rect.left()) + 6, y, int(rect.right()) - 6, y)
-
-            p.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 10), 1))
-            y = rect.top() + 4
-            while y < rect.bottom():
-                p.drawLine(rect.left() + 10, y, rect.right() - 10, y)
-                y += 7
-
-            sweep_w = rect.width() * 0.38
-            sweep_x = rect.left() + (rect.width() + sweep_w) * ((math.sin(self._phase * 0.7) + 1.0) * 0.5) - sweep_w
-            sweep = QtCore.QRectF(sweep_x, rect.top(), sweep_w, rect.height())
-            sgrad = QtGui.QLinearGradient(sweep.topLeft(), sweep.topRight())
-            sgrad.setColorAt(0.0, QtGui.QColor(255, 255, 255, 0))
-            sgrad.setColorAt(0.5, QtGui.QColor(255, 255, 255, 22))
-            sgrad.setColorAt(1.0, QtGui.QColor(255, 255, 255, 0))
-            p.setBrush(sgrad)
+            # status dot
+            cx = rect.left() + 20
+            cy = rect.top() + 22
+            dot = QtGui.QColor(0, 255, 160, 230) if self._connected else QtGui.QColor(255, 90, 90, 230)
+            p.setPen(QtGui.QPen(dot, 2))
+            p.setBrush(QtCore.Qt.NoBrush)
+            p.drawEllipse(QtCore.QPointF(cx, cy), 5.8, 5.8)
             p.setPen(QtCore.Qt.NoPen)
-            p.drawRect(sweep)
-            p.restore()
+            p.setBrush(dot)
+            p.drawEllipse(QtCore.QPointF(cx, cy), 2.1, 2.1)
 
-            p.setPen(QtGui.QPen(QtGui.QColor(accent_r, accent_g, accent_b, 180), 2))
-            x0, y0 = rect.left() + 8, rect.top() + 8
-            x1, y1 = rect.right() - 8, rect.bottom() - 8
-            s = 14
+            # mode title
+            p.setPen(QtGui.QColor(235, 248, 255, 245))
+            p.setFont(QtGui.QFont("Segoe UI", 12, QtGui.QFont.Bold))
+            p.drawText(QtCore.QPointF(rect.left() + 34, rect.top() + 26), self._mode)
+
+            # chips (LOCKED / ACTIVE + MENU)
+            chip_text = "LOCKED" if self._locked else "ACTIVE"
+            chip_bg = QtGui.QColor(255, 178, 32, 195) if self._locked else QtGui.QColor(accent_r, accent_g, accent_b, 70)
+            chip_bd = QtGui.QColor(70, 120, 160, 170)
+
+            chip_w, chip_h = 92, 22
+            chip_x = rect.right() - 16 - chip_w - (geom.HANDLE_W + 8)
+            chip_y = rect.top() + 12
+            chip = QtCore.QRectF(chip_x, chip_y, chip_w, chip_h)
+
+            p.setPen(QtGui.QPen(chip_bd, 1))
+            p.setBrush(chip_bg)
+            p.drawRoundedRect(chip, 11, 11)
+            p.setPen(QtGui.QColor(8, 18, 28, 245))
+            p.setFont(QtGui.QFont("Segoe UI", 9, QtGui.QFont.Bold))
+            p.drawText(chip, QtCore.Qt.AlignCenter, chip_text)
+
+            if self._menu_active:
+                rr = QtCore.QRectF(chip.left() - 58, chip_y + 2, 50, 18)
+                p.setPen(QtGui.QPen(QtGui.QColor(accent_r, accent_g, accent_b, 190), 1))
+                p.setBrush(QtGui.QColor(accent_r, accent_g, accent_b, 38))
+                p.drawRoundedRect(rr, 9, 9)
+                p.setPen(QtGui.QColor(235, 248, 255, 235))
+                p.setFont(QtGui.QFont("Segoe UI", 8, QtGui.QFont.Bold))
+                p.drawText(rr, QtCore.Qt.AlignCenter, "MENU")
+
+            # body labels
+            sub = QtGui.QColor(175, 210, 235, 225)
+            p.setPen(sub)
+            p.setFont(QtGui.QFont("Segoe UI", 9))
+
+            gtxt = str(self._gesture or "NONE")
+            t_on = "ON" if self._tracking else "OFF"
+            p.drawText(QtCore.QPointF(rect.left() + 18, rect.top() + 70), f"GESTURE  {gtxt}")
+            p.drawText(QtCore.QPointF(rect.left() + 18, rect.top() + 90), f"TRACK    {t_on}")
+            p.drawText(QtCore.QPointF(rect.left() + 18, rect.top() + 110), f"FPS      {self._fps:.1f}")
+
+            # tiny corner ticks
+            p.setPen(QtGui.QPen(QtGui.QColor(accent_r, accent_g, accent_b, 160), 2))
+            s = 12
+            x0, y0 = rect.left() + 10, rect.top() + 10
+            x1, y1 = rect.right() - 10, rect.bottom() - 10
             p.drawLine(QtCore.QPointF(x0, y0 + s), QtCore.QPointF(x0, y0))
             p.drawLine(QtCore.QPointF(x0, y0), QtCore.QPointF(x0 + s, y0))
             p.drawLine(QtCore.QPointF(x1 - s, y0), QtCore.QPointF(x1, y0))
@@ -633,83 +664,19 @@ def _hud_process_main(cmd_q: mp.Queue, evt_q: mp.Queue):
             p.drawLine(QtCore.QPointF(x1 - s, y1), QtCore.QPointF(x1, y1))
             p.drawLine(QtCore.QPointF(x1, y1 - s), QtCore.QPointF(x1, y1))
 
-            cx = rect.left() + 20
-            cy = rect.top() + 22
-            ring = QtGui.QColor(0, 255, 160, 230) if self._connected else QtGui.QColor(255, 80, 80, 230)
-            p.setPen(QtGui.QPen(ring, 2))
-            p.setBrush(QtCore.Qt.NoBrush)
-            p.drawEllipse(QtCore.QPointF(cx, cy), 6.0, 6.0)
-            p.setPen(QtCore.Qt.NoPen)
-            p.setBrush(ring)
-            p.drawEllipse(QtCore.QPointF(cx, cy), 2.2, 2.2)
-
-            p.setPen(QtGui.QColor(225, 245, 255, 240))
-            p.setFont(QtGui.QFont("Segoe UI", 12, QtGui.QFont.Bold))
-            p.drawText(QtCore.QPointF(rect.left() + 34, rect.top() + 26), self._mode)
-
-            chip_text = "LOCKED" if self._locked else "ACTIVE"
-            chip_bg = QtGui.QColor(255, 178, 32, 210) if self._locked else QtGui.QColor(accent_r, accent_g, accent_b, 80)
-            chip_bd = QtGui.QColor(70, 110, 150, 180)
-            chip_w = 92
-            chip_h = 22
-            chip_x = rect.right() - 16 - chip_w - (geom.HANDLE_W + 8)
-            chip_y = rect.top() + 12
-            chip = QtCore.QRectF(chip_x, chip_y, chip_w, chip_h)
-            p.setPen(QtGui.QPen(chip_bd, 1))
-            p.setBrush(chip_bg)
-            p.drawRoundedRect(chip, 11, 11)
-            p.setPen(QtGui.QColor(6, 16, 26, 245))
-            p.setFont(QtGui.QFont("Segoe UI", 9, QtGui.QFont.Bold))
-            p.drawText(chip, QtCore.Qt.AlignCenter, chip_text)
-
-            if self._menu_active:
-                rr = QtCore.QRectF(chip.left() - 60, chip_y + 2, 52, 18)
-                p.setPen(QtGui.QPen(QtGui.QColor(accent_r, accent_g, accent_b, 190), 1))
-                p.setBrush(QtGui.QColor(accent_r, accent_g, accent_b, 40))
-                p.drawRoundedRect(rr, 9, 9)
-                p.setPen(QtGui.QColor(230, 245, 255, 235))
-                p.setFont(QtGui.QFont("Segoe UI", 8, QtGui.QFont.Bold))
-                p.drawText(rr, QtCore.Qt.AlignCenter, "MENU")
-
-            sub = QtGui.QColor(175, 205, 230, 220)
-            p.setPen(sub)
-            p.setFont(QtGui.QFont("Segoe UI", 9))
-            p.drawText(QtCore.QPointF(rect.left() + 18, rect.top() + 62), f"GESTURE  {self._gesture}")
-            p.drawText(QtCore.QPointF(rect.left() + 18, rect.top() + 82), f"TRACK    {'ON' if self._tracking else 'OFF'}")
-            p.drawText(QtCore.QPointF(rect.left() + 18, rect.top() + 102), f"FPS      {self._fps:.1f}")
-
-            p.save()
-            path = QtGui.QPainterPath()
-            path.addRoundedRect(rect, 18, 18)
-            p.setClipPath(path)
-            for i, part in enumerate(self._particles):
-                px = part["x"] + math.sin(self._phase * (0.6 + part["s"])) * (6 + i % 3)
-                py = part["y"] + math.cos(self._phase * (0.55 + part["s"])) * (5 + (i + 1) % 4)
-                px = (px + (self._phase * (10 + i)) * 0.2) % rect.width()
-                py = (py + (self._phase * (8 + i)) * 0.16) % rect.height()
-                dx = rect.left() + 6 + px
-                dy = rect.top() + 6 + py
-                a = 55 if self._tracking else 32
-                p.setPen(QtCore.Qt.NoPen)
-                p.setBrush(QtGui.QColor(accent_r, accent_g, accent_b, a))
-                p.drawEllipse(QtCore.QPointF(dx, dy), part["r"], part["r"])
-            p.restore()
-
             p.end()
 
     class TipWindow(QtWidgets.QWidget):
         def __init__(self):
             super().__init__()
             self.setWindowFlags(
-                QtCore.Qt.FramelessWindowHint
-                | QtCore.Qt.Tool
-                | QtCore.Qt.WindowStaysOnTopHint
+                QtCore.Qt.FramelessWindowHint | QtCore.Qt.Tool | QtCore.Qt.WindowStaysOnTopHint
             )
             self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
             self.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
             self.resize(320, geom.TIP_H)
             self._text = ""
-            self._accent = "#00ffa6"
+            self._accent = "#00FFA6"
             self._phase = 0.0
 
         def setState(self, text, accent, phase):
@@ -724,29 +691,40 @@ def _hud_process_main(cmd_q: mp.Queue, evt_q: mp.Queue):
             p = QtGui.QPainter(self)
             p.setRenderHint(QtGui.QPainter.Antialiasing, True)
             p.setRenderHint(QtGui.QPainter.TextAntialiasing, True)
+
             w = self.width()
             h = self.height()
             accent_r, accent_g, accent_b = _hex_to_rgb(self._accent)
+
             pad = 6
             rect = QtCore.QRectF(pad, pad, w - pad * 2, h - pad * 2)
-            for i in range(8, 0, -1):
-                g = QtGui.QColor(accent_r, accent_g, accent_b, int(6 + i * 8))
-                p.setPen(QtGui.QPen(g, 1.0 + i * 1.05))
+
+            # subtle glow
+            for i in range(4, 0, -1):
+                g = QtGui.QColor(accent_r, accent_g, accent_b, int(45 * (i / 4.0)))
+                p.setPen(QtGui.QPen(g, 1.0 + i * 0.9))
                 p.setBrush(QtCore.Qt.NoBrush)
                 p.drawRoundedRect(rect.adjusted(-i, -i, i, i), 14 + i, 14 + i)
-            bg = QtGui.QColor(6, 14, 22, 165)
-            p.setPen(QtGui.QPen(QtGui.QColor(40, 80, 120, 140), 1.0))
+
+            # base
+            bg = QtGui.QColor(8, 16, 24, 170)
+            p.setPen(QtGui.QPen(QtGui.QColor(70, 120, 160, 140), 1.0))
             p.setBrush(bg)
             p.drawRoundedRect(rect, 14, 14)
-            p.setPen(QtGui.QPen(QtGui.QColor(accent_r, accent_g, accent_b, 220), 2))
-            x = rect.left() + 8
-            p.drawLine(QtCore.QPointF(x, rect.top() + 10), QtCore.QPointF(x, rect.bottom() - 10))
-            p.setPen(QtGui.QPen(QtGui.QColor(230, 245, 255, 245), 1))
+
+            # left accent bar
+            p.setPen(QtCore.Qt.NoPen)
+            p.setBrush(QtGui.QColor(accent_r, accent_g, accent_b, 210))
+            bar = QtCore.QRectF(rect.left() + 10, rect.top() + 10, 3.0, rect.height() - 20)
+            p.drawRoundedRect(bar, 2, 2)
+
+            # text
+            p.setPen(QtGui.QColor(235, 248, 255, 245))
             p.setFont(QtGui.QFont("Segoe UI", 10, QtGui.QFont.Bold))
             p.drawText(
-                QtCore.QRectF(rect.left() + 20, rect.top(), rect.width() - 24, rect.height()),
+                QtCore.QRectF(rect.left() + 20, rect.top(), rect.width() - 26, rect.height()),
                 QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft,
-                self._text
+                self._text,
             )
             p.end()
 
@@ -755,13 +733,11 @@ def _hud_process_main(cmd_q: mp.Queue, evt_q: mp.Queue):
             super().__init__()
             self.hud_win = hud_win
             self.setWindowFlags(
-                QtCore.Qt.FramelessWindowHint
-                | QtCore.Qt.Tool
-                | QtCore.Qt.WindowStaysOnTopHint
+                QtCore.Qt.FramelessWindowHint | QtCore.Qt.Tool | QtCore.Qt.WindowStaysOnTopHint
             )
             self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
             self.resize(geom.HANDLE_W, geom.HANDLE_H)
-            self._accent = "#00ffa6"
+            self._accent = "#00FFA6"
             self._dragging = False
             self._mx0 = 0
             self._my0 = 0
@@ -799,24 +775,34 @@ def _hud_process_main(cmd_q: mp.Queue, evt_q: mp.Queue):
         def paintEvent(self, _ev):
             p = QtGui.QPainter(self)
             p.setRenderHint(QtGui.QPainter.Antialiasing, True)
+
             w = self.width()
             h = self.height()
             accent_r, accent_g, accent_b = _hex_to_rgb(self._accent)
             rect = QtCore.QRectF(1, 1, w - 2, h - 2)
+
+            # shadow
             p.setPen(QtCore.Qt.NoPen)
             p.setBrush(QtGui.QColor(0, 0, 0, 120))
             p.drawRoundedRect(rect.translated(2, 2), 8, 8)
-            p.setPen(QtGui.QPen(QtGui.QColor(40, 90, 130, 160), 1.0))
-            p.setBrush(QtGui.QColor(7, 16, 24, 200))
+
+            # base
+            p.setPen(QtGui.QPen(QtGui.QColor(70, 120, 160, 160), 1.0))
+            p.setBrush(QtGui.QColor(8, 16, 24, 200))
             p.drawRoundedRect(rect, 8, 8)
-            p.setPen(QtGui.QPen(QtGui.QColor(accent_r, accent_g, accent_b, 200), 1.5))
+
+            # border accent
+            p.setPen(QtGui.QPen(QtGui.QColor(accent_r, accent_g, accent_b, 190), 1.5))
             p.setBrush(QtCore.Qt.NoBrush)
             p.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 7, 7)
-            p.setPen(QtGui.QPen(QtGui.QColor(230, 245, 255, 235), 2))
+
+            # grip lines
+            p.setPen(QtGui.QPen(QtGui.QColor(235, 248, 255, 235), 2))
             y0 = (h // 2) - 6
             for i in range(3):
                 yy = y0 + i * 6
                 p.drawLine(8, yy, w - 8, yy)
+
             p.end()
 
     app = QtWidgets.QApplication([])
@@ -857,7 +843,7 @@ def _hud_process_main(cmd_q: mp.Queue, evt_q: mp.Queue):
 
         fm = QtGui.QFontMetrics(QtGui.QFont("Segoe UI", 10, QtGui.QFont.Bold))
         text_w = fm.horizontalAdvance(bubble)
-        w = max(geom.TIP_W_MIN, min(geom.TIP_W_MAX, text_w + 18 * 2 + 24))
+        w = max(geom.TIP_W_MIN, min(geom.TIP_W_MAX, text_w + 18 * 2 + 18))
         h = geom.TIP_H
 
         tx = osx + geom.TIP_OX
@@ -986,6 +972,9 @@ def _hud_process_main(cmd_q: mp.Queue, evt_q: mp.Queue):
     _release_single_instance(mutex_h)
 
 
+# =========================
+# PUBLIC API
+# =========================
 class OverlayHUD:
     _GLOBAL_LOCK = mp.Lock()
     _GLOBAL_STARTED = False
@@ -999,12 +988,21 @@ class OverlayHUD:
         self._menu_active = False
         self._menu_hover = None
 
+        # ✅ hover latch (핵심)
+        self._menu_hover_keep_until = 0.0  # epoch seconds
+
         self._evt_stop = threading.Event()
         self._evt_thread = None
 
         atexit.register(self.stop)
 
     def _evt_loop(self):
+        """
+        Consume events from HUD process.
+        HOVER latch:
+          - If value is str: set hover and keep for 0.35s
+          - If value is None/empty: only clear after keep_until (unless menu inactive)
+        """
         while (not self._evt_stop.is_set()) and self._evt_q:
             try:
                 ev = self._evt_q.get(timeout=0.25)
@@ -1012,12 +1010,27 @@ class OverlayHUD:
                 continue
             if not isinstance(ev, dict):
                 continue
+
             typ = str(ev.get("type", "")).upper()
-            if typ == "HOVER":
-                v = ev.get("value", None)
-                self._menu_hover = (str(v).upper() if isinstance(v, str) and v.strip() else None)
-            elif typ == "MENU_ACTIVE":
+
+            if typ == "MENU_ACTIVE":
                 self._menu_active = bool(ev.get("value", False))
+                if not self._menu_active:
+                    # 메뉴가 꺼지면 즉시 clear
+                    self._menu_hover = None
+                    self._menu_hover_keep_until = 0.0
+
+            elif typ == "HOVER":
+                v = ev.get("value", None)
+                nowt = time.time()
+
+                if isinstance(v, str) and v.strip():
+                    self._menu_hover = v.strip().upper()
+                    self._menu_hover_keep_until = nowt + 0.35  # ✅ 350ms latch
+                else:
+                    # None이 오더라도 바로 지우지 말고 유예
+                    if (not self._menu_active) or (nowt >= self._menu_hover_keep_until):
+                        self._menu_hover = None
 
     def start(self):
         if not self.enable:
@@ -1085,6 +1098,7 @@ class OverlayHUD:
 
         self._menu_active = False
         self._menu_hover = None
+        self._menu_hover_keep_until = 0.0
 
     def push(self, status: dict):
         if not self.enable:
@@ -1107,14 +1121,14 @@ class OverlayHUD:
             pass
 
     def set_menu(self, active: bool, center_xy=None):
-        # 하위호환: 예전 코드가 center_xy를 넘겨도 TypeError 안 나게 받기만 함
+        # 하위호환: center_xy를 넘겨도 TypeError 안 나게 받기만 함
         if not self.enable or not self._cmd_q:
             return
 
         payload = {"__cmd": "SET_MENU", "active": bool(active)}
 
-        # center_xy가 와도 HUD 프로세스에서는 굳이 안 쓰지만,
-        # "호출부가 인자를 넘겨도" 죽지 않게 안전하게 담아둠
+        # center_xy는 HUD 프로세스에서 'freeze center at open'을 사용하므로
+        # 여기서는 저장만 하고 프로세스가 알아서 고정한다.
         if center_xy is not None:
             try:
                 x, y = center_xy
@@ -1130,17 +1144,17 @@ class OverlayHUD:
         self._menu_active = bool(active)
         if not active:
             self._menu_hover = None
+            self._menu_hover_keep_until = 0.0
 
     def show_menu(self, center_xy=None):
-        # 기존 hands_agent가 show_menu(center_xy=...)로 호출해도 동작하게
         self.set_menu(True, center_xy=center_xy)
 
     def hide_menu(self):
         self.set_menu(False)
 
-
     def is_menu_active(self) -> bool:
         return bool(self._menu_active)
 
     def get_menu_hover(self):
+        # ✅ latch된 hover 값 반환
         return self._menu_hover
