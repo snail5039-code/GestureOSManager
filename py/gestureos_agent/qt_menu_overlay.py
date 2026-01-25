@@ -1,465 +1,507 @@
-# qt_menu_overlay.py
-# PySide6 radial menu overlay (click-through), runs in a separate process.
-# - Uses Qt cursor pos (logical coords) + desktop union rect to avoid DPI mismatch as much as possible.
+# gestureos_agent/qt_menu_overlay.py
+# Separate process: radial MODE menu overlay (click-through, topmost, no-activate)
+# - Uses Qt logical coords (QCursor.pos, QGuiApplication.screens) to avoid DPI mismatch
+# - Center is FIXED when menu opens (cursor position at activation time)
+# - Emits evt_q: {"type":"HOVER","value": "<MODE or None>"}
+#
+# Redesign:
+# - Manager UI-like: dark glass, thin grid, segmented neon ring, minimal labels
+# - More stable hover: smoothing + debounce to reduce "모드 변경 안됨" 체감
 
 import os
-import sys
-import math
 import time
-import queue as pyqueue
+import math
+import ctypes
+from ctypes import wintypes
 
-from PySide6.QtCore import Qt, QTimer, QPoint, QRect
-from PySide6.QtGui import QPainter, QPen, QColor, QFont, QCursor, QGuiApplication
-from PySide6.QtWidgets import QApplication, QWidget
+# ---------------- Win32 constants ----------------
+GWL_EXSTYLE = -20
+WS_EX_LAYERED = 0x00080000
+WS_EX_TRANSPARENT = 0x00000020
+WS_EX_TOOLWINDOW = 0x00000080
+WS_EX_NOACTIVATE = 0x08000000
 
-LOG_PATH = os.path.join(os.getenv("TEMP", "."), "GestureOS_HUD.log")
+user32 = ctypes.windll.user32
 
-def _log(*args):
+
+def _get_window_long_ptr(hwnd, idx):
+    if hasattr(user32, "GetWindowLongPtrW"):
+        user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+        user32.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
+        return user32.GetWindowLongPtrW(hwnd, idx)
+    user32.GetWindowLongW.restype = ctypes.c_long
+    user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+    return user32.GetWindowLongW(hwnd, idx)
+
+
+def _set_window_long_ptr(hwnd, idx, value):
+    if hasattr(user32, "SetWindowLongPtrW"):
+        user32.SetWindowLongPtrW.restype = ctypes.c_ssize_t
+        user32.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+        return user32.SetWindowLongPtrW(hwnd, idx, ctypes.c_ssize_t(value))
+    user32.SetWindowLongW.restype = ctypes.c_long
+    user32.SetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_long]
+    return user32.SetWindowLongW(hwnd, idx, ctypes.c_long(value))
+
+
+def _hwnd_int(x) -> int:
     try:
-        s = " ".join(str(x) for x in args)
-        with open(LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(f"[{time.strftime('%H:%M:%S')}] {s}\n")
+        if isinstance(x, int):
+            return x
+        v = ctypes.cast(x, ctypes.c_void_p).value
+        return int(v or 0)
+    except Exception:
+        try:
+            return int(x)
+        except Exception:
+            return 0
+
+
+def _apply_win_exstyle(hwnd_int: int, click_through: bool):
+    hwnd_int = _hwnd_int(hwnd_int)
+    if not hwnd_int:
+        return
+    try:
+        hwnd = wintypes.HWND(hwnd_int)
+        ex = _get_window_long_ptr(hwnd, GWL_EXSTYLE)
+        ex |= (WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)
+        if click_through:
+            ex |= WS_EX_TRANSPARENT
+        else:
+            ex &= (~WS_EX_TRANSPARENT)
+        _set_window_long_ptr(hwnd, GWL_EXSTYLE, ex)
     except Exception:
         pass
 
-def clamp(v, lo, hi):
-    return max(lo, min(hi, v))
 
-def hex_to_qcolor(h, a=1.0):
-    h = str(h).lstrip("#")
-    r = int(h[0:2], 16)
-    g = int(h[2:4], 16)
-    b = int(h[4:6], 16)
-    c = QColor(r, g, b)
-    c.setAlphaF(max(0.0, min(1.0, float(a))))
-    return c
-
-def ang_diff_deg(a, b):
-    d = (a - b + 180.0) % 360.0 - 180.0
-    return d
-
-def desktop_union_rect() -> QRect:
-    rect = QRect()
-    screens = QGuiApplication.screens()
-    for s in screens:
-        g = s.geometry()  # Qt logical coords
-        rect = rect.united(g) if not rect.isNull() else QRect(g)
-    if rect.isNull():
-        rect = QRect(0, 0, 1920, 1080)
-    return rect
+def _hex_to_rgb(color_hex: str):
+    s = str(color_hex).lstrip("#")
+    r = int(s[0:2], 16)
+    g = int(s[2:4], 16)
+    b = int(s[4:6], 16)
+    return r, g, b
 
 
-# =============================================================================
-# Text visibility helper (필+외곽선)
-# =============================================================================
-def draw_text_pill(
-    p: QPainter,
-    rect: QRect,
-    text: str,
-    font: QFont,
-    fg="#FFFFFF",
-    fg_a=0.98,
-    outline="#000000",
-    outline_a=0.80,
-    outline_px=3,
-    pill_bg="#000000",
-    pill_a=0.55,
-    radius=10,
-    pad_x=10,
-    pad_y=6,
-    flags=Qt.AlignCenter,
-):
-    """
-    밝은 배경에서도 무조건 읽히게:
-    - 둥근 반투명 배경(pill)
-    - 텍스트 외곽선(8방향)
-    - 텍스트 본문
-    """
-    if not text:
+def run_menu_process(cmd_q, evt_q):
+    if os.name != "nt":
         return
 
-    p.save()
-    p.setFont(font)
+    try:
+        from PySide6 import QtCore, QtGui, QtWidgets
+        from PySide6.QtGui import QCursor, QGuiApplication
+    except Exception:
+        return
 
-    # pill bg
-    bg = hex_to_qcolor(pill_bg, pill_a)
-    p.setPen(Qt.NoPen)
-    p.setBrush(bg)
-    pill = QRect(rect)
-    pill.adjust(-pad_x, -pad_y, pad_x, pad_y)
-    p.drawRoundedRect(pill, radius, radius)
+    # ---------- config (look & feel) ----------
+    MENU_SIZE = 640
+    OUTER_R = MENU_SIZE * 0.47
+    RING_THICK = 18
+    GAP_DEG = 7.0
 
-    # outline
-    pen_o = QPen(hex_to_qcolor(outline, outline_a))
-    pen_o.setWidth(outline_px)
-    pen_o.setJoinStyle(Qt.RoundJoin)
-    p.setPen(pen_o)
+    # hover valid donut
+    INNER_R = OUTER_R - 86
+    HOVER_MIN_R = INNER_R + 10
+    HOVER_MAX_R = OUTER_R - 14
 
-    # 8-direction outline offsets
-    for dx, dy in [(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(1,-1),(-1,1),(1,1)]:
-        r2 = QRect(rect)
-        r2.translate(dx, dy)
-        p.drawText(r2, flags, text)
+    LABEL_R = OUTER_R - 44
+    CENTER_R = 156
 
-    # main text
-    pen_t = QPen(hex_to_qcolor(fg, fg_a))
-    pen_t.setWidth(1)
-    p.setPen(pen_t)
-    p.drawText(rect, flags, text)
+    # Modes (manager와 동일)
+    ITEMS = ["PRESENTATION", "MOUSE", "KEYBOARD", "VKEY", "DRAW"]
+    N = len(ITEMS)
 
-    p.restore()
+    START_ANG = -90.0
+    STEP = 360.0 / N
 
+    MODE_ACCENT = {
+        "MOUSE": "#00ffa6",
+        "DRAW": "#ffb020",
+        "PRESENTATION": "#3aa0ff",
+        "KEYBOARD": "#b26bff",
+        "VKEY": "#39ff9a",
+        "DEFAULT": "#00ffa6",
+    }
 
-class RadialMenuOverlay(QWidget):
-    def __init__(self, cmd_q, evt_q):
-        super().__init__(None)
-        self.cmd_q = cmd_q
-        self.evt_q = evt_q
+    def desktop_union_rect():
+        rect = QtCore.QRect()
+        for s in QGuiApplication.screens():
+            g = s.geometry()
+            rect = rect.united(g) if not rect.isNull() else QtCore.QRect(g)
+        if rect.isNull():
+            rect = QtCore.QRect(0, 0, 1920, 1080)
+        return rect
 
-        # ✅ 위/아래 잘림 해결: 높이 확장
-        self.W = 900
-        self.H = 620
-        self.setFixedSize(self.W, self.H)
+    def clamp_window(x, y, w, h):
+        r = desktop_union_rect()
+        min_x = r.left()
+        min_y = r.top()
+        max_x = r.right() - w
+        max_y = r.bottom() - h
+        x = max(min_x, min(int(x), int(max_x)))
+        y = max(min_y, min(int(y), int(max_y)))
+        return x, y
 
-        flags = (
-            Qt.FramelessWindowHint |
-            Qt.WindowStaysOnTopHint |
-            Qt.Tool |
-            Qt.WindowDoesNotAcceptFocus
-        )
-        if hasattr(Qt, "WindowTransparentForInput"):
-            flags |= Qt.WindowTransparentForInput
-        self.setWindowFlags(flags)
+    def _norm_deg(deg: float) -> float:
+        d = deg % 360.0
+        return d + 360.0 if d < 0 else d
 
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+    class MenuWindow(QtWidgets.QWidget):
+        def __init__(self):
+            super().__init__()
+            self.setWindowFlags(
+                QtCore.Qt.FramelessWindowHint
+                | QtCore.Qt.Tool
+                | QtCore.Qt.WindowStaysOnTopHint
+            )
+            self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
+            self.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
 
-        self.setWindowOpacity(0.95)
+            self.resize(MENU_SIZE, MENU_SIZE)
 
-        self.active = False
-        self.center = None          # if None -> follow cursor, CENTER 오면 고정
-        self.current_mode = "DEFAULT"
-        self.phase = 0.0
-        self.hover = None
-        self._last_sent_hover = object()
-        self._t_last = time.time()
+            self._active = False
+            self._opacity = 0.88
 
-        self.desktop_rect = desktop_union_rect()
+            self._mode = "DEFAULT"
+            self._accent = MODE_ACCENT["DEFAULT"]
 
-        # ✅ 대비 강화
-        self.CYAN = "#00f5ff"
-        self.TEXT = "#F2FEFF"
-        self.THEME = {
-            "MOUSE":        {"accent": "#22c55e"},
-            "DRAW":         {"accent": "#f59e0b"},
-            "PRESENTATION": {"accent": "#60a5fa"},
-            "KEYBOARD":     {"accent": "#a78bfa"},
-            "DEFAULT":      {"accent": "#22c55e"},
-        }
+            self._center_global = None  # (x,y) logical global
+            self._phase = 0.0
 
-        # geometry
-        self.R_OUT = 210
-        self.R_IN  = 145
-        self.SPAN  = 26
+            # hover stability
+            self._hover_raw = None
+            self._hover_stable = None
+            self._hover_candidate = None
+            self._hover_since = 0.0
+            self._emit_last = object()
 
-        # sectors (deg): 0=right, 90=up
-        self.sectors = {
-            "KEYBOARD": 0.0,
-            "DRAW": 90.0,
-            "MOUSE": 180.0,
-            "PPT": 270.0,
-        }
+        def setOpacity(self, v: float):
+            self._opacity = float(max(0.15, min(0.98, v)))
 
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.tick)
-        self.timer.start(16)
+        def setMode(self, m: str):
+            m = str(m or "DEFAULT").upper()
+            self._mode = m
+            self._accent = MODE_ACCENT.get(m, MODE_ACCENT["DEFAULT"])
 
-    def set_active(self, v: bool):
-        self.active = bool(v)
-        if self.active:
-            self.show()
-            self.raise_()
+        def setActive(self, on: bool):
+            on = bool(on)
+            if on and (not self._active):
+                if self._center_global is None:
+                    cur = QCursor.pos()
+                    self._center_global = (int(cur.x()), int(cur.y()))
+                self._move_to_center()
+                self._reset_hover()
+                self.show()
+            elif (not on) and self._active:
+                self.hide()
+                self._center_global = None
+                self._reset_hover()
+                self._emit_hover(None)
+            self._active = on
+
+        def setCenter(self, x: int, y: int):
+            self._center_global = (int(x), int(y))
+            if self._active:
+                self._move_to_center()
+
+        def _move_to_center(self):
+            if not self._center_global:
+                return
+            cx, cy = self._center_global
+            x = cx - (MENU_SIZE // 2)
+            y = cy - (MENU_SIZE // 2)
+            x, y = clamp_window(x, y, MENU_SIZE, MENU_SIZE)
+            self.move(x, y)
+
+        def _reset_hover(self):
+            self._hover_raw = None
+            self._hover_stable = None
+            self._hover_candidate = None
+            self._hover_since = 0.0
+            self._emit_last = object()
+
+        def _emit_hover(self, value):
+            # evt_q: HOVER only
+            if value == self._emit_last:
+                return
+            self._emit_last = value
+            if not evt_q:
+                return
+            try:
+                evt_q.put_nowait({"type": "HOVER", "value": value})
+            except Exception:
+                pass
+
+        def _calc_hover(self):
+            if not self._active or not self._center_global:
+                return None
+
+            cur = QCursor.pos()
+            cx, cy = self._center_global
+            dx = float(cur.x() - cx)
+            dy = float(cur.y() - cy)
+
+            r = math.hypot(dx, dy)
+            if r < HOVER_MIN_R or r > HOVER_MAX_R:
+                return None
+
+            ang = math.degrees(math.atan2(dy, dx))  # -180..180 (0:+x)
+            # convert to 0..360 where 0 is START_ANG direction
+            a = _norm_deg(ang - START_ANG)
+            idx = int(a // STEP) % N
+            return ITEMS[idx]
+
+        def tick(self, dt: float):
+            self._phase += float(dt)
+
+            raw = self._calc_hover()
+            self._hover_raw = raw
+
+            # debounce for stability: 80ms
+            now = time.time()
+            if raw != self._hover_candidate:
+                self._hover_candidate = raw
+                self._hover_since = now
+            else:
+                if (now - self._hover_since) >= 0.08:
+                    if raw != self._hover_stable:
+                        self._hover_stable = raw
+                        self._emit_hover(raw)
+
             self.update()
-        else:
-            self.hide()
 
-    def set_center(self, x, y):
-        self.center = (int(x), int(y))
+        def paintEvent(self, _ev):
+            if not self._active:
+                return
 
-    def set_mode(self, m: str):
-        m = str(m or "DEFAULT").upper()
-        # PPT는 표시만 PPT
-        if m == "PRESENTATION":
-            m = "PPT"
-        self.current_mode = m if m in self.THEME or m == "PPT" else "DEFAULT"
+            p = QtGui.QPainter(self)
+            p.setRenderHint(QtGui.QPainter.Antialiasing, True)
+            p.setRenderHint(QtGui.QPainter.TextAntialiasing, True)
+            p.setOpacity(self._opacity)
 
-    def set_opacity(self, o: float):
-        try:
-            o = float(o)
-            o = max(0.20, min(1.0, o))
-            self.setWindowOpacity(o)
-        except Exception:
-            pass
+            w = self.width()
+            h = self.height()
+            cx = w * 0.5
+            cy = h * 0.5
 
-    def hit_test(self, osx, osy):
-        if osx is None or osy is None:
-            return None
+            ar, ag, ab = _hex_to_rgb(self._accent)
 
-        wx = self.x()
-        wy = self.y()
-        lx = float(osx - wx)
-        ly = float(osy - wy)
+            # -------- background glass + vignette --------
+            bg = QtGui.QRadialGradient(QtCore.QPointF(cx, cy), OUTER_R)
+            bg.setColorAt(0.0, QtGui.QColor(8, 14, 20, 150))
+            bg.setColorAt(0.55, QtGui.QColor(6, 10, 16, 96))
+            bg.setColorAt(1.0, QtGui.QColor(0, 0, 0, 0))
+            p.setPen(QtCore.Qt.NoPen)
+            p.setBrush(bg)
+            p.drawEllipse(QtCore.QPointF(cx, cy), OUTER_R + 6, OUTER_R + 6)
 
-        cx = self.W * 0.5
-        cy = self.H * 0.5
+            # subtle grid (manager 느낌)
+            p.save()
+            clip = QtGui.QPainterPath()
+            clip.addEllipse(QtCore.QPointF(cx, cy), OUTER_R + 2, OUTER_R + 2)
+            p.setClipPath(clip)
+            gridA = 18
+            p.setPen(QtGui.QPen(QtGui.QColor(170, 210, 255, gridA), 1))
+            step = 18
+            ox = int((math.sin(self._phase * 0.7) + 1) * 0.5 * step)
+            oy = int((math.cos(self._phase * 0.63) + 1) * 0.5 * step)
+            for x in range(0 + ox, int(w), step):
+                p.drawLine(x, 0, x, int(h))
+            for y in range(0 + oy, int(h), step):
+                p.drawLine(0, y, int(w), y)
 
-        dx = lx - cx
-        dy = ly - cy
-        r = math.hypot(dx, dy)
-        if r < self.R_IN or r > self.R_OUT:
-            return None
+            # scanlines
+            p.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 10), 1))
+            y = 0
+            while y < h:
+                p.drawLine(0, y, w, y)
+                y += 7
+            p.restore()
 
-        ang = (math.degrees(math.atan2(-dy, dx)) + 360.0) % 360.0
+            # -------- segmented outer ring --------
+            # glow
+            for i in range(10, 0, -1):
+                g = QtGui.QColor(ar, ag, ab, int(4 + i * 7))
+                p.setPen(QtGui.QPen(g, RING_THICK + i * 2.2))
+                p.setBrush(QtCore.Qt.NoBrush)
+                p.drawEllipse(QtCore.QPointF(cx, cy), OUTER_R - 8, OUTER_R - 8)
 
-        best = None
-        best_abs = 999.0
-        for k, center in self.sectors.items():
-            d = abs(ang_diff_deg(ang, center))
-            if d <= self.SPAN and d < best_abs:
-                best_abs = d
-                best = k
-        return best
+            # segments (gapped)
+            ring_pen = QtGui.QPen(QtGui.QColor(ar, ag, ab, 220), RING_THICK)
+            ring_pen.setCapStyle(QtCore.Qt.FlatCap)
+            p.setPen(ring_pen)
 
-    def drain_commands(self):
+            rect = QtCore.QRectF(
+                cx - (OUTER_R - 8),
+                cy - (OUTER_R - 8),
+                (OUTER_R - 8) * 2,
+                (OUTER_R - 8) * 2,
+            )
+
+            for i in range(N):
+                a0 = START_ANG + i * STEP + GAP_DEG * 0.5
+                span = STEP - GAP_DEG
+                # Qt: arc uses degrees counterclockwise from 3 o'clock, but drawArc in Qt uses 1/16 degrees and CCW
+                # We'll use QPainterPath arcTo with negative span to match screen orientation.
+                path = QtGui.QPainterPath()
+                path.arcMoveTo(rect, -a0)
+                path.arcTo(rect, -a0, -span)
+                p.drawPath(path)
+
+            # -------- hover highlight --------
+            hv = self._hover_stable
+            if hv:
+                try:
+                    idx = ITEMS.index(hv)
+                    a0 = START_ANG + idx * STEP + GAP_DEG * 0.5
+                    span = STEP - GAP_DEG
+
+                    # wedge fill
+                    p.setPen(QtCore.Qt.NoPen)
+                    p.setBrush(QtGui.QColor(ar, ag, ab, 26))
+                    wedge = QtGui.QPainterPath()
+                    wedge.moveTo(cx, cy)
+                    wedge.arcTo(rect, -a0, -span)
+                    wedge.closeSubpath()
+                    p.drawPath(wedge)
+
+                    # stronger segment stroke
+                    p.setPen(QtGui.QPen(QtGui.QColor(ar, ag, ab, 255), RING_THICK + 4))
+                    path = QtGui.QPainterPath()
+                    path.arcMoveTo(rect, -a0)
+                    path.arcTo(rect, -a0, -span)
+                    p.drawPath(path)
+                except Exception:
+                    pass
+
+            # -------- inner rings / crosshair --------
+            p.setPen(QtGui.QPen(QtGui.QColor(170, 210, 255, 70), 1))
+            p.setBrush(QtCore.Qt.NoBrush)
+            p.drawEllipse(QtCore.QPointF(cx, cy), INNER_R, INNER_R)
+            p.setPen(QtGui.QPen(QtGui.QColor(ar, ag, ab, 110), 2))
+            p.drawEllipse(QtCore.QPointF(cx, cy), INNER_R - 28, INNER_R - 28)
+
+            p.setPen(QtGui.QPen(QtGui.QColor(170, 210, 255, 60), 1))
+            p.drawLine(int(cx), int(cy - OUTER_R + 24), int(cx), int(cy + OUTER_R - 24))
+            p.drawLine(int(cx - OUTER_R + 24), int(cy), int(cx + OUTER_R - 24), int(cy))
+
+            # -------- labels (thin chip style) --------
+            p.setFont(QtGui.QFont("Segoe UI", 10, QtGui.QFont.Bold))
+            for i, name in enumerate(ITEMS):
+                mid = math.radians(START_ANG + (i + 0.5) * STEP)
+                lx = cx + math.cos(mid) * LABEL_R
+                ly = cy + math.sin(mid) * LABEL_R
+
+                tw = 160
+                th = 30
+                rchip = QtCore.QRectF(lx - tw * 0.5, ly - th * 0.5, tw, th)
+
+                is_hover = (name == hv)
+                # chip bg/border
+                if is_hover:
+                    bgc = QtGui.QColor(ar, ag, ab, 36)
+                    bdc = QtGui.QColor(ar, ag, ab, 190)
+                    txc = QtGui.QColor(235, 248, 255, 255)
+                else:
+                    bgc = QtGui.QColor(6, 12, 18, 110)
+                    bdc = QtGui.QColor(120, 160, 200, 90)
+                    txc = QtGui.QColor(220, 240, 255, 210)
+
+                p.setPen(QtGui.QPen(bdc, 1))
+                p.setBrush(bgc)
+                p.drawRoundedRect(rchip, 10, 10)
+
+                p.setPen(txc)
+                p.drawText(rchip, QtCore.Qt.AlignCenter, name)
+
+            # -------- center text --------
+            p.setPen(QtGui.QColor(230, 245, 255, 245))
+            p.setFont(QtGui.QFont("Segoe UI", 18, QtGui.QFont.Bold))
+            p.drawText(
+                QtCore.QRectF(cx - CENTER_R, cy - 44, CENTER_R * 2, 34),
+                QtCore.Qt.AlignCenter,
+                "MODE",
+            )
+
+            # selected line
+            sel = hv or "-"
+            p.setPen(QtGui.QColor(ar, ag, ab, 235))
+            p.setFont(QtGui.QFont("Segoe UI", 10, QtGui.QFont.Bold))
+            p.drawText(
+                QtCore.QRectF(cx - CENTER_R, cy - 10, CENTER_R * 2, 24),
+                QtCore.Qt.AlignCenter,
+                f"SELECT : {sel}",
+            )
+
+            # hint
+            p.setPen(QtGui.QColor(210, 235, 255, 220))
+            p.setFont(QtGui.QFont("Segoe UI", 10, QtGui.QFont.Normal))
+            p.drawText(
+                QtCore.QRectF(cx - CENTER_R, cy + 18, CENTER_R * 2, 28),
+                QtCore.Qt.AlignCenter,
+                "PINCH = 확정    FIST = 취소",
+            )
+
+            p.end()
+
+    app = QtWidgets.QApplication([])
+    win = MenuWindow()
+    win.hide()
+
+    # apply click-through exstyle
+    try:
+        _apply_win_exstyle(int(win.winId()), click_through=True)
+    except Exception:
+        pass
+
+    last_t = time.time()
+
+    timer = QtCore.QTimer()
+    timer.setInterval(16)
+
+    def pump_cmd():
+        nonlocal last_t
+        # commands
         while True:
             try:
-                msg = self.cmd_q.get_nowait()
-            except pyqueue.Empty:
-                break
+                msg = cmd_q.get_nowait()
             except Exception:
                 break
 
             if not isinstance(msg, dict):
                 continue
 
-            t = msg.get("type")
-            if t == "ACTIVE":
-                self.set_active(bool(msg.get("value", False)))
-            elif t == "CENTER":
-                c = msg.get("value")
-                if isinstance(c, (list, tuple)) and len(c) == 2:
-                    self.set_center(c[0], c[1])
-            elif t == "MODE":
-                self.set_mode(msg.get("value", "DEFAULT"))
-            elif t == "OPACITY":
-                self.set_opacity(msg.get("value", 0.82))
-            elif t == "QUIT":
-                QApplication.instance().quit()
+            typ = str(msg.get("type", "")).upper()
+            if typ == "QUIT":
+                app.quit()
                 return
+            if typ == "ACTIVE":
+                win.setActive(bool(msg.get("value", False)))
+            elif typ == "MODE":
+                win.setMode(msg.get("value", "DEFAULT"))
+            elif typ == "OPACITY":
+                win.setOpacity(float(msg.get("value", 0.88)))
+            elif typ == "CENTER":
+                try:
+                    win.setCenter(int(msg.get("x")), int(msg.get("y")))
+                except Exception:
+                    pass
 
-    def tick(self):
-        t = time.time()
-        dt = max(1e-6, t - self._t_last)
-        self._t_last = t
-        self.phase += dt
+        nowt = time.time()
+        dt = max(1e-6, nowt - last_t)
+        last_t = nowt
+        win.tick(dt)
 
-        self.drain_commands()
-        if not self.active:
-            return
-
-        cur = QCursor.pos()
-        osx, osy = int(cur.x()), int(cur.y())
-
-        if self.center is None:
-            cx, cy = osx, osy
-        else:
-            cx, cy = self.center
-
-        x = int(cx - self.W // 2)
-        y = int(cy - self.H // 2)
-
-        r = self.desktop_rect
-        min_x = r.left()
-        min_y = r.top()
-        max_x = r.right() - self.W
-        max_y = r.bottom() - self.H
-
-        x = clamp(x, min_x, max_x)
-        y = clamp(y, min_y, max_y)
-        self.move(QPoint(x, y))
-
-        h = self.hit_test(osx, osy)
-        self.hover = h
-
-        if h != self._last_sent_hover:
-            self._last_sent_hover = h
+        # periodic re-apply win32 exstyle (OS가 리셋하는 경우 방지)
+        if int(nowt * 10) % 60 == 0:
             try:
-                self.evt_q.put_nowait({"type": "HOVER", "value": h})
+                _apply_win_exstyle(int(win.winId()), click_through=True)
             except Exception:
                 pass
 
-        self.update()
+    timer.timeout.connect(pump_cmd)
+    timer.start()
 
-    def paintEvent(self, _ev):
-        if not self.active:
-            return
-
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing, True)
-        p.setRenderHint(QPainter.TextAntialiasing, True)
-
-        W, H = self.W, self.H
-        cx, cy = W * 0.5, H * 0.5
-
-        cyan = self.CYAN
-        cyan_dim = hex_to_qcolor(cyan, 0.95)
-        cyan_low = hex_to_qcolor(cyan, 0.65)
-
-        # corner brackets
-        def corner(x, y, sx, sy):
-            p.setPen(QPen(hex_to_qcolor(cyan, 0.22), 7))
-            p.drawLine(x, y, x + 36 * sx, y)
-            p.drawLine(x, y, x, y + 36 * sy)
-            p.setPen(QPen(hex_to_qcolor(cyan, 0.70), 2))
-            p.drawLine(x, y, x + 36 * sx, y)
-            p.drawLine(x, y, x, y + 36 * sy)
-
-        pad = 26
-        corner(pad, pad, +1, +1)
-        corner(W - pad, pad, -1, +1)
-        corner(pad, H - pad, +1, -1)
-        corner(W - pad, H - pad, -1, -1)
-
-        # dot grid
-        p.setPen(Qt.NoPen)
-        for yy in range(60, H - 60, 72):
-            for xx in range(60, W - 60, 96):
-                p.setBrush(hex_to_qcolor(cyan, 0.22))
-                p.drawEllipse(QPoint(xx, yy), 1, 1)
-
-        def ring(r_, col, w):
-            p.setPen(QPen(col, w))
-            p.setBrush(Qt.NoBrush)
-            p.drawEllipse(QPoint(int(cx), int(cy)), int(r_), int(r_))
-
-        ring(self.R_OUT, cyan_dim, 5)
-        ring(self.R_IN,  cyan_low, 5)
-
-        # spinning segments
-        r_ = self.R_OUT
-        for i in range(12):
-            start = (i * 30 + self.phase * 46.0) % 360.0
-            p.setPen(QPen(cyan_dim, 3))
-            p.drawArc(int(cx - r_), int(cy - r_), int(2 * r_), int(2 * r_),
-                      int(-start * 16), int(-10 * 16))
-
-        # sweep
-        sweep_start = (self.phase * 90.0) % 360.0
-        p.setPen(QPen(hex_to_qcolor(cyan, 0.92), 6))
-        p.drawArc(int(cx - r_), int(cy - r_), int(2 * r_), int(2 * r_),
-                  int(-sweep_start * 16), int(-38 * 16))
-
-        # scan line
-        scan_y = 70 + int((self.phase * 120.0) % (H - 140))
-        p.setPen(QPen(hex_to_qcolor(cyan, 0.16), 2))
-        p.drawLine(90, scan_y, W - 90, scan_y)
-
-        # center title (✅ pill + outline)
-        center_title_rect = QRect(int(cx - 160), int(cy - 26), 320, 28)
-        draw_text_pill(
-            p, center_title_rect, "MODE SELECT",
-            font=QFont("Segoe UI", 16, QFont.Bold),
-            fg="#FFFFFF", fg_a=0.98,
-            outline="#000000", outline_a=0.85, outline_px=3,
-            pill_bg="#000000", pill_a=0.45, radius=12
-        )
-
-        cm = self.current_mode if self.current_mode else "DEFAULT"
-        cm_col = self.THEME.get(cm, self.THEME["DEFAULT"])["accent"] if cm != "PPT" else "#60a5fa"
-        center_mode_rect = QRect(int(cx - 160), int(cy + 6), 320, 26)
-        draw_text_pill(
-            p, center_mode_rect, cm,
-            font=QFont("Segoe UI", 14, QFont.Bold),
-            fg="#FFFFFF", fg_a=0.98,
-            outline="#000000", outline_a=0.85, outline_px=3,
-            pill_bg="#000000", pill_a=0.45, radius=12
-        )
-
-        # sectors
-        r_mid = (self.R_IN + self.R_OUT) * 0.5
-        for k, center_deg in self.sectors.items():
-            base = cyan_dim
-            w = 10
-
-            if k == cm:
-                base = hex_to_qcolor(cm_col, 0.75)
-
-            if self.hover == k:
-                # hover는 더 강하게
-                accent = "#60a5fa" if k == "PPT" else self.THEME.get(k, self.THEME["DEFAULT"])["accent"]
-                base = hex_to_qcolor(accent, 0.98)
-                w = 14  # ✅ (원래 w=1 이라 거의 안 보였음)
-
-            p.setPen(QPen(base, w))
-            start = center_deg - self.SPAN
-            extent = self.SPAN * 2
-            rr = r_mid
-            p.drawArc(int(cx - rr), int(cy - rr), int(2 * rr), int(2 * rr),
-                      int(-start * 16), int(-extent * 16))
-
-            rad = math.radians(center_deg)
-            bx = int(cx + math.cos(rad) * (self.R_OUT + 46))
-            by = int(cy - math.sin(rad) * (self.R_OUT + 46))
-
-            label_kr = {
-                "MOUSE": "마우스",
-                "KEYBOARD": "키보드",
-                "DRAW": "그리기",
-                "PPT": "PPT",
-            }.get(k, k)
-
-            # ✅ 라벨도 pill + outline (밝은 배경에서 무조건 보임)
-            label_rect = QRect(bx - 90, by - 12, 180, 24)
-
-            if self.hover == k:
-                accent = "#60a5fa" if k == "PPT" else self.THEME.get(k, self.THEME["DEFAULT"])["accent"]
-                draw_text_pill(
-                    p, label_rect, label_kr,
-                    font=QFont("Segoe UI", 14, QFont.Bold),
-                    fg="#FFFFFF", fg_a=0.98,
-                    outline="#000000", outline_a=0.90, outline_px=3,
-                    pill_bg="#000000", pill_a=0.62, radius=10
-                )
-            else:
-                draw_text_pill(
-                    p, label_rect, label_kr,
-                    font=QFont("Segoe UI", 14, QFont.Bold),
-                    fg="#FFFFFF", fg_a=0.97,
-                    outline="#000000", outline_a=0.85, outline_px=3,
-                    pill_bg="#000000", pill_a=0.50, radius=10
-                )
-
-        # hint (✅ pill + outline)
-        hint_rect = QRect(0, H - 34, W, 24)
-        draw_text_pill(
-            p, hint_rect,
-            "양손 V_SIGN 홀드로 열기  •  PINCH=확정  •  FIST=취소",
-            font=QFont("Segoe UI", 10, QFont.Bold),
-            fg="#FFFFFF", fg_a=0.95,
-            outline="#000000", outline_a=0.90, outline_px=3,
-            pill_bg="#000000", pill_a=0.55, radius=10, pad_x=12, pad_y=6
-        )
-
-
-def run_menu_process(cmd_q, evt_q):
     try:
-        _log("[QT] run_menu_process start")
-        app = QApplication(sys.argv)
-        w = RadialMenuOverlay(cmd_q, evt_q)
-        w.hide()
-        _log("[QT] app exec")
-        sys.exit(app.exec())
-    except Exception as e:
-        _log("[QT] crashed:", repr(e))
-        raise
+        app.exec()
+    except Exception:
+        pass

@@ -2,6 +2,10 @@ server:
   port: 8080
 
 spring:
+  main:
+    headless: false
+  config:
+    import: optional:classpath:openai.yml
   jackson:
     serialization:
       indent_output: false
@@ -15,3 +19,10 @@ spring:
 logging:
   level:
     com.example.gestureOSManager: info
+
+gestureos:
+  pairing:
+    httpPort: 8081
+    udpPort: 39500
+    name: ${COMPUTERNAME:PC}
+    storagePath: ${user.home}/.gestureos/pairing.json

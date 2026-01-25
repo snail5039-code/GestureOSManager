@@ -1,0 +1,378 @@
+{
+  "navTitle": "Motion Guide",
+  "title": "제스처 모션 가이드",
+  "status": {
+    "live": "LIVE",
+    "ready": "READY"
+  },
+  "modes": {
+    "all": "전체",
+    "mouse": "마우스",
+    "keyboard": "키보드",
+    "draw": "그리기",
+    "presentation": "PPT"
+  },
+  "list": {
+    "title": "동작 리스트",
+    "desc": "모드별로 지원하는 제스처를 확인하고, 항목을 클릭해 상세 설명을 확인하세요.",
+    "searchPlaceholder": "검색: pinch, 우클릭, 드래그, F5 ...",
+    "badge": "ACTIVE",
+    "empty": "조건에 맞는 동작이 없습니다."
+  },
+  "detail": {
+    "title": "동작 상세",
+    "selectHint": "왼쪽에서 동작을 선택하면 상세 설명이 표시됩니다.",
+    "sections": {
+      "summary": "요약",
+      "trigger": "트리거",
+      "action": "동작 결과",
+      "howTo": "수행 방법",
+      "tips": "인식 팁",
+      "pitfalls": "자주 실패하는 경우"
+    },
+    "imageAlt": "제스처 설명 이미지"
+  },
+  "caution": {
+    "title": "주의사항",
+    "items": [
+      "조명이 어두우면 인식률이 낮아집니다.",
+      "손이 카메라 프레임을 벗어나지 않도록 유지하세요.",
+      "모션은 천천히, 크게 수행하는 것이 좋습니다.",
+      "양손 제스처는 두 손이 동시에 화면에 들어와야 합니다."
+    ]
+  },
+  "gestures": [
+    {
+      "id": "mouse_open_palm_move",
+      "mode": "mouse",
+      "name": "OPEN_PALM",
+      "summary": "커서 이동",
+      "trigger": "한 손 OPEN_PALM",
+      "action": "마우스 커서 이동",
+      "howTo": [
+        "손바닥을 카메라 정면으로",
+        "프레임 중앙에서 천천히 이동"
+      ],
+      "tips": [
+        "손을 너무 가까이 대면 떨림이 커질 수 있어요.",
+        "팔 전체로 부드럽게 이동하면 안정적입니다."
+      ],
+      "pitfalls": [
+        "손이 프레임 밖으로 나가면 커서가 튀거나 멈출 수 있어요."
+      ],
+      "media": {
+        "thumb": "/motion/open_palm.png",
+        "image": "/motion/open_palm.png"
+      }
+    },
+    {
+      "id": "mouse_pinch_click_drag",
+      "mode": "mouse",
+      "name": "PINCH",
+      "summary": "좌클릭 / 드래그",
+      "trigger": "엄지+검지 PINCH",
+      "action": "짧게: 좌클릭 / 길게: 드래그",
+      "howTo": [
+        "엄지와 검지를 확실하게 집기",
+        "길게 유지하면 누른 채 이동(드래그)"
+      ],
+      "tips": [
+        "집는 동작을 작게 하면 인식이 약할 수 있어요.",
+        "드래그는 천천히 유지하면서 이동하세요."
+      ],
+      "pitfalls": [
+        "짧게/길게가 헷갈리면 너무 빠르게 떼지 말고 0.5초 정도 유지해보세요."
+      ],
+      "media": {
+        "thumb": "/motion/pinch.png",
+        "image": "/motion/pinch.png"
+      }
+    },
+    {
+      "id": "mouse_v_right_click",
+      "mode": "mouse",
+      "name": "V",
+      "summary": "우클릭",
+      "trigger": "검지+중지 V",
+      "action": "우클릭(컨텍스트 메뉴)",
+      "howTo": [
+        "검지+중지를 벌려 V 모양 만들기",
+        "손바닥이 카메라를 향하게"
+      ],
+      "tips": [
+        "V 각도를 확실히 벌리면 인식이 좋아요."
+      ],
+      "pitfalls": [
+        "손가락이 겹치거나 각도가 좁으면 인식이 흔들릴 수 있어요."
+      ],
+      "media": {
+        "thumb": "/motion/v.png",
+        "image": "/motion/v.png"
+      }
+    },
+    {
+      "id": "mouse_scroll_open_palm_fist",
+      "mode": "mouse",
+      "name": "OPEN_PALM + FIST",
+      "summary": "스크롤",
+      "trigger": "한 손 OPEN_PALM + 다른 손 FIST",
+      "action": "스크롤 모드",
+      "howTo": [
+        "두 손이 프레임 안에 들어오게 유지",
+        "손의 상/하 이동으로 스크롤"
+      ],
+      "tips": [
+        "스크롤 중에는 작은 움직임을 연속으로 하는 게 좋아요."
+      ],
+      "pitfalls": [
+        "한 손이 프레임에서 사라지면 스크롤이 끊길 수 있어요."
+      ],
+      "media": {
+        "thumb": "/motion/open_fist.png",
+        "image": "/motion/open_fist.png"
+      }
+    },
+    {
+      "id": "mouse_fist_hold_lock",
+      "mode": "mouse",
+      "name": "FIST (HOLD)",
+      "summary": "락(잠금) 토글",
+      "trigger": "FIST 지속",
+      "action": "락(잠금) ON/OFF",
+      "howTo": [
+        "주먹 상태를 일정 시간 유지",
+        "토글 후 손을 풀어주세요."
+      ],
+      "tips": [
+        "의도치 않은 입력 방지에 유용합니다."
+      ],
+      "pitfalls": [
+        "주먹을 자주 오래 유지하면 원치 않게 토글될 수 있어요."
+      ],
+      "media": {
+        "thumb": "/motion/fist_lock.png",
+        "image": "/motion/fist_lock.png"
+      }
+    },
+    {
+      "id": "keyboard_fist_toggle",
+      "mode": "keyboard",
+      "name": "FIST",
+      "summary": "키보드 토글",
+      "trigger": "FIST",
+      "action": "키보드 UI 열기/닫기",
+      "howTo": [
+        "주먹을 한 번 만들어 토글",
+        "토글 후 손을 풀어주세요."
+      ],
+      "tips": [
+        "토글은 오작동이 쉬우니 천천히 1회만 수행하세요."
+      ],
+      "pitfalls": [
+        "주먹이 반복 인식되면 연속 토글될 수 있어요."
+      ],
+      "media": {
+        "thumb": "/motion/fist.png",
+        "image": "/motion/fist.png"
+      }
+    },
+    {
+      "id": "draw_open_palm_move",
+      "mode": "draw",
+      "name": "OPEN_PALM",
+      "summary": "커서 이동",
+      "trigger": "OPEN_PALM",
+      "action": "그리기 커서(펜 위치) 이동",
+      "howTo": [
+        "손바닥을 펴고 이동",
+        "선이 떨리면 천천히 움직이세요."
+      ],
+      "tips": [
+        "그리기 모드에서는 커서 이동이 곧 펜 위치입니다."
+      ],
+      "pitfalls": [
+        "손이 프레임 밖으로 나가면 위치가 튈 수 있어요."
+      ],
+      "media": {
+        "thumb": "/motion/open_palm.png",
+        "image": "/motion/open_palm.png"
+      }
+    },
+    {
+      "id": "draw_pinch_pen",
+      "mode": "draw",
+      "name": "PINCH",
+      "summary": "펜 다운/업",
+      "trigger": "PINCH",
+      "action": "그리기 시작/종료",
+      "howTo": [
+        "집으면 펜 다운(그리기)",
+        "풀면 펜 업(종료)"
+      ],
+      "tips": [
+        "선이 끊기면 PINCH를 조금 더 확실하게 유지해보세요."
+      ],
+      "pitfalls": [
+        "PINCH가 약하면 펜 다운 상태가 불안정할 수 있어요."
+      ],
+      "media": {
+        "thumb": "/motion/pinch.png",
+        "image": "/motion/pinch.png"
+      }
+    },
+    {
+      "id": "ppt_two_open_palm_f5",
+      "mode": "presentation",
+      "name": "TWO OPEN_PALM",
+      "summary": "전체화면 시작",
+      "trigger": "양손 OPEN_PALM",
+      "action": "F5 (슬라이드쇼 시작)",
+      "howTo": [
+        "두 손을 동시에 펼쳐 프레임 안에 유지",
+        "잠깐 고정 후 수행"
+      ],
+      "tips": [
+        "양손이 동시에 인식되어야 합니다."
+      ],
+      "pitfalls": [
+        "한 손이 늦게 들어오면 인식이 실패할 수 있어요."
+      ],
+      "media": {
+        "thumb": "/motion/open_palms.png",
+        "image": "/motion/open_palms.png"
+      }
+    },
+    {
+      "id": "ppt_open_palm_move",
+      "mode": "presentation",
+      "name": "OPEN_PALM",
+      "summary": "커서 이동",
+      "trigger": "한 손 OPEN_PALM",
+      "action": "커서 이동 (hands_agent 처리)",
+      "howTo": [
+        "손바닥을 카메라 정면으로",
+        "프레임 중앙에서 천천히 이동"
+      ],
+      "tips": [
+        "손을 너무 가까이 대면 떨림이 커질 수 있어요.",
+        "팔 전체로 부드럽게 이동하면 안정적입니다."
+      ],
+      "pitfalls": [
+        "손이 프레임 밖으로 나가면 커서가 튀거나 멈출 수 있어요."
+      ],
+      "media": {
+        "thumb": "/motion/open_palm.png",
+        "image": "/motion/open_palm.png"
+      }
+    },
+    {
+      "id": "ppt_pinch_index_left_click",
+      "mode": "presentation",
+      "name": "PINCH_INDEX",
+      "summary": "좌클릭",
+      "trigger": "PINCH_INDEX",
+      "action": "좌클릭 (복귀/선택)",
+      "howTo": [
+        "엄지와 검지를 맞닿게 PINCH",
+        "짧게 1회 수행"
+      ],
+      "tips": [
+        "손가락 간격이 너무 작거나 흐리면 인식이 약할 수 있어요."
+      ],
+      "pitfalls": [
+        "길게 유지하면 다른 동작(양손 길게)과 혼동될 수 있어요."
+      ],
+      "media": {
+        "thumb": "/motion/pinch.png",
+        "image": "/motion/pinch.png"
+      }
+    },
+    {
+      "id": "ppt_fist_next_right",
+      "mode": "presentation",
+      "name": "FIST",
+      "summary": "다음 슬라이드",
+      "trigger": "FIST",
+      "action": "Right (다음 슬라이드)",
+      "howTo": [
+        "주먹을 짧게 1회 수행"
+      ],
+      "tips": [
+        "연속 넘김은 천천히 리듬 있게 반복하세요."
+      ],
+      "pitfalls": [
+        "너무 빠르게 반복하면 연속 입력으로 오작동할 수 있어요."
+      ],
+      "media": {
+        "thumb": "/motion/fist.png",
+        "image": "/motion/fist.png"
+      }
+    },
+    {
+      "id": "ppt_v_sign_prev_left",
+      "mode": "presentation",
+      "name": "V_SIGN",
+      "summary": "이전 슬라이드",
+      "trigger": "V_SIGN",
+      "action": "Left (이전 슬라이드)",
+      "howTo": [
+        "검지+중지를 벌려 V 모양 만들기",
+        "짧게 1회 수행"
+      ],
+      "tips": [
+        "V 각도를 확실히 벌리면 인식이 좋아요."
+      ],
+      "pitfalls": [
+        "손가락이 겹치거나 각도가 좁으면 인식이 흔들릴 수 있어요."
+      ],
+      "media": {
+        "thumb": "/motion/v.png",
+        "image": "/motion/v.png"
+      }
+    },
+    {
+      "id": "ppt_two_fist_hold_esc",
+      "mode": "presentation",
+      "name": "TWO FIST (HOLD)",
+      "summary": "발표 종료",
+      "trigger": "양손 FIST 길게",
+      "action": "ESC (발표 종료)",
+      "howTo": [
+        "양손 주먹을 동시에 만들기",
+        "일정 시간 유지 후 해제"
+      ],
+      "tips": [
+        "오작동 방지를 위해 '길게 유지'가 필요합니다."
+      ],
+      "pitfalls": [
+        "한 손만 주먹이 되거나 타이밍이 어긋나면 인식이 실패할 수 있어요."
+      ],
+      "media": {
+        "thumb": "/motion/fists.png",
+        "image": "/motion/fists.png"
+      }
+    },
+    {
+      "id": "ppt_two_pinch_index_hold_alt_tab",
+      "mode": "presentation",
+      "name": "TWO PINCH_INDEX (HOLD)",
+      "summary": "직전 앱으로",
+      "trigger": "양손 PINCH_INDEX 길게",
+      "action": "ALT+TAB (직전 앱으로)",
+      "howTo": [
+        "양손 모두 엄지+검지 PINCH",
+        "일정 시간 유지 후 해제"
+      ],
+      "tips": [
+        "링크/영상으로 이동했다가 복귀할 때 유용합니다."
+      ],
+      "pitfalls": [
+        "한 손만 PINCH 되면 인식이 실패할 수 있어요."
+      ],
+      "media": {
+        "thumb": "/motion/pinchs.png",
+        "image": "/motion/pinchs.png"
+      }
+    }
+  ]
+}
