@@ -99,8 +99,12 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
       setProfileSel(p);
 
       if (!isGuest) {
-        const r = await api.get("/train/profile/db/list", { headers: userHeaders });
-        setDbProfiles(Array.isArray(r?.data?.profiles) ? r.data.profiles : []);
+        try {
+          const r = await api.get("/train/profile/db/list", { headers: userHeaders });
+          setDbProfiles(Array.isArray(r?.data?.profiles) ? r.data.profiles : []);
+        } catch {
+          setDbProfiles([]);
+        }
       } else {
         setDbProfiles([]);
       }
@@ -215,7 +219,24 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
   const email = user?.email || "-";
   const role = user?.role || "-";
 
-  // “딱딱한” 대시보드 룩: 라운딩/테두리 얇게
+  // ===== ONLY FIXED PART =====
+  const profileImgUrl = useMemo(() => {
+    const rawPath =
+      user?.profileImageUrl ||
+      user?.profile_image_url ||
+      user?.profileImage ||
+      user?.profile_image ||
+      user?.image ||
+      user?.avatar;
+
+    if (!rawPath) return null;
+    if (/^https?:\/\//i.test(rawPath)) return rawPath;
+
+    const cleanPath = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
+    return `${webBase}${cleanPath}`;
+  }, [user, webBase]);
+  // ===========================
+
   const frame = cn("rounded-lg ring-1 overflow-hidden", t.panel);
   const header = cn("px-4 py-3 border-b flex items-center justify-between", isBright ? "border-slate-200" : "border-white/10");
   const body = "px-4 py-3";
@@ -224,7 +245,6 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
   return (
     <>
       <div className={frame}>
-        {/* header */}
         <div className={header}>
           <div className={cn("text-sm font-semibold tracking-tight", t.text)}>프로필</div>
           <div className="flex items-center gap-3">
@@ -239,13 +259,11 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
           </div>
         </div>
 
-        {/* body */}
         <div className={body}>
           {booting ? (
             <div className={cn("text-sm", t.muted)}>불러오는 중...</div>
           ) : isAuthed ? (
             <div className="space-y-3">
-              {/* row 1: identity */}
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 min-w-0">
@@ -262,20 +280,30 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
                   <div className={cn("text-xs mt-1 truncate", t.muted)}>{email}</div>
                 </div>
 
-                {/* tiny initial mark (not a big avatar) */}
                 <div
                   className={cn(
-                    "h-8 w-8 rounded-md ring-1 grid place-items-center text-[12px] font-bold",
+                    "h-8 w-8 rounded-md ring-1 grid place-items-center text-[12px] font-bold overflow-hidden shrink-0",
                     isBright ? "bg-white ring-slate-200" : "bg-white/5 ring-white/12",
                     t.text,
                   )}
                   title="계정"
                 >
-                  {/[^\x00-\x7F]/.test(displayName) ? displayName.slice(0, 1) : displayName.slice(0, 2).toUpperCase()}
+                  {profileImgUrl ? (
+                    <img 
+                      src={profileImgUrl} 
+                      alt="" 
+                      className="h-full w-full object-cover" 
+                      onError={(e) => {
+                        e.target.style.display = 'none';
+                        e.target.parentElement.innerText = /[^\x00-\x7F]/.test(displayName) ? displayName.slice(0, 1) : displayName.slice(0, 2).toUpperCase();
+                      }}
+                    />
+                  ) : (
+                    /[^\x00-\x7F]/.test(displayName) ? displayName.slice(0, 1) : displayName.slice(0, 2).toUpperCase()
+                  )}
                 </div>
               </div>
 
-              {/* row 2: profile switch (wide) */}
               <div className={cn("rounded-md ring-1 p-3", t.panelSoft, isBright ? "ring-slate-200" : "ring-white/12")}>
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
@@ -349,7 +377,6 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
           )}
         </div>
 
-        {/* Login Modal */}
         <ModalShell open={loginOpen} onClose={() => !busy && setLoginOpen(false)}>
           <div className={cn("rounded-md ring-1 overflow-hidden", t.panel)}>
             <div className={cn("px-4 py-3 border-b flex items-center justify-between", isBright ? "border-slate-200" : "border-white/10")}>
@@ -388,7 +415,6 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
           </div>
         </ModalShell>
 
-        {/* Logout Confirm Modal */}
         <ModalShell open={logoutOpen} onClose={() => !busy && setLogoutOpen(false)}>
           <div className={cn("rounded-md ring-1 overflow-hidden", t.panel)}>
             <div className={cn("px-4 py-3 border-b flex items-center justify-between", isBright ? "border-slate-200" : "border-white/10")}>
@@ -413,7 +439,6 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
         </ModalShell>
       </div>
 
-      {/* Toast */}
       {toast ? (
         <div className="fixed bottom-6 left-6 z-[1000]">
           <div className={cn("px-4 py-2 rounded-md ring-1 text-sm", t.panel, t.text)}>{toast}</div>
