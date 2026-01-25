@@ -1645,6 +1645,21 @@ class HandsAgent:
             "gain": float(getattr(self.control, "gain", 1.0)),
         }
 
+        # ✅ HUD 말풍선용: KEYBOARD 바인딩 전달(커스텀 바인딩도 정확히 표시)
+        if mode_u == "KEYBOARD":
+            try:
+                kb_bind = ((self.settings.get("bindings") or {}).get("KEYBOARD") or {})
+                base = kb_bind.get("BASE") if isinstance(kb_bind.get("BASE"), dict) else {}
+                fn = kb_bind.get("FN") if isinstance(kb_bind.get("FN"), dict) else {}
+                fn_hold = kb_bind.get("FN_HOLD")
+                payload["kbBase"] = dict(base)
+                payload["kbFn"] = dict(fn)
+                if fn_hold:
+                    payload["kbFnHold"] = str(fn_hold)
+            except Exception:
+                pass
+
+
         if getattr(self, "cursor_bubble", None):
             payload["cursorBubble"] = str(self.cursor_bubble)
 

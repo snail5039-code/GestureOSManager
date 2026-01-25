@@ -243,19 +243,103 @@ def _action_presentation(st: dict, locked: bool) -> str:
 
 
 def _action_keyboard(st: dict, locked: bool) -> str:
+    """KEYBOARD 모드 말풍선(액션 표시).
+
+    - 기본 레이어:  ←/→/↑/↓
+    - FN 레이어(보조손 FN_HOLD):  ⌫/␠/⏎/ESC
+
+    bindings는 HandsAgent가 STATUS에 kbBase/kbFn/kbFnHold 를 실어주면 그대로 따르고,
+    없으면 기본값(DEFAULT_SETTINGS)을 가정한다.
+    """
+
     common = _common_state_label(st, locked)
     if common:
         return common
-    sel = _pick_first_str(st, ["selectedKey", "key", "keyName", "char"])
-    g = str(st.get("gesture", "NONE") or "NONE").upper()
-    if g == "PINCH_INDEX":
-        return f"입력({sel})" if sel else "입력"
-    if g == "OPEN_PALM":
-        return "선택"
-    if sel:
-        return f"선택({sel})"
-    return "대기"
 
+    g = str(st.get("gesture", "NONE") or "NONE").upper()
+    og = str(st.get("otherGesture", "NONE") or "NONE").upper()
+
+    # bindings from agent (optional)
+    kb_base = st.get("kbBase") if isinstance(st.get("kbBase"), dict) else None
+    kb_fn = st.get("kbFn") if isinstance(st.get("kbFn"), dict) else None
+    fn_hold = _pick_first_str(st, ["kbFnHold"]) or "PINCH_INDEX"
+    fn_hold = str(fn_hold).upper()
+
+    # fallback defaults (matches py/gestureos_agent/bindings.py)
+    if kb_base is None:
+        kb_base = {
+            "LEFT": "FIST",
+            "RIGHT": "V_SIGN",
+            "UP": "PINCH_INDEX",
+            "DOWN": "OPEN_PALM",
+        }
+    if kb_fn is None:
+        kb_fn = {
+            "BACKSPACE": "FIST",
+            "SPACE": "OPEN_PALM",
+            "ENTER": "PINCH_INDEX",
+            "ESC": "V_SIGN",
+        }
+
+    def pick_token(gesture: str, mapping: dict, order: list[str]):
+        for tok in order:
+            try:
+                if gesture == str(mapping.get(tok, "")).upper():
+                    return tok
+            except Exception:
+                continue
+        return None
+
+    ICON = {
+        "LEFT": "LEFT",
+        "RIGHT": "RIGHT",
+        "UP": "UP",
+        "DOWN": "DOWN",
+        "BACKSPACE": "BACKSPACE",
+        "SPACE": "SPACE",
+        "ENTER": "ENTER",
+        "ESC": "ESC",
+    }
+
+    mod_active = (og == fn_hold)
+
+    if mod_active:
+        tok = pick_token(g, kb_fn, ["BACKSPACE", "SPACE", "ENTER", "ESC"])
+        if tok:
+            return f"FN • {ICON.get(tok, tok)}"
+        return "FN"
+
+    tok = pick_token(g, kb_base, ["LEFT", "RIGHT", "UP", "DOWN"])
+    if tok:
+        return str(ICON.get(tok, tok))
+
+    # idle/unknown => quick legend (bindings 반영)
+    def sg(v: str) -> str:
+        s = str(v or "").upper()
+        return {
+            "FIST": "FIST",
+            "V_SIGN": "V",
+            "PINCH_INDEX": "PINCH",
+            "OPEN_PALM": "PALM",
+            "NONE": "-",
+            "": "-",
+        }.get(s, s or "-")
+
+    # ✅ idle(아무것도 안잡힘/매칭 안됨)일 때는 다른 모드처럼 "대기"
+    # (필요하면 HUD_DEBUG=1 일 때만 치트시트 보여주도록 유지)
+    legend = (
+        f"←={sg(kb_base.get('LEFT'))} →={sg(kb_base.get('RIGHT'))} "
+        f"↑={sg(kb_base.get('UP'))} ↓={sg(kb_base.get('DOWN'))}"
+    )
+    legend_fn = (
+        f"FN(보조손 {sg(fn_hold)}): "
+        f"⌫={sg(kb_fn.get('BACKSPACE'))} ␠={sg(kb_fn.get('SPACE'))} "
+        f"⏎={sg(kb_fn.get('ENTER'))} ESC={sg(kb_fn.get('ESC'))}"
+    )
+
+    if HUD_DEBUG:
+        return f"{legend} / {legend_fn}"
+    return "대기"
 
 def _action_vkey(st: dict, locked: bool) -> str:
     common = _common_state_label(st, locked)
