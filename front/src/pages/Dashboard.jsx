@@ -945,7 +945,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
                       "text-[11px] leading-relaxed overflow-auto flex-1 rounded-lg ring-1 p-3",
                       t.panelSolid || t.panel2 || t.panel,
                       t.input,
-                    )}
+                    )}    
                   >
                     {status ? JSON.stringify(status, null, 2) : loading ? "Loading..." : "No data"}
                   </pre>
