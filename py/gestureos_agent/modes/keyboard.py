@@ -8,12 +8,6 @@ import time
 import ctypes
 from ctypes import wintypes
 
-try:
-    ULONG_PTR = wintypes.ULONG_PTR
-except AttributeError:
-    ULONG_PTR = ctypes.c_uint64 if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_uint32
-
-
 # -----------------------------------------------------------------------------
 # Win11 안정형 키 입력: SendInput
 # (주의) 관리자 권한 앱(UAC 상승된 창)에는 일반 권한 프로세스가 키 주입 못함.
@@ -24,6 +18,13 @@ user32 = ctypes.windll.user32
 
 INPUT_KEYBOARD = 1
 KEYEVENTF_KEYUP = 0x0002
+
+# ✅ 일부 Python/환경에서 wintypes.ULONG_PTR 없음
+try:
+    ULONG_PTR = wintypes.ULONG_PTR
+except AttributeError:
+    ULONG_PTR = ctypes.c_uint64 if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_uint32
+
 
 # Virtual-Key Codes
 VK = {
@@ -90,8 +91,6 @@ DEFAULT_FN_HOLD = "PINCH_INDEX"
 
 @dataclass
 class KeyboardHandler:
-    """KEYBOARD mode 입력(연발 억제 + 기본 바인딩 내장 + SendInput)"""
-
     stable_frames: int = 3
     repeat_start_sec: float = 0.55
     repeat_sec: float = 0.22
@@ -128,7 +127,6 @@ class KeyboardHandler:
     token_start_ts: float = 0.0
 
     armed: bool = True
-
     pressed_once: bool = False
     repeat_start_ts: float = 0.0
     last_repeat_ts: float = 0.0
@@ -174,11 +172,9 @@ class KeyboardHandler:
         k = keymap.get(token)
         if not k:
             return
-
         vk = VK.get(k)
         if vk is None:
             return
-
         try:
             _send_vk(int(vk))
         except Exception:
@@ -221,20 +217,11 @@ class KeyboardHandler:
         mod_active = t < self.mod_until
 
         token = None
-
         if got_cursor:
             if mod_active:
-                token = _pick_token(
-                    cursor_gesture,
-                    fn_map,
-                    ["BACKSPACE", "SPACE", "ENTER", "ESC"],
-                )
+                token = _pick_token(cursor_gesture, fn_map, ["BACKSPACE", "SPACE", "ENTER", "ESC"])
             if token is None:
-                token = _pick_token(
-                    cursor_gesture,
-                    base_map,
-                    ["LEFT", "RIGHT", "UP", "DOWN"],
-                )
+                token = _pick_token(cursor_gesture, base_map, ["LEFT", "RIGHT", "UP", "DOWN"])
 
         if token is None:
             self.last_token = None

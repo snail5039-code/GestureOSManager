@@ -395,6 +395,10 @@ class HandsAgent:
 
         # preview window
         self.window_open = False
+        # ✅ Win11: HUD 초기 표시가 안 뜨는 케이스 대비 (첫 STATUS 이후 1회 리프레시)
+        self._hud_bootstrap_done = False
+        self._hud_bootstrap_t0 = time.time()
+
 
         # ---- OSK state ----
         self.osk_open = False
@@ -442,7 +446,7 @@ class HandsAgent:
         # ✅✅ pinch debounce / hysteresis (cursor hand)
         self._pinch_down = False
         self._pinch_t0 = 0.0  # pinch candidate start time
-        self._pinch_hold_ms = 55  # tweakable: 70~140ms
+        self._pinch_hold_ms = 90  # tweakable: 70~140ms
         self._pinch_hys_on = 1.00  # ON threshold multiplier (tight)
         self._pinch_hys_off = 1.25  # OFF threshold multiplier (looser)
 
@@ -1845,3 +1849,12 @@ class HandsAgent:
             hud_payload["connected"] = bool(self.ws.connected)
             hud_payload["tracking"] = bool(payload.get("isTracking", False))
             hud.push(hud_payload)
+            
+        # ✅ 첫 push 이후 0.3초 지나면 1회만: HUD/Tip/Handle topmost+재배치 강제
+        if (not self._hud_bootstrap_done) and (time.time() - self._hud_bootstrap_t0 >= 0.3):
+            self._hud_bootstrap_done = True
+            try:
+                hud.force_refresh()
+            except Exception:
+                pass
+

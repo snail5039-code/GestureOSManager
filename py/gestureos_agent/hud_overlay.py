@@ -7,6 +7,7 @@
 # - Menu "freeze center at open": menu does not follow cursor while active.
 # - Cleaner HUD: less noisy glow/scanlines, better spacing, typography.
 # - Robust single-instance + log.
+# - Win11: 초기 표시 실패(안 보임) 케이스 대응: HUD/Tip/Handle 3창 show/raise + TOPMOST 재강제 + exstyle 재적용
 
 import os
 import time
@@ -207,7 +208,6 @@ def _action_keyboard(st: dict, locked: bool) -> str:
     bindings는 HandsAgent가 STATUS에 kbBase/kbFn/kbFnHold 를 실어주면 그대로 따르고,
     없으면 기본값(DEFAULT_SETTINGS)을 가정한다.
     """
-
     common = _common_state_label(st, locked)
     if common:
         return common
@@ -215,13 +215,11 @@ def _action_keyboard(st: dict, locked: bool) -> str:
     g = str(st.get("gesture", "NONE") or "NONE").upper()
     og = str(st.get("otherGesture", "NONE") or "NONE").upper()
 
-    # bindings from agent (optional)
     kb_base = st.get("kbBase") if isinstance(st.get("kbBase"), dict) else None
     kb_fn = st.get("kbFn") if isinstance(st.get("kbFn"), dict) else None
     fn_hold = _pick_first_str(st, ["kbFnHold"]) or "PINCH_INDEX"
     fn_hold = str(fn_hold).upper()
 
-    # fallback defaults (matches py/gestureos_agent/bindings.py)
     if kb_base is None:
         kb_base = {
             "LEFT": "FIST",
@@ -269,7 +267,6 @@ def _action_keyboard(st: dict, locked: bool) -> str:
     if tok:
         return str(ICON.get(tok, tok))
 
-    # idle/unknown => quick legend (bindings 반영)
     def sg(v: str) -> str:
         s = str(v or "").upper()
         return {
@@ -281,8 +278,6 @@ def _action_keyboard(st: dict, locked: bool) -> str:
             "": "-",
         }.get(s, s or "-")
 
-    # ✅ idle(아무것도 안잡힘/매칭 안됨)일 때는 다른 모드처럼 "대기"
-    # (필요하면 HUD_DEBUG=1 일 때만 치트시트 보여주도록 유지)
     legend = (
         f"←={sg(kb_base.get('LEFT'))} →={sg(kb_base.get('RIGHT'))} "
         f"↑={sg(kb_base.get('UP'))} ↓={sg(kb_base.get('DOWN'))}"
@@ -296,6 +291,7 @@ def _action_keyboard(st: dict, locked: bool) -> str:
     if HUD_DEBUG:
         return f"{legend} / {legend_fn}"
     return "대기"
+
 
 def _action_vkey(st: dict, locked: bool) -> str:
     common = _common_state_label(st, locked)
@@ -647,7 +643,6 @@ def _hud_process_main(cmd_q: mp.Queue, evt_q: mp.Queue):
             pad = geom.PAD
             rect = QtCore.QRectF(pad, pad, w - pad * 2, h - pad * 2)
 
-            # --- base glass ---
             baseA = 165 if self._tracking else 150
             base = QtGui.QColor(8, 16, 24, baseA)
             base2 = QtGui.QColor(4, 10, 16, baseA - 10)
@@ -655,7 +650,6 @@ def _hud_process_main(cmd_q: mp.Queue, evt_q: mp.Queue):
             grad.setColorAt(0.0, base)
             grad.setColorAt(1.0, base2)
 
-            # --- outer subtle glow (reduced loops) ---
             glow_alpha = 55 if self._tracking else 40
             for i in range(5, 0, -1):
                 g = QtGui.QColor(accent_r, accent_g, accent_b, int(glow_alpha * (i / 5.0)))
@@ -663,12 +657,10 @@ def _hud_process_main(cmd_q: mp.Queue, evt_q: mp.Queue):
                 p.setBrush(QtCore.Qt.NoBrush)
                 p.drawRoundedRect(rect.adjusted(-i, -i, i, i), 18 + i, 18 + i)
 
-            # panel
             p.setPen(QtGui.QPen(QtGui.QColor(60, 110, 150, 140), 1.0))
             p.setBrush(QtGui.QBrush(grad))
             p.drawRoundedRect(rect, 18, 18)
 
-            # top highlight
             hi = QtGui.QLinearGradient(rect.topLeft(), rect.bottomLeft())
             hi.setColorAt(0.0, QtGui.QColor(255, 255, 255, 40))
             hi.setColorAt(0.18, QtGui.QColor(255, 255, 255, 12))
@@ -677,11 +669,12 @@ def _hud_process_main(cmd_q: mp.Queue, evt_q: mp.Queue):
             p.setBrush(hi)
             p.drawRoundedRect(rect.adjusted(1.5, 1.5, -1.5, -1.5), 17, 17)
 
-            # --- header line ---
             p.setPen(QtGui.QPen(QtGui.QColor(accent_r, accent_g, accent_b, 140), 1.5))
-            p.drawLine(QtCore.QPointF(rect.left() + 14, rect.top() + 44), QtCore.QPointF(rect.right() - 14, rect.top() + 44))
+            p.drawLine(
+                QtCore.QPointF(rect.left() + 14, rect.top() + 44),
+                QtCore.QPointF(rect.right() - 14, rect.top() + 44),
+            )
 
-            # status dot
             cx = rect.left() + 20
             cy = rect.top() + 22
             dot = QtGui.QColor(0, 255, 160, 230) if self._connected else QtGui.QColor(255, 90, 90, 230)
@@ -692,12 +685,10 @@ def _hud_process_main(cmd_q: mp.Queue, evt_q: mp.Queue):
             p.setBrush(dot)
             p.drawEllipse(QtCore.QPointF(cx, cy), 2.1, 2.1)
 
-            # mode title
             p.setPen(QtGui.QColor(235, 248, 255, 245))
             p.setFont(QtGui.QFont("Segoe UI", 12, QtGui.QFont.Bold))
             p.drawText(QtCore.QPointF(rect.left() + 34, rect.top() + 26), self._mode)
 
-            # chips (LOCKED / ACTIVE + MENU)
             chip_text = "LOCKED" if self._locked else "ACTIVE"
             chip_bg = QtGui.QColor(255, 178, 32, 195) if self._locked else QtGui.QColor(accent_r, accent_g, accent_b, 70)
             chip_bd = QtGui.QColor(70, 120, 160, 170)
@@ -723,7 +714,6 @@ def _hud_process_main(cmd_q: mp.Queue, evt_q: mp.Queue):
                 p.setFont(QtGui.QFont("Segoe UI", 8, QtGui.QFont.Bold))
                 p.drawText(rr, QtCore.Qt.AlignCenter, "MENU")
 
-            # body labels
             sub = QtGui.QColor(175, 210, 235, 225)
             p.setPen(sub)
             p.setFont(QtGui.QFont("Segoe UI", 9))
@@ -734,7 +724,6 @@ def _hud_process_main(cmd_q: mp.Queue, evt_q: mp.Queue):
             p.drawText(QtCore.QPointF(rect.left() + 18, rect.top() + 90), f"TRACK    {t_on}")
             p.drawText(QtCore.QPointF(rect.left() + 18, rect.top() + 110), f"FPS      {self._fps:.1f}")
 
-            # tiny corner ticks
             p.setPen(QtGui.QPen(QtGui.QColor(accent_r, accent_g, accent_b, 160), 2))
             s = 12
             x0, y0 = rect.left() + 10, rect.top() + 10
@@ -783,26 +772,22 @@ def _hud_process_main(cmd_q: mp.Queue, evt_q: mp.Queue):
             pad = 6
             rect = QtCore.QRectF(pad, pad, w - pad * 2, h - pad * 2)
 
-            # subtle glow
             for i in range(4, 0, -1):
                 g = QtGui.QColor(accent_r, accent_g, accent_b, int(45 * (i / 4.0)))
                 p.setPen(QtGui.QPen(g, 1.0 + i * 0.9))
                 p.setBrush(QtCore.Qt.NoBrush)
                 p.drawRoundedRect(rect.adjusted(-i, -i, i, i), 14 + i, 14 + i)
 
-            # base
             bg = QtGui.QColor(8, 16, 24, 170)
             p.setPen(QtGui.QPen(QtGui.QColor(70, 120, 160, 140), 1.0))
             p.setBrush(bg)
             p.drawRoundedRect(rect, 14, 14)
 
-            # left accent bar
             p.setPen(QtCore.Qt.NoPen)
             p.setBrush(QtGui.QColor(accent_r, accent_g, accent_b, 210))
             bar = QtCore.QRectF(rect.left() + 10, rect.top() + 10, 3.0, rect.height() - 20)
             p.drawRoundedRect(bar, 2, 2)
 
-            # text
             p.setPen(QtGui.QColor(235, 248, 255, 245))
             p.setFont(QtGui.QFont("Segoe UI", 10, QtGui.QFont.Bold))
             p.drawText(
@@ -865,22 +850,18 @@ def _hud_process_main(cmd_q: mp.Queue, evt_q: mp.Queue):
             accent_r, accent_g, accent_b = _hex_to_rgb(self._accent)
             rect = QtCore.QRectF(1, 1, w - 2, h - 2)
 
-            # shadow
             p.setPen(QtCore.Qt.NoPen)
             p.setBrush(QtGui.QColor(0, 0, 0, 120))
             p.drawRoundedRect(rect.translated(2, 2), 8, 8)
 
-            # base
             p.setPen(QtGui.QPen(QtGui.QColor(70, 120, 160, 160), 1.0))
             p.setBrush(QtGui.QColor(8, 16, 24, 200))
             p.drawRoundedRect(rect, 8, 8)
 
-            # border accent
             p.setPen(QtGui.QPen(QtGui.QColor(accent_r, accent_g, accent_b, 190), 1.5))
             p.setBrush(QtCore.Qt.NoBrush)
             p.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 7, 7)
 
-            # grip lines
             p.setPen(QtGui.QPen(QtGui.QColor(235, 248, 255, 235), 2))
             y0 = (h // 2) - 6
             for i in range(3):
@@ -900,6 +881,61 @@ def _hud_process_main(cmd_q: mp.Queue, evt_q: mp.Queue):
     hud_win.show()
     tip_win.hide()
     handle_win.show()
+
+    # -------------------------------------------------------------
+    # ✅ Win11: 초기 표시 실패(안 보임) 케이스 대응 유틸
+    # -------------------------------------------------------------
+    HWND_TOPMOST = -1
+    SWP_NOMOVE = 0x0002
+    SWP_NOSIZE = 0x0001
+    SWP_NOACTIVATE = 0x0010
+    SWP_SHOWWINDOW = 0x0040
+
+    def _set_topmost(hwnd_int: int):
+        try:
+            hwnd_int = int(hwnd_int or 0)
+            if hwnd_int <= 0:
+                return
+            user32.SetWindowPos(
+                wintypes.HWND(hwnd_int),
+                wintypes.HWND(HWND_TOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            )
+        except Exception:
+            pass
+
+    def force_refresh_windows():
+        # show/raise 후 topmost 재적용 + exstyle 재적용
+        try:
+            for w in (hud_win, handle_win, tip_win):
+                try:
+                    w.show()
+                except Exception:
+                    pass
+                try:
+                    w.raise_()
+                except Exception:
+                    pass
+                try:
+                    _set_topmost(int(w.winId()))
+                except Exception:
+                    pass
+
+            try:
+                _apply_win_exstyle(int(hud_win.winId()), click_through=True)
+                _apply_win_exstyle(int(tip_win.winId()), click_through=True)
+                _apply_win_exstyle(int(handle_win.winId()), click_through=False)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    # 첫 300ms 후 1회 강제 (부팅 직후/표시설정 토글 전 케이스)
+    QtCore.QTimer.singleShot(300, force_refresh_windows)
 
     try:
         _apply_win_exstyle(int(hud_win.winId()), click_through=True)
@@ -949,27 +985,47 @@ def _hud_process_main(cmd_q: mp.Queue, evt_q: mp.Queue):
         nonlocal phase, last_t, desktop_rect
 
         stop_now = False
+
+        # ---------------------------------------------------------
+        # ✅ cmd 먼저 처리 -> status 반영
+        # ---------------------------------------------------------
         try:
             while True:
                 item = cmd_q.get_nowait()
-                if isinstance(item, dict) and item.get("__cmd") == "STOP":
+                if not isinstance(item, dict):
+                    continue
+
+                cmd = item.get("__cmd")
+
+                if cmd == "STOP":
                     stop_now = True
                     break
-                if isinstance(item, dict) and item.get("__cmd") == "SET_VISIBLE":
+
+                if cmd == "SET_VISIBLE":
                     panel_visible = bool(item.get("visible", True))
                     continue
-                if isinstance(item, dict) and item.get("__cmd") == "SET_MENU":
+
+                if cmd == "SET_MENU":
                     menu_active = bool(item.get("active", False))
                     if not menu_active:
                         menu_hover = None
                         _evt_forward({"type": "HOVER", "value": None})
                     continue
-                if isinstance(item, dict):
-                    latest = item
-                    if "hudVisible" in latest:
-                        panel_visible = bool(latest.get("hudVisible"))
-                    elif "panelVisible" in latest:
-                        panel_visible = bool(latest.get("panelVisible"))
+
+                if cmd == "FORCE_REFRESH":
+                    try:
+                        force_refresh_windows()
+                    except Exception:
+                        pass
+                    continue
+
+                # status payload
+                latest = item
+                if "hudVisible" in latest:
+                    panel_visible = bool(latest.get("hudVisible"))
+                elif "panelVisible" in latest:
+                    panel_visible = bool(latest.get("panelVisible"))
+
         except Exception:
             pass
 
@@ -1002,7 +1058,7 @@ def _hud_process_main(cmd_q: mp.Queue, evt_q: mp.Queue):
             cur = QCursor.pos()
             menu_frozen_center = (int(cur.x()), int(cur.y()))
             _log("[HUD] menu frozen center:", menu_frozen_center)
-        if (prev_menu_active) and (not menu_active):
+        if prev_menu_active and (not menu_active):
             menu_frozen_center = None
         prev_menu_active = bool(menu_active)
 
@@ -1100,7 +1156,6 @@ class OverlayHUD:
             if typ == "MENU_ACTIVE":
                 self._menu_active = bool(ev.get("value", False))
                 if not self._menu_active:
-                    # 메뉴가 꺼지면 즉시 clear
                     self._menu_hover = None
                     self._menu_hover_keep_until = 0.0
 
@@ -1112,7 +1167,6 @@ class OverlayHUD:
                     self._menu_hover = v.strip().upper()
                     self._menu_hover_keep_until = nowt + 0.35  # ✅ 350ms latch
                 else:
-                    # None이 오더라도 바로 지우지 말고 유예
                     if (not self._menu_active) or (nowt >= self._menu_hover_keep_until):
                         self._menu_hover = None
 
@@ -1196,6 +1250,18 @@ class OverlayHUD:
         except Exception:
             pass
 
+    def force_refresh(self):
+        """
+        Win11 초기 표시 실패 케이스 대응:
+        HUD 프로세스에 3창(HUD/Tip/Handle) TOPMOST+show 강제 명령 전송
+        """
+        if not self.enable or not self._cmd_q:
+            return
+        try:
+            self._cmd_q.put_nowait({"__cmd": "FORCE_REFRESH"})
+        except Exception:
+            pass
+
     def set_visible(self, visible: bool):
         if not self.enable or not self._cmd_q:
             return
@@ -1205,14 +1271,11 @@ class OverlayHUD:
             pass
 
     def set_menu(self, active: bool, center_xy=None):
-        # 하위호환: center_xy를 넘겨도 TypeError 안 나게 받기만 함
         if not self.enable or not self._cmd_q:
             return
 
         payload = {"__cmd": "SET_MENU", "active": bool(active)}
 
-        # center_xy는 HUD 프로세스에서 'freeze center at open'을 사용하므로
-        # 여기서는 저장만 하고 프로세스가 알아서 고정한다.
         if center_xy is not None:
             try:
                 x, y = center_xy
@@ -1240,5 +1303,4 @@ class OverlayHUD:
         return bool(self._menu_active)
 
     def get_menu_hover(self):
-        # ✅ latch된 hover 값 반환
         return self._menu_hover
