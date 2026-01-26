@@ -4,9 +4,11 @@ from .mathutil import dist_xy
 # MediaPipe Hands landmark: list[(x,y,z)] length 21
 LM = List[Tuple[float, float, float]]
 
+
 def finger_extended(lm: LM, tip: int, pip: int) -> bool:
     # tip y가 pip y보다 위(작음)면 펴짐
     return lm[tip][1] < lm[pip][1]
+
 
 def is_fist(lm: LM) -> bool:
     tips = [8, 12, 16, 20]
@@ -17,6 +19,7 @@ def is_fist(lm: LM) -> bool:
             folded += 1
     return folded >= 3
 
+
 def is_open_palm(lm: LM) -> bool:
     idx = finger_extended(lm, 8, 6)
     mid = finger_extended(lm, 12, 10)
@@ -24,8 +27,10 @@ def is_open_palm(lm: LM) -> bool:
     pinky = finger_extended(lm, 20, 18)
     return idx and mid and ring and pinky
 
+
 def is_pinch_index(lm: LM, thresh: float = 0.06) -> bool:
     return dist_xy((lm[4][0], lm[4][1]), (lm[8][0], lm[8][1])) < thresh
+
 
 def is_two_finger(lm: LM) -> bool:
     idx = finger_extended(lm, 8, 6)
@@ -34,23 +39,33 @@ def is_two_finger(lm: LM) -> bool:
     pinky = finger_extended(lm, 20, 18)
     return idx and mid and (not ring) and (not pinky)
 
+
 def is_v_sign(lm: LM) -> bool:
     if not is_two_finger(lm):
         return False
     return dist_xy((lm[8][0], lm[8][1]), (lm[12][0], lm[12][1])) > 0.06
 
+
 def classify_gesture(lm: Optional[LM], pinch_thresh: float = 0.06) -> str:
+    """
+    IMPORTANT (Win11 Paint/drag 안정성):
+    - PINCH를 FIST보다 먼저 판정해야 "핀치"가 "주먹"으로 먹히지 않는다.
+      (많은 사용자가 핀치할 때 중/약/소지가 접혀서 FIST 조건을 만족해버림)
+    """
     if lm is None:
         return "NONE"
-    if is_fist(lm):
-        return "FIST"
+
+    # ✅ PINCH 먼저
     if is_pinch_index(lm, pinch_thresh):
         return "PINCH_INDEX"
+    if is_fist(lm):
+        return "FIST"
     if is_v_sign(lm):
         return "V_SIGN"
     if is_open_palm(lm):
         return "OPEN_PALM"
     return "OTHER"
+
 
 def palm_center(lm: LM) -> Tuple[float, float]:
     idx = [0, 5, 9, 13, 17]
