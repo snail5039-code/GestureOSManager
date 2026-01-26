@@ -4,38 +4,97 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Optional
 
-import pyautogui
+import time
+import ctypes
+from ctypes import wintypes
 
-pyautogui.FAILSAFE = False
-pyautogui.PAUSE = 0
+try:
+    ULONG_PTR = wintypes.ULONG_PTR
+except AttributeError:
+    ULONG_PTR = ctypes.c_uint64 if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_uint32
+
+
+# -----------------------------------------------------------------------------
+# Win11 안정형 키 입력: SendInput
+# (주의) 관리자 권한 앱(UAC 상승된 창)에는 일반 권한 프로세스가 키 주입 못함.
+# 그 경우 GestureOS Agent를 "관리자 권한으로 실행"해야 함.
+# -----------------------------------------------------------------------------
+
+user32 = ctypes.windll.user32
+
+INPUT_KEYBOARD = 1
+KEYEVENTF_KEYUP = 0x0002
+
+# Virtual-Key Codes
+VK = {
+    "left": 0x25,
+    "up": 0x26,
+    "right": 0x27,
+    "down": 0x28,
+    "backspace": 0x08,
+    "space": 0x20,
+    "enter": 0x0D,
+    "esc": 0x1B,
+}
+
+
+class KEYBDINPUT(ctypes.Structure):
+    _fields_ = [
+        ("wVk", wintypes.WORD),
+        ("wScan", wintypes.WORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ULONG_PTR),
+    ]
+
+
+class INPUT_UNION(ctypes.Union):
+    _fields_ = [("ki", KEYBDINPUT)]
+
+
+class INPUT(ctypes.Structure):
+    _fields_ = [("type", wintypes.DWORD), ("u", INPUT_UNION)]
+
+
+def _send_vk(vk_code: int):
+    inp_down = INPUT(type=INPUT_KEYBOARD, u=INPUT_UNION(ki=KEYBDINPUT(vk_code, 0, 0, 0, 0)))
+    inp_up = INPUT(type=INPUT_KEYBOARD, u=INPUT_UNION(ki=KEYBDINPUT(vk_code, 0, KEYEVENTF_KEYUP, 0, 0)))
+    arr = (INPUT * 2)(inp_down, inp_up)
+    user32.SendInput(2, ctypes.byref(arr), ctypes.sizeof(INPUT))
 
 
 def _pick_token(gesture: str, mapping: Dict[str, str], order: list[str]) -> Optional[str]:
+    g = str(gesture or "").upper()
     for tok in order:
-        if gesture == mapping.get(tok):
+        if g == str(mapping.get(tok, "")).upper():
             return tok
     return None
 
 
+DEFAULT_BASE: Dict[str, str] = {
+    "LEFT": "FIST",
+    "RIGHT": "V_SIGN",
+    "DOWN": "OPEN_PALM",
+    "UP": "PINCH_INDEX",
+}
+
+DEFAULT_FN: Dict[str, str] = {
+    "BACKSPACE": "FIST",
+    "SPACE": "OPEN_PALM",
+    "ENTER": "PINCH_INDEX",
+    "ESC": "V_SIGN",
+}
+
+DEFAULT_FN_HOLD = "PINCH_INDEX"
+
+
 @dataclass
 class KeyboardHandler:
-    """KEYBOARD mode 입력(연발 억제 버전)
-
-    기본 정책:
-    - 화살표/백스페이스도 기본은 단발 1회만 발동
-    - 같은 토큰을 길게 들고 있을 때만 느린 반복 허용
-    - SPACE/ENTER/ESC 는 단발(armed + cooldown)
-
-    ✅ 추가: 사용자 설정 바인딩 지원
-    - settings.bindings.KEYBOARD.BASE/FN/FN_HOLD 를 통해 제스처를 변경 가능
-    """
+    """KEYBOARD mode 입력(연발 억제 + 기본 바인딩 내장 + SendInput)"""
 
     stable_frames: int = 3
-
-    # repeat: "길게 들고 있을 때만" 천천히 반복
     repeat_start_sec: float = 0.55
     repeat_sec: float = 0.22
-
     mod_grace_sec: float = 0.20
 
     hold_sec: dict = field(
@@ -113,8 +172,21 @@ class KeyboardHandler:
             "ESC": "esc",
         }
         k = keymap.get(token)
-        if k:
-            pyautogui.press(k)
+        if not k:
+            return
+
+        vk = VK.get(k)
+        if vk is None:
+            return
+
+        try:
+            _send_vk(int(vk))
+        except Exception:
+            try:
+                time.sleep(0.001)
+                _send_vk(int(vk))
+            except Exception:
+                pass
 
     def update(
         self,
@@ -131,12 +203,20 @@ class KeyboardHandler:
             return
 
         bindings = bindings or {}
-        base_map: Dict[str, str] = dict(bindings.get("BASE") or {})
-        fn_map: Dict[str, str] = dict(bindings.get("FN") or {})
-        fn_hold: str = str(bindings.get("FN_HOLD") or "PINCH_INDEX").upper()
 
-        # FN(mod) layer: other hand gesture briefly enables
-        if got_other and other_gesture == fn_hold:
+        base_map_in = dict(bindings.get("BASE") or {})
+        fn_map_in = dict(bindings.get("FN") or {})
+        fn_hold = str(bindings.get("FN_HOLD") or DEFAULT_FN_HOLD).upper()
+
+        base_map: Dict[str, str] = dict(DEFAULT_BASE)
+        fn_map: Dict[str, str] = dict(DEFAULT_FN)
+
+        for k, v in base_map_in.items():
+            base_map[str(k).upper()] = str(v).upper()
+        for k, v in fn_map_in.items():
+            fn_map[str(k).upper()] = str(v).upper()
+
+        if got_other and str(other_gesture).upper() == fn_hold:
             self.mod_until = t + self.mod_grace_sec
         mod_active = t < self.mod_until
 
@@ -156,7 +236,6 @@ class KeyboardHandler:
                     ["LEFT", "RIGHT", "UP", "DOWN"],
                 )
 
-        # no token => re-arm and clear repeat state
         if token is None:
             self.last_token = None
             self.streak = 0
@@ -166,7 +245,6 @@ class KeyboardHandler:
             self.repeat_start_ts = 0.0
             return
 
-        # stability tracking + state reset on token change
         if token == self.last_token:
             self.streak += 1
         else:
@@ -192,7 +270,6 @@ class KeyboardHandler:
         if t < last_fire + cd:
             return
 
-        # repeatable tokens: first press once, then (if held) slow repeat
         if token in repeat_tokens:
             if not self.pressed_once:
                 self._press_token(token)
@@ -202,7 +279,6 @@ class KeyboardHandler:
                 self.last_repeat_ts = t
                 return
 
-            # allow repeating only after long hold
             if (t - self.repeat_start_ts) < self.repeat_start_sec:
                 return
             if t >= self.last_repeat_ts + self.repeat_sec:
@@ -211,7 +287,6 @@ class KeyboardHandler:
                 self.last_repeat_ts = t
             return
 
-        # one-shot tokens: strict armed gating
         if token in one_shot_tokens:
             if not self.armed:
                 return

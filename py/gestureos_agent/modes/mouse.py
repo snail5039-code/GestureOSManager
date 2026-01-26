@@ -2,285 +2,278 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import pyautogui
+import os
+import time
+import ctypes
 
-pyautogui.FAILSAFE = False
-pyautogui.PAUSE = 0
+try:
+    import pyautogui
+    pyautogui.FAILSAFE = False
+    pyautogui.PAUSE = 0
+except Exception:
+    pyautogui = None
 
 
-def _norm_g(v: str | None, default: str) -> str:
-    if not v:
-        return default
-    return str(v).strip().upper()
+_IS_WIN = (os.name == "nt")
 
 
-# ---------------------------------------------------------------------
-# Click / Drag (gesture configurable)
-# ---------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Windows SendInput mouse helpers (클릭/휠)
+# -----------------------------------------------------------------------------
+if _IS_WIN:
+    from ctypes import wintypes
+
+    INPUT_MOUSE = 0
+    MOUSEEVENTF_MOVE = 0x0001
+    MOUSEEVENTF_LEFTDOWN = 0x0002
+    MOUSEEVENTF_LEFTUP = 0x0004
+    MOUSEEVENTF_RIGHTDOWN = 0x0008
+    MOUSEEVENTF_RIGHTUP = 0x0010
+    MOUSEEVENTF_WHEEL = 0x0800
+
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [
+            ("dx", wintypes.LONG),
+            ("dy", wintypes.LONG),
+            ("mouseData", wintypes.DWORD),
+            ("dwFlags", wintypes.DWORD),
+            ("time", wintypes.DWORD),
+            ("dwExtraInfo", ULONG_PTR),
+        ]
+
+    class INPUT_UNION(ctypes.Union):
+        _fields_ = [("mi", MOUSEINPUT)]
+
+    class INPUT(ctypes.Structure):
+        _fields_ = [("type", wintypes.DWORD), ("u", INPUT_UNION)]
+
+    def _send_mouse(flags: int, wheel: int = 0):
+        user32 = ctypes.windll.user32
+        inp = INPUT(type=INPUT_MOUSE, u=INPUT_UNION(mi=MOUSEINPUT(0, 0, wheel, flags, 0, 0)))
+        arr = (INPUT * 1)(inp)
+        user32.SendInput(1, ctypes.byref(arr), ctypes.sizeof(INPUT))
+
+    def _left_down():
+        _send_mouse(MOUSEEVENTF_LEFTDOWN)
+
+    def _left_up():
+        _send_mouse(MOUSEEVENTF_LEFTUP)
+
+    def _right_click():
+        _send_mouse(MOUSEEVENTF_RIGHTDOWN)
+        _send_mouse(MOUSEEVENTF_RIGHTUP)
+
+    def _wheel(delta: int):
+        # wheel delta는 120 단위가 기본
+        _send_mouse(MOUSEEVENTF_WHEEL, wheel=int(delta))
+else:
+    def _left_down():
+        if pyautogui:
+            pyautogui.mouseDown(button="left")
+
+    def _left_up():
+        if pyautogui:
+            pyautogui.mouseUp(button="left")
+
+    def _right_click():
+        if pyautogui:
+            pyautogui.click(button="right")
+
+    def _wheel(delta: int):
+        if pyautogui:
+            pyautogui.scroll(int(delta))
+
+
+# -----------------------------------------------------------------------------
+# MouseClickDrag: pinch로 좌클릭/드래그
+# -----------------------------------------------------------------------------
 @dataclass
 class MouseClickDrag:
-    pinch_thresh: float = 0.06
-    click_tap_max: float = 0.22
-    drag_hold_sec: float = 0.28
-    click_cooldown: float = 0.30
-    doubleclick_gap: float = 0.35
-
-    last_click_ts: float = 0.0
-    pinch_start_ts: float | None = None
+    down: bool = False
     dragging: bool = False
-
-    pending_single_click: bool = False
-    single_click_deadline: float = 0.0
+    down_ts: float = 0.0
+    min_drag_hold: float = 0.10  # pinch를 살짝만 했다가 떼면 그냥 click, 오래면 drag 느낌(실제로는 다운 유지)
 
     def reset(self):
-        if self.dragging:
+        if self.down:
             try:
-                pyautogui.mouseUp()
+                _left_up()
             except Exception:
                 pass
+        self.down = False
         self.dragging = False
-        self.pinch_start_ts = None
-        self.pending_single_click = False
+        self.down_ts = 0.0
 
-    def update(
-        self,
-        t: float,
-        cursor_gesture: str,
-        can_inject: bool,
-        # ✅ 새 방식: click_gesture="PINCH_INDEX" 등
-        click_gesture: str | None = None,
-        # ✅ 예전 방식 호환: gesture="PINCH_INDEX" 등
-        gesture: str | None = None,
-        **_kwargs,
-    ):
-        if not can_inject:
-            self.reset()
-            return
-
-        cg = _norm_g(cursor_gesture, "NONE")
-        pinch_g = _norm_g(click_gesture or gesture, "PINCH_INDEX")
-
-        # delayed single click confirmation
-        if self.pending_single_click and t >= self.single_click_deadline:
-            if t >= self.last_click_ts + self.click_cooldown:
-                pyautogui.click()
-                self.last_click_ts = t
-            self.pending_single_click = False
-
-        # pinch 유지 중
-        if cg == pinch_g:
-            if self.pinch_start_ts is None:
-                self.pinch_start_ts = t
-
-            if (not self.dragging) and (t - self.pinch_start_ts >= self.drag_hold_sec):
-                pyautogui.mouseDown()
-                self.dragging = True
-            return
-
-        # release 처리
-        if self.pinch_start_ts is None:
-            return
-
-        dur = t - self.pinch_start_ts
-
-        if self.dragging:
-            pyautogui.mouseUp()
+    def update(self, t: float, cursor_gesture: str, can_click: bool, click_gesture: str = "PINCH_INDEX"):
+        if not can_click:
+            # 클릭 금지 상태면 내려가 있던 것도 해제
+            if self.down:
+                try:
+                    _left_up()
+                except Exception:
+                    pass
+            self.down = False
             self.dragging = False
-        else:
-            if dur <= self.click_tap_max:
-                if self.pending_single_click:
-                    # double click
-                    self.pending_single_click = False
-                    if t >= self.last_click_ts + self.click_cooldown:
-                        pyautogui.doubleClick()
-                        self.last_click_ts = t
-                else:
-                    # single click pending
-                    self.pending_single_click = True
-                    self.single_click_deadline = t + self.doubleclick_gap
+            self.down_ts = 0.0
+            return
 
-        self.pinch_start_ts = None
+        g = str(cursor_gesture).upper()
+        trig = str(click_gesture).upper()
+
+        is_down = (g == trig)
+
+        if is_down and (not self.down):
+            # down edge
+            try:
+                _left_down()
+            except Exception:
+                pass
+            self.down = True
+            self.dragging = False
+            self.down_ts = t
+            return
+
+        if (not is_down) and self.down:
+            # up edge
+            try:
+                _left_up()
+            except Exception:
+                pass
+            self.down = False
+            self.dragging = False
+            self.down_ts = 0.0
+            return
+
+        if self.down:
+            # hold 중이면 dragging 상태만 표시(실제 커서 이동은 hands_agent가 수행)
+            if (t - self.down_ts) >= self.min_drag_hold:
+                self.dragging = True
 
 
-# ---------------------------------------------------------------------
-# Right Click (gesture configurable)
-# ---------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# MouseRightClick: V_SIGN 등으로 우클릭
+# -----------------------------------------------------------------------------
 @dataclass
 class MouseRightClick:
-    hold_sec: float = 0.35
-    cooldown_sec: float = 0.60
-
     last_fire_ts: float = 0.0
-    start_ts: float | None = None
+    cooldown: float = 0.45
+    _prev_active: bool = False
 
     def reset(self):
-        self.start_ts = None
+        self.last_fire_ts = 0.0
+        self._prev_active = False
 
-    def update(
-        self,
-        t: float,
-        cursor_gesture: str,
-        can_inject: bool,
-        # ✅ 새 방식: gesture="V_SIGN" 등
-        gesture: str | None = None,
-        **_kwargs,
-    ):
-        if not can_inject:
-            self.reset()
+    def update(self, t: float, cursor_gesture: str, can_click: bool, gesture: str = "V_SIGN"):
+        if not can_click:
+            self._prev_active = False
             return
 
-        cg = _norm_g(cursor_gesture, "NONE")
-        g = _norm_g(gesture, "V_SIGN")
+        g = str(cursor_gesture).upper()
+        trig = str(gesture).upper()
+        active = (g == trig)
 
-        if cg != g:
-            self.start_ts = None
-            return
+        if active and (not self._prev_active):
+            if t >= self.last_fire_ts + self.cooldown:
+                try:
+                    _right_click()
+                except Exception:
+                    pass
+                self.last_fire_ts = t
 
-        if t < self.last_fire_ts + self.cooldown_sec:
-            self.start_ts = None
-            return
-
-        if self.start_ts is None:
-            self.start_ts = t
-            return
-
-        if (t - self.start_ts) >= self.hold_sec:
-            pyautogui.click(button="right")
-            self.last_fire_ts = t
-            self.start_ts = None
+        self._prev_active = active
 
 
-# ---------------------------------------------------------------------
-# Scroll (other hand hold gate; unchanged but kwargs-safe)
-# ---------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# MouseScroll: other 손을 FIST 홀드 등으로 스크롤 상태 유지 + y 변화로 휠
+# -----------------------------------------------------------------------------
 @dataclass
 class MouseScroll:
-    gain: int = 1400
-    deadzone: float = 0.012
-    interval_sec: float = 0.05
-
-    last_scroll_ts: float = 0.0
-    anchor_y: float | None = None
+    last_y: float = 0.5
+    last_ts: float = 0.0
+    accum: float = 0.0
+    wheel_step: int = 120
+    gain: float = 900.0  # y(0~1) 변화량을 휠로 변환하는 계수
+    dead: float = 0.015  # 미세 흔들림 무시
 
     def reset(self):
-        self.anchor_y = None
+        self.last_y = 0.5
+        self.last_ts = 0.0
+        self.accum = 0.0
 
-    def update(
-        self,
-        t: float,
-        scroll_active: bool,
-        other_cy: float,
-        can_inject: bool,
-        **_kwargs,
-    ):
-        if (not can_inject) or (not scroll_active):
-            self.anchor_y = None
+    def update(self, t: float, active: bool, other_cy: float, enabled: bool):
+        if not enabled or (not active):
+            # 비활성화면 상태만 갱신
+            self.last_y = float(other_cy)
+            self.last_ts = t
+            self.accum = 0.0
             return
 
-        if self.anchor_y is None:
-            self.anchor_y = other_cy
+        y = float(other_cy)
+        dy = (y - self.last_y)
+        self.last_y = y
+
+        if abs(dy) < self.dead:
             return
 
-        if (t - self.last_scroll_ts) < self.interval_sec:
-            return
+        # dy > 0 이면 손이 아래로 -> 보통 아래로 스크롤(휠은 음수/양수 방향이 앱에 따라 다를 수 있음)
+        self.accum += dy * self.gain
 
-        dy = other_cy - self.anchor_y
-        if abs(dy) < self.deadzone:
-            return
+        # step 이상 쌓이면 휠 발생
+        while self.accum >= 1.0:
+            try:
+                _wheel(-self.wheel_step)
+            except Exception:
+                pass
+            self.accum -= 1.0
 
-        amount = int(-dy * self.gain)
-        if amount != 0:
-            pyautogui.scroll(amount)
-            self.last_scroll_ts = t
-            self.anchor_y = other_cy
+        while self.accum <= -1.0:
+            try:
+                _wheel(self.wheel_step)
+            except Exception:
+                pass
+            self.accum += 1.0
 
 
-# ---------------------------------------------------------------------
-# Lock Toggle (gesture configurable + legacy signature compatible)
-# ---------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# MouseLockToggle: MOUSE 모드에서만 잠금 토글 (FIST hold 등)
+# -----------------------------------------------------------------------------
 @dataclass
 class MouseLockToggle:
-    hold_sec: float = 2.0
+    hold_sec: float = 0.65
     cooldown_sec: float = 1.0
-    center_box: tuple = (0.25, 0.15, 0.75, 0.85)
-    still_max_move: float = 0.020
-
-    fist_start: float | None = None
-    fist_anchor: tuple | None = None
-    last_toggle_ts: float = 0.0
+    _hold_start: float | None = None
+    _last_toggle_ts: float = 0.0
 
     def reset(self):
-        self.fist_start = None
-        self.fist_anchor = None
+        self._hold_start = None
 
     def update(
         self,
         t: float,
         cursor_gesture: str,
-        cx: float | None = None,
-        cy: float | None = None,
-        got_cursor: bool = True,
-        got_other: bool = False,
-        enabled: bool = True,
-        locked: bool = False,
-        # ✅ 새 방식
-        toggle_gesture: str | None = None,
-        # ✅ 예전 방식(혹시 gesture 이름으로 주는 호출)
-        gesture: str | None = None,
-        **_kwargs,
+        cx: float,
+        cy: float,
+        got_cursor: bool,
+        got_other: bool,
+        enabled: bool,
+        locked: bool,
+        toggle_gesture: str = "FIST",
     ) -> bool:
-        """
-        Returns new_locked if toggled, else locked unchanged.
-        """
-        if not enabled:
-            self.reset()
+        if not enabled or (not got_cursor):
+            self._hold_start = None
             return locked
 
-        # 두 손이면 잠금 토글 금지(기존 정책 유지)
-        if got_other or (not got_cursor):
-            self.reset()
-            return locked
+        g = str(cursor_gesture).upper()
+        trig = str(toggle_gesture).upper()
 
-        if t < self.last_toggle_ts + self.cooldown_sec:
-            self.reset()
-            return locked
-
-        # cx/cy가 없으면 동작 불가(안전)
-        if cx is None or cy is None:
-            self.reset()
-            return locked
-
-        # center box 안에서만(기존 정책 유지)
-        minx, miny, maxx, maxy = self.center_box
-        if not (minx <= cx <= maxx and miny <= cy <= maxy):
-            self.reset()
-            return locked
-
-        cg = _norm_g(cursor_gesture, "NONE")
-        g = _norm_g(toggle_gesture or gesture, "FIST")
-
-        if cg != g:
-            self.reset()
-            return locked
-
-        if self.fist_start is None:
-            self.fist_start = t
-            self.fist_anchor = (cx, cy)
-            return locked
-
-        ax, ay = self.fist_anchor
-        if abs(cx - ax) > self.still_max_move or abs(cy - ay) > self.still_max_move:
-            # 움직였으면 홀드 다시 시작
-            self.fist_start = t
-            self.fist_anchor = (cx, cy)
-            return locked
-
-        if (t - self.fist_start) >= self.hold_sec:
-            self.reset()
-            self.last_toggle_ts = t
-            return (not locked)
+        if g == trig:
+            if self._hold_start is None:
+                self._hold_start = t
+            if (t - self._hold_start) >= self.hold_sec and (t >= self._last_toggle_ts + self.cooldown_sec):
+                self._last_toggle_ts = t
+                self._hold_start = None
+                return (not locked)
+        else:
+            self._hold_start = None
 
         return locked
-
-
-__all__ = ["MouseClickDrag", "MouseRightClick", "MouseScroll", "MouseLockToggle"]

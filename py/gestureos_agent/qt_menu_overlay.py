@@ -24,6 +24,12 @@ WS_EX_TRANSPARENT = 0x00000020
 WS_EX_TOOLWINDOW = 0x00000080
 WS_EX_NOACTIVATE = 0x08000000
 
+HWND_TOPMOST = -1
+SWP_NOSIZE = 0x0001
+SWP_NOMOVE = 0x0002
+SWP_NOACTIVATE = 0x0010
+SWP_SHOWWINDOW = 0x0040
+
 user32 = ctypes.windll.user32
 
 
@@ -77,6 +83,21 @@ def _apply_win_exstyle(hwnd_int: int, click_through: bool):
         pass
 
 
+def _force_topmost(hwnd_int: int):
+    hwnd_int = _hwnd_int(hwnd_int)
+    if not hwnd_int:
+        return
+    try:
+        user32.SetWindowPos(
+            wintypes.HWND(hwnd_int),
+            wintypes.HWND(HWND_TOPMOST),
+            0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
+        )
+    except Exception:
+        pass
+
+
 def _hex_to_rgb(color_hex: str):
     s = str(color_hex).lstrip("#")
     r = int(s[0:2], 16)
@@ -109,27 +130,23 @@ def run_menu_process(cmd_q, evt_q):
     # ---------------- CONFIG ----------------
     MENU_SIZE = 560
 
-    # disc / rings
     OUTER_R = MENU_SIZE * 0.475
     ARC_R = OUTER_R - 22
-    ARC_THICK = 9                 # thin
-    ARC_GAP_DEG = 11.0            # modern segmentation
+    ARC_THICK = 9
+    ARC_GAP_DEG = 11.0
 
-    # hover stability
     DEADZONE_R = 44
     HOVER_MAX_R = OUTER_R - 8
-    HOLD_SECONDS = 0.32           # keep last non-null a bit (prevents pinch timing null)
-    DEBOUNCE_SECONDS = 0.06       # stabilize hover
+    HOLD_SECONDS = 0.32
+    DEBOUNCE_SECONDS = 0.06
 
-    # labels
     LABEL_R = OUTER_R - 60
     LABEL_W = 158
     LABEL_H = 34
 
-    # items (output)
     ITEMS = ["PRESENTATION", "MOUSE", "KEYBOARD", "VKEY", "DRAW"]
     N = len(ITEMS)
-    START_ANG = -90.0  # top
+    START_ANG = -90.0
     STEP = 360.0 / N
 
     MODE_ACCENT = {
@@ -141,7 +158,6 @@ def run_menu_process(cmd_q, evt_q):
         "DEFAULT": "#00ffa6",
     }
 
-    # base palette
     COL_BG_A = QtGui.QColor(10, 16, 22, 190)
     COL_BG_B = QtGui.QColor(7, 11, 16, 130)
     COL_EDGE = QtGui.QColor(160, 210, 255, 86)
@@ -195,10 +211,9 @@ def run_menu_process(cmd_q, evt_q):
             self._mode = "DEFAULT"
             self._accent = MODE_ACCENT["DEFAULT"]
 
-            self._center_global = None  # logical coords
+            self._center_global = None
             self._phase = 0.0
 
-            # hover stability
             self._hover = None
             self._cand = None
             self._cand_since = 0.0
@@ -206,15 +221,35 @@ def run_menu_process(cmd_q, evt_q):
             self._last_nonnull_t = 0.0
             self._last_emit = object()
 
-            # deterministic noise dots (no random import)
+            # ✅ topmost 재강제 타이밍 (OSK/TabTip이 topmost를 뺏는 케이스 대응)
+            self._last_topmost_force_t = 0.0
+
             self._dots = []
             for i in range(120):
                 a = (i * 37.0) % 360.0
                 rr = (OUTER_R * 0.18) + ((i * 53) % int(OUTER_R * 0.74))
                 self._dots.append((a, rr, 0.7 + (i % 5) * 0.35))
 
+        def _hwnd(self) -> int:
+            try:
+                return int(self.winId())
+            except Exception:
+                return 0
+
+        def _ensure_topmost(self):
+            hwnd = self._hwnd()
+            if hwnd:
+                _force_topmost(hwnd)
+                _apply_win_exstyle(hwnd, click_through=True)
+
         def setOpacity(self, v: float):
             self._opacity = float(_clamp(v, 0.20, 0.98))
+            # ✅ show/hide 타이밍 잔상 방지: 실제 windowOpacity도 같이 맞춤
+            try:
+                if self._active:
+                    self.setWindowOpacity(self._opacity)
+            except Exception:
+                pass
 
         def setMode(self, m: str):
             m = str(m or "DEFAULT").upper()
@@ -229,18 +264,42 @@ def run_menu_process(cmd_q, evt_q):
                     self._center_global = (int(cur.x()), int(cur.y()))
                 self._move_to_center()
                 self._reset_hover()
+
+                # ✅ show 전에 opacity 복구
+                try:
+                    self.setWindowOpacity(self._opacity)
+                except Exception:
+                    pass
+
                 self.show()
+
+                # ✅ show 순간 topmost 강제 + 80ms 후 한번 더 (OSK가 topmost 잡는 타이밍 방어)
+                self._ensure_topmost()
+                try:
+                    QtCore.QTimer.singleShot(80, self._ensure_topmost)
+                except Exception:
+                    pass
+
+                self._last_topmost_force_t = time.time()
+
             elif (not on) and self._active:
+                # ✅ 핵심: “투명 최상위 창 잔상” 케이스 강제 제거
+                try:
+                    self.setWindowOpacity(0.0)
+                except Exception:
+                    pass
                 self.hide()
                 self._center_global = None
                 self._reset_hover()
                 self._emit(None)
+
             self._active = on
 
         def setCenter(self, x: int, y: int):
             self._center_global = (int(x), int(y))
             if self._active:
                 self._move_to_center()
+                self._ensure_topmost()
 
         def _move_to_center(self):
             if not self._center_global:
@@ -282,7 +341,7 @@ def run_menu_process(cmd_q, evt_q):
             if r > HOVER_MAX_R:
                 return None
 
-            ang = math.degrees(math.atan2(dy, dx))  # -180..180
+            ang = math.degrees(math.atan2(dy, dx))
             a = _wrap360(ang - START_ANG)
             idx = int(a // STEP) % N
             return ITEMS[idx]
@@ -297,12 +356,10 @@ def run_menu_process(cmd_q, evt_q):
                 self._last_nonnull = raw
                 self._last_nonnull_t = now
 
-            # HOLD last non-null for pinch timing
             if raw is None and self._last_nonnull is not None:
                 if (now - self._last_nonnull_t) <= HOLD_SECONDS:
                     raw = self._last_nonnull
 
-            # debounce
             if raw != self._cand:
                 self._cand = raw
                 self._cand_since = now
@@ -312,9 +369,13 @@ def run_menu_process(cmd_q, evt_q):
                         self._hover = raw
                         self._emit(raw)
 
+            # ✅ OSK/TabTip이 topmost를 재점유해도 메뉴가 항상 위로 오게 더 자주 재강제
+            if self._active and (now - self._last_topmost_force_t) >= 0.20:
+                self._last_topmost_force_t = now
+                self._ensure_topmost()
+
             self.update()
 
-        # ---------- paint helpers ----------
         def _arc_path(self, rect, start_deg, span_deg):
             path = QtGui.QPainterPath()
             path.arcMoveTo(rect, start_deg)
@@ -327,7 +388,6 @@ def run_menu_process(cmd_q, evt_q):
             p.setClipPath(clip)
 
         def _draw_prism_glass(self, p, cx, cy, r):
-            # outer glow haze
             haze = QtGui.QRadialGradient(QtCore.QPointF(cx, cy), r + 42)
             haze.setColorAt(0.0, QtGui.QColor(255, 255, 255, 10))
             haze.setColorAt(0.35, QtGui.QColor(80, 200, 255, 18))
@@ -337,7 +397,6 @@ def run_menu_process(cmd_q, evt_q):
             p.setBrush(haze)
             p.drawEllipse(QtCore.QPointF(cx, cy), r + 30, r + 30)
 
-            # body
             body = QtGui.QRadialGradient(QtCore.QPointF(cx, cy), r)
             body.setColorAt(0.0, COL_BG_A)
             body.setColorAt(0.55, QtGui.QColor(9, 14, 20, 150))
@@ -346,7 +405,6 @@ def run_menu_process(cmd_q, evt_q):
             p.setBrush(body)
             p.drawEllipse(QtCore.QPointF(cx, cy), r, r)
 
-            # prism edge (two-tone rim)
             rim1 = QtGui.QPen(QtGui.QColor(180, 230, 255, 85), 2.0)
             rim2 = QtGui.QPen(QtGui.QColor(70, 150, 220, 65), 1.0)
             p.setPen(rim1)
@@ -359,7 +417,6 @@ def run_menu_process(cmd_q, evt_q):
             p.save()
             self._clip_circle(p, cx, cy, r)
 
-            # micro grid
             step = 18
             ox = int((math.sin(self._phase * 0.65) + 1.0) * 0.5 * step)
             oy = int((math.cos(self._phase * 0.58) + 1.0) * 0.5 * step)
@@ -369,14 +426,12 @@ def run_menu_process(cmd_q, evt_q):
             for y in range(oy, int(h), step):
                 p.drawLine(0, y, int(w), y)
 
-            # scanlines
             p.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 9), 1))
             y = 0
             while y < h:
                 p.drawLine(0, y, w, y)
                 y += 7
 
-            # noise dots (deterministic)
             p.setPen(QtCore.Qt.NoPen)
             for (a_deg, rr, sz) in self._dots:
                 ang = math.radians(a_deg + self._phase * 18.0)
@@ -386,7 +441,6 @@ def run_menu_process(cmd_q, evt_q):
                 p.setBrush(QtGui.QColor(accent.red(), accent.green(), accent.blue(), aa))
                 p.drawEllipse(QtCore.QPointF(px, py), sz, sz)
 
-            # radar sweep band
             sweep_ang = (self._phase * 42.0) % 360.0
             rect = QtCore.QRectF(cx - r, cy - r, 2 * r, 2 * r)
             band = 22.0
@@ -400,7 +454,6 @@ def run_menu_process(cmd_q, evt_q):
             p.restore()
 
         def _draw_micro_ticks(self, p, cx, cy, r, accent):
-            # ticks
             p.setPen(QtGui.QPen(QtGui.QColor(190, 230, 255, 58), 1))
             for i in range(72):
                 ang = math.radians(START_ANG + i * 5.0)
@@ -412,7 +465,6 @@ def run_menu_process(cmd_q, evt_q):
                 y2 = cy + math.sin(ang) * outer
                 p.drawLine(QtCore.QPointF(x1, y1), QtCore.QPointF(x2, y2))
 
-            # crosshair accents
             p.setPen(QtGui.QPen(QtGui.QColor(accent.red(), accent.green(), accent.blue(), 90), 1))
             p.drawLine(int(cx), int(cy - r + 30), int(cx), int(cy - r + 78))
             p.drawLine(int(cx), int(cy + r - 78), int(cx), int(cy + r - 30))
@@ -422,7 +474,6 @@ def run_menu_process(cmd_q, evt_q):
         def _draw_segment_arcs(self, p, cx, cy, r, accent):
             rect = QtCore.QRectF(cx - r, cy - r, 2 * r, 2 * r)
 
-            # base arcs
             base_pen = QtGui.QPen(QtGui.QColor(155, 205, 245, 85), ARC_THICK)
             base_pen.setCapStyle(QtCore.Qt.FlatCap)
             p.setPen(base_pen)
@@ -433,7 +484,6 @@ def run_menu_process(cmd_q, evt_q):
                 span = STEP - ARC_GAP_DEG
                 p.drawPath(self._arc_path(rect, -a0, -span))
 
-            # hover glow stack
             hv = self._hover
             if hv:
                 try:
@@ -479,7 +529,6 @@ def run_menu_process(cmd_q, evt_q):
                     bd = QtGui.QColor(130, 170, 210, 78)
                     tx = QtGui.QColor(225, 245, 255, 215)
 
-                # shadow-ish (offset)
                 p.setPen(QtCore.Qt.NoPen)
                 p.setBrush(QtGui.QColor(0, 0, 0, 90))
                 p.drawRoundedRect(rect.translated(2.0, 2.0), 10, 10)
@@ -492,7 +541,6 @@ def run_menu_process(cmd_q, evt_q):
                 p.drawText(rect, QtCore.Qt.AlignCenter, name)
 
         def _draw_core(self, p, cx, cy, accent):
-            # core rings
             p.setPen(QtGui.QPen(QtGui.QColor(180, 230, 255, 70), 1))
             p.setBrush(QtCore.Qt.NoBrush)
             p.drawEllipse(QtCore.QPointF(cx, cy), OUTER_R - 108, OUTER_R - 108)
@@ -500,7 +548,6 @@ def run_menu_process(cmd_q, evt_q):
             p.setPen(QtGui.QPen(QtGui.QColor(accent.red(), accent.green(), accent.blue(), 95), 2))
             p.drawEllipse(QtCore.QPointF(cx, cy), OUTER_R - 134, OUTER_R - 134)
 
-            # central glow orb
             orb = QtGui.QRadialGradient(QtCore.QPointF(cx, cy), OUTER_R - 150)
             orb.setColorAt(0.0, QtGui.QColor(accent.red(), accent.green(), accent.blue(), 32))
             orb.setColorAt(0.7, QtGui.QColor(0, 0, 0, 0))
@@ -508,7 +555,6 @@ def run_menu_process(cmd_q, evt_q):
             p.setBrush(orb)
             p.drawEllipse(QtCore.QPointF(cx, cy), OUTER_R - 154, OUTER_R - 154)
 
-            # texts
             hv = self._hover or "-"
             p.setPen(COL_TEXT)
             p.setFont(QtGui.QFont("Segoe UI", 18, QtGui.QFont.Bold))
@@ -540,17 +586,10 @@ def run_menu_process(cmd_q, evt_q):
             ar, ag, ab = _hex_to_rgb(self._accent)
             accent = QtGui.QColor(ar, ag, ab, 255)
 
-            # prism glass disc
             self._draw_prism_glass(p, cx, cy, OUTER_R)
-
-            # inner visuals
             self._draw_grid_scan_noise(p, cx, cy, OUTER_R, w, h, accent)
-
-            # micro ticks + arcs
             self._draw_micro_ticks(p, cx, cy, OUTER_R - 6, accent)
             self._draw_segment_arcs(p, cx, cy, ARC_R, accent)
-
-            # labels + core
             self._draw_labels(p, cx, cy, accent)
             self._draw_core(p, cx, cy, accent)
 
@@ -562,6 +601,7 @@ def run_menu_process(cmd_q, evt_q):
 
     try:
         _apply_win_exstyle(int(win.winId()), click_through=True)
+        _force_topmost(int(win.winId()))
     except Exception:
         pass
 
@@ -572,7 +612,6 @@ def run_menu_process(cmd_q, evt_q):
     def pump_cmd():
         nonlocal last_t
 
-        # handle commands
         while True:
             try:
                 msg = cmd_q.get_nowait()
@@ -592,7 +631,10 @@ def run_menu_process(cmd_q, evt_q):
             elif typ == "MODE":
                 win.setMode(msg.get("value", "DEFAULT"))
             elif typ == "OPACITY":
-                win.setOpacity(float(msg.get("value", 0.90)))
+                try:
+                    win.setOpacity(float(msg.get("value", 0.90)))
+                except Exception:
+                    win.setOpacity(0.90)
             elif typ == "CENTER":
                 try:
                     win.setCenter(int(msg.get("x")), int(msg.get("y")))
@@ -604,10 +646,11 @@ def run_menu_process(cmd_q, evt_q):
         last_t = nowt
         win.tick(dt)
 
-        # re-apply exstyle sometimes (OS가 가끔 날림)
+        # OS가 날리는 경우가 있어서 주기적으로 재적용
         if int(nowt * 10) % 60 == 0:
             try:
                 _apply_win_exstyle(int(win.winId()), click_through=True)
+                _force_topmost(int(win.winId()))
             except Exception:
                 pass
 
