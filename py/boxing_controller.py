@@ -25,6 +25,53 @@ box_state = {
     "min_y": 0.0,
 }
 chance_active = False
+
+# ===============================
+# AntiGravity용 Jab 판정 최적화 (User Provided)
+# ===============================
+
+# 설정값
+SAMPLE_INTERVAL = 0.12   # 샘플링 간격 (0.1~0.15초)
+WINDOW_SIZE = 5          # 최근 프레임 수
+THRESHOLD_X = 0.015      # X 이동 기준값 (Modified: 15 -> 0.015 for normalized coords)
+MIN_CONSECUTIVE = 3      # 연속 프레임 기준
+MAX_DELAY = 1.0          # 판정 후 최대 지연 시간 (초)
+
+# 버퍼 초기화
+x_moves = []
+consecutive_frames_x_move = 0
+jab_detected = False
+last_jab_time = 0
+last_jab_valid_ts = 0    # Trigger timestamp storage
+
+def update_jab(current_x_move, current_time):
+    global x_moves, consecutive_frames_x_move, jab_detected, last_jab_time
+
+    # 1️⃣ 스무딩
+    x_moves.append(current_x_move)
+    if len(x_moves) > WINDOW_SIZE:
+        x_moves.pop(0)
+    smoothed_x_move = sum(x_moves) / len(x_moves)
+
+    # 2️⃣ 최소 유지 시간
+    if smoothed_x_move > THRESHOLD_X:
+        consecutive_frames_x_move += 1
+    else:
+        consecutive_frames_x_move = 0
+
+    # 3️⃣ 판정
+    if consecutive_frames_x_move >= MIN_CONSECUTIVE:
+        # 3초 이내 판정 제한
+        if current_time - last_jab_time > MAX_DELAY:
+            jab_detected = True
+            last_jab_time = current_time
+        else:
+            jab_detected = False
+    else:
+        jab_detected = False
+
+    return jab_detected
+
 chance_requested = False
 force_attack_mode = False
 prev_hand = {
@@ -63,22 +110,22 @@ def handle_chance(data):
         box_state["path_z"] = []
 
 def run_vision():
-    global box_state, chance_active, chance_requested, prev_hand, prev_shoulder
+    global box_state, chance_active, chance_requested, prev_hand, prev_shoulder, last_jab_valid_ts
     cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
     last_send_time = 0
     last_defense = "none"
     last_defense_time = 0.0
     defense_hold = 0.15
-    min_punch_time = 0.15
+    min_punch_time = 0.1
     max_punch_time = 0.45
     speed_threshold = 0.015
     speed_end = 0.008
     extended_angle = 150
     bent_angle = 120
-    z_threshold = 0.08
+    z_threshold = 0.1
     y_threshold = 0.08
     x_small = 0.04
-    x_large = 0.12
+    x_large = 0.1
     shoulder_rot_threshold = 0.01
     uppercut_elbow_max = 165
 
@@ -146,6 +193,13 @@ def run_vision():
                 is_guarding = left_guard and right_guard and abs(head_x) < 0.25
                 guard_val = 1.0 if is_guarding else 0.0
 
+            # Update Jab Optimization (Run every frame)
+            # Use forward movement (-dz) as signal. Only count if moving forward.
+            jab_signal = -dz if dz < 0 else 0
+            if update_jab(jab_signal, now_t):
+                last_jab_valid_ts = now_t
+
+
             # 공격 감지 (찬스타임일 때만)
             if chance_requested and not is_guarding:
                 if not box_state["active"]:
@@ -197,7 +251,7 @@ def run_vision():
 
                     elapsed = now_t - box_state["start_time"]
                     # 타임아웃 또는 감속 감지 시 즉시 판정
-                    should_judge = (elapsed >= max_punch_time) or (elapsed >= min_punch_time and speed < speed_end)
+                    should_judge = (elapsed >= max_punch_time) or (elapsed >= min_punch_time)
                     
                     if should_judge:
                         dx_total = curr_x - box_state["start_x"]
@@ -217,17 +271,24 @@ def run_vision():
                         # ① jab / straight (z 축 지배적)
                         if (
                             dz_total < -z_threshold
-                            and z_move >= x_move * 1.1
-                            and z_move >= y_move * 1.2
+                            and z_move >= x_move * 1.2
+                            and z_move >= y_move * 1.3
                             and dy_total >= -y_threshold * 0.5
                             and curr_y >= active_elbow.y - 0.02
                         ):
                             if x_move < x_small and elapsed < 0.22:
-                                final_attack = "jab"
+                                # Apply User's Jab Optimization
+                                # Check if our optimized detector fired recently
+                                if now_t - last_jab_valid_ts < 0.5:
+                                    final_attack = "jab"
+                                else:
+                                    # Fallback or ignore if not validated by optimizations
+                                    # Assuming user wants strict filtering:
+                                    final_attack = "none" 
                             else:
                                 final_attack = "straight"
                         # ② hook (x 축 지배적, y 최소)
-                        elif x_move > x_large and y_move < y_threshold * 0.7 and abs(dy_total) < y_threshold * 0.3:
+                        elif x_move > x_large and y_move < y_threshold * 0.8 and abs(dy_total) < y_threshold * 0.4:
                             final_attack = "hook"
                         # ③ uppercut (y 축 지배적)
                         elif (

@@ -3,3 +3,6 @@ mediapipe
 pyautogui
 websocket-client
 numpy
+flask
+flask-socketio
+flask-cors
