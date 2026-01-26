@@ -198,6 +198,16 @@ OSK_TOGGLE_COOLDOWN_SEC = 1.2
 UI_LOCK_HOLD_SEC = 8.0
 UI_LOCK_COOLDOWN_SEC = 1.0
 
+# =============================================================================
+# ✅ APP START/STOP gesture (global)
+# - OPEN_PALM은 이동이랑 충돌 -> 사용 금지
+# - 정지 상태 Start: 양손 V_SIGN 홀드
+# - 실행 상태 Stop: 양손 FIST 홀드
+# =============================================================================
+APP_START_HOLD_SEC = 0.9
+APP_STOP_HOLD_SEC = 0.9
+APP_CMD_COOLDOWN_SEC = 1.5
+
 
 def _lm_to_payload(lm):
     if lm is None:
@@ -399,7 +409,6 @@ class HandsAgent:
         self._hud_bootstrap_done = False
         self._hud_bootstrap_t0 = time.time()
 
-
         # ---- OSK state ----
         self.osk_open = False
         self._osk_proc = None  # ✅ 내가 띄운 osk pid 추적(가능한 경우)
@@ -409,6 +418,11 @@ class HandsAgent:
         # ---- UI lock toggle state (FIST hold) ----
         self.ui_lock_hold_start = None
         self.last_ui_lock_toggle_ts = 0.0
+
+        # ✅✅ APP start/stop state
+        self.app_start_hold_start = None
+        self.app_stop_hold_start = None
+        self.last_app_cmd_ts = 0.0
 
         # 팔레트 열기 직전 OSK 상태 저장(“열려있었으면 닫고, 닫힐 때 복구”)
         self.palette_prev_osk_open = False
@@ -1290,8 +1304,80 @@ class HandsAgent:
                 other_gesture = classify_gesture(other_lm, pinch_thresh=pth_o)
 
             mode_u = str(self.mode).upper()
-
             effective_locked = bool(self.ui_locked) or bool(self.locked)
+
+            # Palette modal (최우선)
+            block_by_palette = False
+            if not self.ui_locked:
+                block_by_palette = self._update_palette_modal(
+                    t=t,
+                    got_cursor=got_cursor,
+                    got_other=got_other,
+                    cursor_gesture=cursor_gesture,
+                    other_gesture=other_gesture,
+                    cursor_cx=cursor_cx,
+                    cursor_cy=cursor_cy,
+                )
+            else:
+                self._force_hide_menu()
+
+            # -----------------------------------------------------------------
+            # ✅ APP START/STOP (gesture -> 즉시 로컬 적용 + WS EVENT는 알림용)
+            # - OPEN_PALM은 이동이랑 충돌 -> 사용 금지
+            # - 정지 상태 Start: 양손 V_SIGN 홀드
+            # - 실행 상태 Stop: 양손 FIST 홀드
+            # -----------------------------------------------------------------
+            if (not block_by_palette) and got_cursor and got_other:
+                can_fire = (t >= (self.last_app_cmd_ts + APP_CMD_COOLDOWN_SEC))
+
+                # START: enabled=False일 때만
+                if (not self.enabled) and (cursor_gesture == "V_SIGN") and (other_gesture == "V_SIGN"):
+                    if self.app_start_hold_start is None:
+                        self.app_start_hold_start = t
+                    if can_fire and (t - self.app_start_hold_start) >= APP_START_HOLD_SEC:
+                        # ✅ 로컬에서 즉시 start 처리 (WS 의존 제거)
+                        self.enabled = True
+                        self.locked = False
+                        # ui_locked는 유지(원하면 여기서 False로 풀어도 됨)
+
+                        self.last_app_cmd_ts = t
+                        self.app_start_hold_start = None
+                        self.cursor_bubble = "START!"
+
+                        # 알림용 이벤트(옵션)
+                        try:
+                            self.send_event("APP_START", {"source": "gesture"})
+                        except Exception:
+                            pass
+                else:
+                    self.app_start_hold_start = None
+
+                # STOP: enabled=True일 때만
+                if self.enabled and (cursor_gesture == "FIST") and (other_gesture == "FIST"):
+                    if self.app_stop_hold_start is None:
+                        self.app_stop_hold_start = t
+                    if can_fire and (t - self.app_stop_hold_start) >= APP_STOP_HOLD_SEC:
+                        # ✅ 로컬에서 즉시 stop 처리 (DISABLE과 동일한 처리)
+                        self.enabled = False
+                        self._reset_side_effects()
+                        self._osk_close()
+                        self._force_hide_menu()
+
+                        self.last_app_cmd_ts = t
+                        self.app_stop_hold_start = None
+                        self.cursor_bubble = "STOP!"
+
+                        # 알림용 이벤트(옵션)
+                        try:
+                            self.send_event("APP_STOP", {"source": "gesture"})
+                        except Exception:
+                            pass
+                else:
+                    self.app_stop_hold_start = None
+            else:
+                self.app_start_hold_start = None
+                self.app_stop_hold_start = None
+
 
             # UI 잠금 토글 (FIST 홀드)
             block_osk_toggle_by_ui_lock = False
@@ -1321,21 +1407,6 @@ class HandsAgent:
                         pass
             else:
                 self.ui_lock_hold_start = None
-
-            # Palette modal (최우선)
-            block_by_palette = False
-            if not self.ui_locked:
-                block_by_palette = self._update_palette_modal(
-                    t=t,
-                    got_cursor=got_cursor,
-                    got_other=got_other,
-                    cursor_gesture=cursor_gesture,
-                    other_gesture=other_gesture,
-                    cursor_cx=cursor_cx,
-                    cursor_cy=cursor_cy,
-                )
-            else:
-                self._force_hide_menu()
 
             # UI menu (HUD)
             if (not block_by_palette) and (not self.ui_locked) and self.ui_menu:
@@ -1527,7 +1598,6 @@ class HandsAgent:
 
             # -------------------------------------------------------------
             # ✅ 핵심: VKEY/KEYBOARD에서 PINCH를 SendInput 좌클릭으로 강제 주입
-            # (mouse.py/pyautogui 클릭이 씹혀도 OSK 버튼을 누를 수 있게)
             # -------------------------------------------------------------
             if _IS_WIN and (mode_u in ("VKEY", "KEYBOARD")) and self.enabled and (not self.ui_locked) and (not block_by_palette):
                 is_pinch = (str(cursor_gesture).upper() == "PINCH_INDEX")
@@ -1555,7 +1625,7 @@ class HandsAgent:
                         t,
                         cursor_gesture,
                         allow_click,
-                        click_gesture=mouse_click_g,  # 기본 PINCH_INDEX
+                        click_gesture=mouse_click_g,
                     )
 
                 # 우클릭은 MOUSE에서만
@@ -1849,7 +1919,7 @@ class HandsAgent:
             hud_payload["connected"] = bool(self.ws.connected)
             hud_payload["tracking"] = bool(payload.get("isTracking", False))
             hud.push(hud_payload)
-            
+
         # ✅ 첫 push 이후 0.3초 지나면 1회만: HUD/Tip/Handle topmost+재배치 강제
         if (not self._hud_bootstrap_done) and (time.time() - self._hud_bootstrap_t0 >= 0.3):
             self._hud_bootstrap_done = True
@@ -1857,4 +1927,3 @@ class HandsAgent:
                 hud.force_refresh()
             except Exception:
                 pass
-

@@ -7,6 +7,9 @@ import ProfileCard from "../components/ProfileCard";
 import { useAuth } from "../auth/AuthProvider";
 import DebugChat from "../components/DebugChat";
 
+// ✅ WS import 추가
+import { connectAgentWs, addAgentWsListener, closeAgentWs } from "../api/agentWs";
+
 const POLL_MS = 500;
 
 const MODE_OPTIONS = ["MOUSE", "KEYBOARD", "PRESENTATION", "DRAW", "VKEY"];
@@ -744,6 +747,65 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
       cameraPresent,
     });
   }, [onHudState, status, derived.connected, derived.locked, derived.mode, view.modeText, cameraPresent]);
+
+  // ✅ WS에서 최신 상태를 보기 위한 ref들 (재연결 방지)
+  const enabledRef = useRef(false);
+  const busyRef = useRef(false);
+  const startRef = useRef(start);
+  const stopRef = useRef(stop);
+
+  useEffect(() => {
+    enabledRef.current = !!derived.enabled;
+  }, [derived.enabled]);
+
+  useEffect(() => {
+    busyRef.current = !!busy;
+  }, [busy]);
+
+  useEffect(() => {
+    startRef.current = start;
+  }, [start]);
+
+  useEffect(() => {
+    stopRef.current = stop;
+  }, [stop]);
+
+  // ✅ WS: 제스처 Start/Stop 이벤트 수신 (mount 1회)
+  useEffect(() => {
+    const ws = connectAgentWs();
+
+    const unsubscribe = addAgentWsListener((msg) => {
+      if (!msg || typeof msg !== "object") return;
+
+      if (msg.type === "EVENT") {
+        const name = String(msg.name || "");
+
+        if (name === "APP_START") {
+          // 정지 상태에서만 Start
+          if (!enabledRef.current && !busyRef.current) {
+            startRef.current?.({ source: "gesture" });
+          }
+        } else if (name === "APP_STOP") {
+          // 실행 중에서만 Stop
+          if (enabledRef.current && !busyRef.current) {
+            stopRef.current?.();
+          }
+        }
+      }
+    });
+
+    return () => {
+      unsubscribe?.();
+      // 프로젝트 정책상 다른 화면에서도 WS를 쓸 수 있으면 close를 빼도 됨.
+      // 여기서는 안전하게 닫음.
+      try {
+        ws?.close?.();
+      } catch {}
+      try {
+        closeAgentWs?.();
+      } catch {}
+    };
+  }, []);
 
   const canStart = !busy && !derived.enabled;
   const canStop = !busy && !!derived.enabled;

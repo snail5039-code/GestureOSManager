@@ -1,7 +1,13 @@
 // src/api/agentWs.js
 let ws;
+const listeners = new Set();
 
 export function connectAgentWs(url = "ws://127.0.0.1:8080/ws/agent") {
+  // 이미 연결돼 있으면 재사용
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+    return ws;
+  }
+
   ws = new WebSocket(url);
 
   ws.onopen = () => console.log("[WS] connected");
@@ -11,12 +17,31 @@ export function connectAgentWs(url = "ws://127.0.0.1:8080/ws/agent") {
   ws.onmessage = (evt) => {
     try {
       const data = JSON.parse(evt.data);
-      // STATUS 수신해서 UI 갱신하는 용도(선택)
-      // console.log("[WS] msg", data);
+
+      // ✅ 구독자들에게 전달
+      listeners.forEach((fn) => {
+        try {
+          fn(data);
+        } catch {}
+      });
     } catch {}
   };
 
   return ws;
+}
+
+// ✅ 외부에서 WS 메시지 구독
+export function addAgentWsListener(fn) {
+  if (typeof fn !== "function") return () => {};
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
+export function closeAgentWs() {
+  try {
+    ws?.close?.();
+  } catch {}
+  ws = undefined;
 }
 
 export function sendToAgent(obj) {
