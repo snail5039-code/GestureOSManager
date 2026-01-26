@@ -28,7 +28,10 @@ function BoxerScene({ activeKey, headX, onReturnToBase }) {
   const actionProcessed = useRef(false);
 
   useEffect(() => {
-    if (!m.base.scene) return;
+    if (!m.base?.scene) {
+      console.warn("Base model not loaded:", MODELS_LIST.base);
+      return;
+    }
     mixerRef.current = new THREE.AnimationMixer(m.base.scene);
 
     const handleFinished = () => {
@@ -38,7 +41,7 @@ function BoxerScene({ activeKey, headX, onReturnToBase }) {
     mixerRef.current.addEventListener("finished", handleFinished);
 
     Object.keys(m).forEach((key) => {
-      if (m[key].animations?.[0]) {
+      if (m[key]?.animations?.[0]) {
         const action = mixerRef.current.clipAction(m[key].animations[0]);
         if (key !== "base") {
           action.setLoop(THREE.LoopOnce);
@@ -49,6 +52,7 @@ function BoxerScene({ activeKey, headX, onReturnToBase }) {
     });
 
     actionsRef.current.base?.play();
+    console.log("Boxer animations loaded");
     return () => mixerRef.current?.removeEventListener("finished", handleFinished);
   }, [m.base]);
 
@@ -61,8 +65,12 @@ function BoxerScene({ activeKey, headX, onReturnToBase }) {
 
   useFrame((state, delta) => {
     mixerRef.current?.update(delta);
-    if (m.base.scene) m.base.scene.position.x = THREE.MathUtils.lerp(m.base.scene.position.x, -headX * 2.5, 0.2);
+    if (m.base?.scene) m.base.scene.position.x = THREE.MathUtils.lerp(m.base.scene.position.x, -headX * 2.5, 0.2);
   });
+
+  if (!m.base?.scene) {
+    return <mesh position={[0, 0, 0]}><boxGeometry args={[1, 1, 1]} /><meshBasicMaterial color="red" /></mesh>;
+  }
 
   return <primitive object={m.base.scene} scale={3.8} position={[0, -2.4, -1.8]} />;
 }
@@ -133,7 +141,7 @@ export default function GamePage() {
     setAttackGauge(0);
     setGameState("DEFENSE");
     setActiveKey("base");
-    showMessage(`${type.toUpperCase()}!!`);
+    showMessage(`${type.toUpperCase()}!!`, 400);
   };
 
   const handleEnemyAttackJudge = () => {

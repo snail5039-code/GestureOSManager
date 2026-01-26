@@ -103,16 +103,16 @@ def run_vision():
             now_t = time.time()
 
             def hand_metrics(hand, elbow, shoulder, prev):
-                dx = dy = dz = 0.0
-                speed = 0.0
-                if prev["init"]:
-                    dx = hand.x - prev["x"]
-                    dy = hand.y - prev["y"]
-                    dz = hand.z - prev["z"]
-                    speed = (dx * dx + dy * dy + dz * dz) ** 0.5
+                if not prev["init"]:
+                    return 0.0, 0.0, 0.0, 0.0, elbow_angle(shoulder, elbow, hand)
+                dx = hand.x - prev["x"]
+                dy = hand.y - prev["y"]
+                dz = hand.z - prev["z"]
+                speed = (dx * dx + dy * dy + dz * dz) ** 0.5
                 angle = elbow_angle(shoulder, elbow, hand)
                 return dx, dy, dz, speed, angle
 
+            # 양손 메트릭 항상 계산 (찬스타이밍에서 어느 손이 공격할지 모르니까)
             l_dx, l_dy, l_dz, l_speed, l_angle = hand_metrics(lw, le, ls, prev_hand["left"])
             r_dx, r_dy, r_dz, r_speed, r_angle = hand_metrics(rw, re, rs, prev_hand["right"])
 
@@ -138,17 +138,33 @@ def run_vision():
             # 가드 판정 (일반 모드에서만)
             if chance_requested:
                 is_guarding = False
+                guard_val = 0.0
             else:
-                left_guard = abs(lw.x - nose.x) < 0.22 and nose.y - 0.1 < lw.y < nose.y + 0.3
-                right_guard = abs(rw.x - nose.x) < 0.22 and nose.y - 0.1 < rw.y < nose.y + 0.3
-                is_guarding = left_guard and right_guard and abs(head_x) < 0.2
-            guard_val = 1.0 if is_guarding else 0.0
+                # 가드: 양손이 얼굴 근처 + 머리 중심 유지 (손 거리 기준 완화)
+                left_guard = abs(lw.x - nose.x) < 0.25 and nose.y - 0.05 < lw.y < nose.y + 0.35
+                right_guard = abs(rw.x - nose.x) < 0.25 and nose.y - 0.05 < rw.y < nose.y + 0.35
+                is_guarding = left_guard and right_guard and abs(head_x) < 0.25
+                guard_val = 1.0 if is_guarding else 0.0
 
             # 공격 감지 (찬스타임일 때만)
             if chance_requested and not is_guarding:
                 if not box_state["active"]:
-                    uppercut_start = dy < -y_threshold * 0.5 and elbow_ang < uppercut_elbow_max
-                    if speed > speed_threshold and (elbow_ang > extended_angle or uppercut_start):
+                    # 공격 시작 조건 강화: 움직임의 명확한 의도 필요
+                    # 어퍼컷 시작: 수직 상향 이동이 지배적일 때만
+                    uppercut_start = (
+                        dy < -y_threshold * 0.6  # 상향 이동 필수
+                        and abs(dx) < x_large * 0.5  # 수평 이동 최소
+                        and abs(dz) < z_threshold * 0.5  # 깊이 이동 최소
+                        and elbow_ang < uppercut_elbow_max
+                    )
+                    # 직선/훅 시작: 깊이(z) 방향 움직임이 뚜렷할 때만
+                    straight_start = (
+                        dz < -z_threshold * 0.5  # 깊이 이동 필수
+                        and elbow_ang > extended_angle
+                    )
+                    
+                    # 속도 2배 기준 + 명확한 방향 + 어깨 떨림이 아닌 팔 펼침/접힘
+                    if speed > speed_threshold * 2 and (uppercut_start or straight_start):
                         box_state = {
                             "active": True,
                             "hand": "left" if is_left else "right",
@@ -180,10 +196,10 @@ def run_vision():
                     box_state["min_y"] = min(box_state["min_y"], curr_y)
 
                     elapsed = now_t - box_state["start_time"]
-                    if elapsed >= max_punch_time:
-                        box_state["active"] = False
-                        chance_active = False
-                    elif elapsed >= min_punch_time and (speed < speed_end):
+                    # 타임아웃 또는 감속 감지 시 즉시 판정
+                    should_judge = (elapsed >= max_punch_time) or (elapsed >= min_punch_time and speed < speed_end)
+                    
+                    if should_judge:
                         dx_total = curr_x - box_state["start_x"]
                         dy_total = curr_y - box_state["start_y"]
                         dz_total = curr_z - box_state["start_z"]
@@ -196,22 +212,11 @@ def run_vision():
                         shoulder_rotation = other_prev["init"] and (other_shldr.z - other_prev["z"] > shoulder_rot_threshold)
 
                         uppercut_i_shape = curr_y < active_elbow.y and box_state["start_y"] > active_shldr.y
-                        uppercut_like = (
-                            dy_total < -y_threshold * 0.6
-                            and curr_y < active_elbow.y + 0.02
-                            and elbow_ang < uppercut_elbow_max
-                            and box_state["start_y"] > active_shldr.y - 0.1
-                            and y_move >= z_move * 0.9
-                            and y_move > y_threshold
-                            and box_state["max_dy"] > y_threshold
-                        )
-                        if uppercut_like:
-                            final_attack = "uppercut"
-                        elif x_move > x_large and x_move > z_move * 1.4 and y_move < y_threshold * 1.2:
-                            final_attack = "hook"
-                        elif (
+                        
+                        # 최종 판정 단계: 우선순위 명확히
+                        # ① jab / straight (z 축 지배적)
+                        if (
                             dz_total < -z_threshold
-                            and elbow_ang > extended_angle
                             and z_move >= x_move * 1.1
                             and z_move >= y_move * 1.2
                             and dy_total >= -y_threshold * 0.5
@@ -219,21 +224,26 @@ def run_vision():
                         ):
                             if x_move < x_small and elapsed < 0.22:
                                 final_attack = "jab"
-                            elif elapsed >= 0.22:
+                            else:
                                 final_attack = "straight"
+                        # ② hook (x 축 지배적, y 최소)
+                        elif x_move > x_large and y_move < y_threshold * 0.7 and abs(dy_total) < y_threshold * 0.3:
+                            final_attack = "hook"
+                        # ③ uppercut (y 축 지배적)
+                        elif (
+                            dy_total < -y_threshold * 0.6
+                            and y_move > y_threshold
+                            and y_move > z_move * 1.1
+                            and y_move > x_move * 1.2
+                            and x_move < x_large * 0.5
+                            and abs(dx_total) < x_large * 0.6   # ⭐ 훅 잔여 수평 제거
+                            and curr_y < active_elbow.y + 0.02
+                            and elbow_ang < uppercut_elbow_max
+                        ):
+                            final_attack = "uppercut"
 
                         box_state["active"] = False
-                        chance_active = False  # 공격 한 번 받으면 찬스타 종료
-                    elif elapsed >= min_punch_time:
-                        dx_total = curr_x - box_state["start_x"]
-                        dy_total = curr_y - box_state["start_y"]
-                        dz_total = curr_z - box_state["start_z"]
-                        y_move = abs(dy_total)
-                        z_move = abs(dz_total)
-                        if y_move > y_threshold * 1.2 and dy_total < -y_threshold * 0.6:
-                            final_attack = "uppercut"
-                            box_state["active"] = False
-                            chance_active = False
+                        chance_active = False
 
             # 일반 모드에서는 가드/위빙만 emit
             if not chance_requested:
