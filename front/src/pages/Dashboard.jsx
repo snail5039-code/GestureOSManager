@@ -358,6 +358,11 @@ function PointerMiniMap({ t, theme, x, y }) {
 export default function Dashboard({ onHudState, onHudActions, theme = "dark", onChangeScreen } = {}) {
   const { user, isAuthed } = useAuth();
 
+  const chatResetKey = useMemo(() => {
+    const ident = user?.id ?? user?.memberId ?? user?.member_id ?? user?.email ?? "anon";
+    return `${isAuthed ? "A" : "G"}:${String(ident)}`;
+  }, [isAuthed, user?.id, user?.memberId, user?.member_id, user?.email]);
+
   const [status, setStatus] = useState(null);
   const [mode, setMode] = useState("MOUSE");
   const [loading, setLoading] = useState(true);
@@ -945,12 +950,14 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
                       "text-[11px] leading-relaxed overflow-auto flex-1 rounded-lg ring-1 p-3",
                       t.panelSolid || t.panel2 || t.panel,
                       t.input,
-                    )}    
+                    )}
                   >
                     {status ? JSON.stringify(status, null, 2) : loading ? "Loading..." : "No data"}
                   </pre>
                 ) : (
                   <DebugChat
+                    key={chatResetKey}
+                    resetKey={chatResetKey}
                     t={t}
                     busy={busy}
                     preview={preview}
@@ -976,34 +983,34 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
 
       {modal.open
         ? createPortal(
-            <div
-              className="fixed inset-0 z-[100000] flex items-center justify-center"
-              style={{ WebkitAppRegion: "no-drag" }}
-              onMouseDown={(e) => {
-                if (e.target === e.currentTarget) closeModal();
-              }}
-            >
-              <div className="absolute inset-0 bg-black/45 backdrop-blur-[2px]" />
+          <div
+            className="fixed inset-0 z-[100000] flex items-center justify-center"
+            style={{ WebkitAppRegion: "no-drag" }}
+            onMouseDown={(e) => {
+              if (e.target === e.currentTarget) closeModal();
+            }}
+          >
+            <div className="absolute inset-0 bg-black/45 backdrop-blur-[2px]" />
 
-              <div className={cn("relative w-[min(500px,92vw)] rounded-lg ring-1 p-4 shadow-2xl", t.panel)}>
-                <div className="min-w-0">
-                  <div className={cn("text-[15px] font-semibold", t.text)}>{modal.title}</div>
-                  <div className={cn("mt-2 text-[13px]", t.muted)}>{modal.message}</div>
-                </div>
-
-                <div className="mt-4 flex justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={closeModal}
-                    className={cn("px-4 py-2 rounded-lg text-[13px] font-semibold ring-1 transition", t.btn)}
-                  >
-                    확인
-                  </button>
-                </div>
+            <div className={cn("relative w-[min(500px,92vw)] rounded-lg ring-1 p-4 shadow-2xl", t.panel)}>
+              <div className="min-w-0">
+                <div className={cn("text-[15px] font-semibold", t.text)}>{modal.title}</div>
+                <div className={cn("mt-2 text-[13px]", t.muted)}>{modal.message}</div>
               </div>
-            </div>,
-            document.body,
-          )
+
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={closeModal}
+                  className={cn("px-4 py-2 rounded-lg text-[13px] font-semibold ring-1 transition", t.btn)}
+                >
+                  확인
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )
         : null}
     </div>
   );

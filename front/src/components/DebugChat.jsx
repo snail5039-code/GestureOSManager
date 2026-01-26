@@ -94,10 +94,9 @@ function groupCardsByMode(cards) {
   return Array.from(map.entries());
 }
 
-export default function DebugChat({ t, busy, preview, derived, view, actions }) {
-  const { start, stop, applyMode, togglePreview, setLock, fetchStatus, setGain } = actions || {};
-
-  const [messages, setMessages] = useState(() => [
+/** ✅ 초기 메시지 생성 함수(리셋용) */
+function initialMessages() {
+  return [
     {
       id: mkId(),
       role: "assistant",
@@ -108,7 +107,17 @@ export default function DebugChat({ t, busy, preview, derived, view, actions }) 
         "또는 자연스럽게 질문해도 돼. 예: '모션 기능 뭐있어', '우 클릭은?', '안녕'\n" +
         "'도움' 입력하면 목록을 보여줄게.",
     },
-  ]);
+  ];
+}
+
+/**
+ * ✅ resetKey 변경 시 채팅 로그/펼침 상태 리셋됨
+ * - 로그인/로그아웃(또는 계정 전환) 시 부모에서 resetKey만 바꿔주면 됨
+ */
+export default function DebugChat({ resetKey, t, busy, preview, derived, view, actions }) {
+  const { start, stop, applyMode, togglePreview, setLock, fetchStatus, setGain } = actions || {};
+
+  const [messages, setMessages] = useState(() => initialMessages());
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
 
@@ -122,6 +131,24 @@ export default function DebugChat({ t, busy, preview, derived, view, actions }) 
     const msg = { id: mkId(), role, ts: nowHHMM(), text: String(text ?? ""), ...(extra || {}) };
     setMessages((prev) => [...prev, msg]);
   }, []);
+
+  /** ✅ 로그인/로그아웃 등 resetKey 변화 시 채팅 내용 싹 초기화 */
+  useEffect(() => {
+    setMessages(initialMessages());
+    setExpanded({});
+    setInput("");
+    setSending(false);
+
+    // 리셋 직후 스크롤도 맨 아래로
+    requestAnimationFrame(() => {
+      try {
+        bottomRef.current?.scrollIntoView({ block: "end" });
+      } catch {
+        const box = scrollBoxRef.current;
+        if (box) box.scrollTop = box.scrollHeight;
+      }
+    });
+  }, [resetKey]);
 
   useEffect(() => {
     window.__GOS_CHAT_LOG__ = (...args) => {
@@ -248,7 +275,7 @@ export default function DebugChat({ t, busy, preview, derived, view, actions }) 
       return res?.message || "감도 변경 실패";
     }
 
-    // --- 그 외: 전부 AI로 (백엔드가 “가이드 질문 vs 일반 대화”를 알아서 분기함) ---
+    // --- 그 외: 전부 AI로 ---
     return await callAi(text);
   };
 
@@ -342,7 +369,10 @@ export default function DebugChat({ t, busy, preview, derived, view, actions }) 
 
                             <div className="mt-2 space-y-2">
                               {show.map((c, idx) => (
-                                <div key={idx} className={cn("rounded-xl ring-1 p-2", t?.panel2 || t?.panelSoft || t?.panel)}>
+                                <div
+                                  key={idx}
+                                  className={cn("rounded-xl ring-1 p-2", t?.panel2 || t?.panelSoft || t?.panel)}
+                                >
                                   <div className={cn("text-xs font-semibold", t?.text)}>{c.title}</div>
 
                                   <div className={cn("mt-1 text-[11px] opacity-80", t?.muted)}>

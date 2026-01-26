@@ -188,9 +188,9 @@ def _action_presentation(st: dict, locked: bool) -> str:
         return act
     g = str(st.get("gesture", "NONE") or "NONE").upper()
     if g == "V_SIGN":
-        return "다음"
-    if g == "FIST":
         return "이전"
+    if g == "FIST":
+        return "다음"
     if g == "PINCH_INDEX":
         return "클릭"
     if g == "OPEN_PALM":
@@ -394,7 +394,7 @@ def _release_single_instance(h):
 @dataclass
 class _HudGeom:
     HUD_W: int = 360
-    HUD_H: int = 130
+    HUD_H: int = 150
 
     HANDLE_W: int = 34
     HANDLE_H: int = 28

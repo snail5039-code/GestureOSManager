@@ -5,7 +5,9 @@
 }
 
 /* ✅ Vite 기본 템플릿 #root 제한 제거 */
-html, body, #root {
+html,
+body,
+#root {
   width: 100%;
   height: 100%;
   margin: 0;
@@ -18,15 +20,18 @@ html, body, #root {
 }
 
 /* body 스크롤은 막고 main만 스크롤 */
-body { overflow: hidden; }
+body {
+  overflow: hidden;
+}
 
 /* ---------------------------
    ✅ Professional Radius Pack
    - DaisyUI 전역 radius 변수 낮추기
 ---------------------------- */
 :root,
-[data-theme]{
-  --rounded-box: 0.9rem;     /* 기존보다 덜 둥글게 */
+[data-theme] {
+  --rounded-box: 0.9rem;
+  /* 기존보다 덜 둥글게 */
   --rounded-btn: 0.65rem;
   --rounded-badge: 0.6rem;
 
@@ -40,22 +45,33 @@ body { overflow: hidden; }
 }
 
 /* 스크롤바(선택) */
-main::-webkit-scrollbar { width: 10px; }
-main::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 999px; }
-main::-webkit-scrollbar-track { background: transparent; }
+main::-webkit-scrollbar {
+  width: 10px;
+}
+
+main::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+}
+
+main::-webkit-scrollbar-track {
+  background: transparent;
+}
 
 main {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255,255,255,0.12) transparent;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
 }
 
-html { font-size: 20px; }
+html {
+  font-size: 20px;
+}
 
 /* theme cursor (유지) */
 html[data-theme="dark"],
 html[data-theme="dark"] body,
 html[data-theme="dark"] body * {
-  cursor: url("/cursor/dark.png") 2 2, auto !important;
+  cursor: url("/cursor/dark.png") 13 12, auto !important;
 }
 
 html[data-theme="light"],
@@ -83,7 +99,11 @@ html[data-theme="devil"] body * {
 }
 
 /* Electron drag */
-.titlebar-drag { -webkit-app-region: drag; user-select: none; }
+.titlebar-drag {
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
 .titlebar-drag button,
 .titlebar-drag a,
 .titlebar-drag input,
@@ -92,6 +112,21 @@ html[data-theme="devil"] body * {
 .titlebar-drag [role="button"] {
   -webkit-app-region: no-drag;
 }
-@media (max-height: 900px) { html { font-size: 18px; } }
-@media (max-height: 820px) { html { font-size: 17px; } }
-@media (max-height: 760px) { html { font-size: 16px; } }
+
+@media (max-height: 900px) {
+  html {
+    font-size: 18px;
+  }
+}
+
+@media (max-height: 820px) {
+  html {
+    font-size: 17px;
+  }
+}
+
+@media (max-height: 760px) {
+  html {
+    font-size: 16px;
+  }
+}

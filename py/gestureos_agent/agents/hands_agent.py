@@ -161,7 +161,7 @@ OSK_TOGGLE_COOLDOWN_SEC = 1.2
 # =============================================================================
 # UI LOCK toggle gesture (global)
 # =============================================================================
-UI_LOCK_HOLD_SEC = 2.0
+UI_LOCK_HOLD_SEC = 8.0
 UI_LOCK_COOLDOWN_SEC = 1.0
 
 
@@ -1398,7 +1398,7 @@ class HandsAgent:
                 can_vkey_click = False
 
             # pointer move
-            can_pointer_inject = (can_mouse_inject or can_draw_inject or can_ppt_inject)
+            can_pointer_inject = (can_mouse_inject or can_draw_inject or can_ppt_inject or can_kb_inject)
             if (not block_by_palette) and can_pointer_inject and got_cursor:
                 do_move = False
                 if mode_u in ("MOUSE", "VKEY"):
@@ -1409,7 +1409,9 @@ class HandsAgent:
                     do_move = (cursor_gesture in ("OPEN_PALM", "PINCH_INDEX")) or down
                 elif mode_u == "PRESENTATION":
                     do_move = (cursor_gesture == "OPEN_PALM")
-
+                elif mode_u == "KEYBOARD":
+                    # 키보드 모드에서도 손바닥 펼치면 마우스 이동
+                    do_move = (cursor_gesture == "OPEN_PALM")
                 if do_move:
                     ux, uy = self.control.map_control_to_screen(cursor_cx, cursor_cy)
                     ex, ey = self.control.apply_ema(ux, uy)
@@ -1486,9 +1488,14 @@ class HandsAgent:
 
             # keyboard
             if (not block_by_palette) and self.kb:
+                kb_can = can_kb_inject
+                # KEYBOARD 모드에서 OPEN_PALM을 "마우스 이동"으로 쓰는 경우 키 입력을 막아서 충돌 방지
+                if mode_u == "KEYBOARD" and cursor_gesture == "OPEN_PALM":
+                    kb_can = False
+
                 self.kb.update(
                     t,
-                    can_kb_inject,
+                    kb_can,            # ✅ 여기 하나만 넣어야 함 (can_inject)
                     got_cursor,
                     cursor_gesture,
                     got_other,

@@ -37,8 +37,7 @@ const api = axios.create({
 });
 
 export default function ProfileCard({ t, theme, onOpenTraining }) {
-  const { user, isAuthed, booting, loginWithCredentials, logout } = useAuth();
-
+  const { user, isAuthed, booting, loginWithCredentials, logout, refreshMe, profileBump } = useAuth();
   const [loginOpen, setLoginOpen] = useState(false);
   const [logoutOpen, setLogoutOpen] = useState(false);
 
@@ -184,6 +183,23 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
+  useEffect(() => {
+    if (!isAuthed || typeof refreshMe !== "function") return;
+
+    const onFocus = () => refreshMe().catch(() => { });
+    const onVis = () => {
+      if (!document.hidden) refreshMe().catch(() => { });
+    };
+
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVis);
+
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [isAuthed, refreshMe]);
+
   const onSubmitLogin = async (e) => {
     e.preventDefault();
     setErr("");
@@ -289,10 +305,10 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
                   title="계정"
                 >
                   {profileImgUrl ? (
-                    <img 
-                      src={profileImgUrl} 
-                      alt="" 
-                      className="h-full w-full object-cover" 
+                    <img
+                      src={profileImgUrl}
+                      alt=""
+                      className="h-full w-full object-cover"
                       onError={(e) => {
                         e.target.style.display = 'none';
                         e.target.parentElement.innerText = /[^\x00-\x7F]/.test(displayName) ? displayName.slice(0, 1) : displayName.slice(0, 2).toUpperCase();
