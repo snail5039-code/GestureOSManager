@@ -39,6 +39,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
                 "ESC": "V_SIGN",
             },
             "FN_HOLD": "PINCH_INDEX",  # other-hand gate
+            "MOUSE_MOD": "FIST",  # other-hand gate for mouse (KEYBOARD)
         },
         "PRESENTATION": {
             "NAV": {

@@ -1,6 +1,8 @@
 import axios from "axios";
 
-const baseURL = import.meta.env.VITE_ACCOUNT_API_BASE || "http://localhost:8082/api";
+// ✅ 중요: 브라우저에서 직접 8082로 치지 말고, Vite proxy(/api)를 통해 동일 오리진처럼 사용
+// 그러면 refreshToken 쿠키도 안정적으로 붙는다.
+const baseURL = "/api";
 
 export const accountApi = axios.create({
   baseURL,
@@ -50,7 +52,7 @@ export function attachAccountInterceptors({ getAccessToken, setAccessToken, onLo
         setAccessToken?.(newToken);
         cfg.headers = { ...(cfg.headers || {}), Authorization: `Bearer ${newToken}` };
         return accountApi(cfg);
-      } catch (e) {
+      } catch {
         await onLogout?.();
         return Promise.reject(err);
       }

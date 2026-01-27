@@ -23,15 +23,18 @@
       },
       "FN_HOLD" : "PINCH_INDEX"
     },
-    "PRESENTATION": {
-      "NAV": {
-        "NEXT": "FIST",
-        "PREV": "V_SIGN"
+    "PRESENTATION" : {
+      "NAV" : {
+        "NEXT" : "PINCH_INDEX",
+        "PREV" : "V_SIGN"
       },
-      "INTERACT": {
-        "ACTIVATE": "PINCH_INDEX"
+      "INTERACT" : {
+        "TAB" : "FIST",
+        "SHIFT_TAB" : "V_SIGN",
+        "ACTIVATE" : "PINCH_INDEX",
+        "PLAY_PAUSE" : "OPEN_PALM"
       },
-      "INTERACT_HOLD": "NONE"
+      "INTERACT_HOLD" : "FIST"
     }
   }
 }

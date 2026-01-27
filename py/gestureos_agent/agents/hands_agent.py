@@ -467,7 +467,7 @@ class HandsAgent:
         # ✅ VKEY/KEYBOARD 강제 클릭(핀치) 엣지 감지
         self._vkey_prev_pinch = False
         self._vkey_last_click_ts = 0.0
-        self._vkey_click_cd = 0.18  # 과다 클릭 방지
+        self._vkey_click_cd = 0.28  # 과다 클릭 방지
 
         # ws
         self.ws = WSClient(
@@ -1513,14 +1513,19 @@ class HandsAgent:
                 and (not no_inject)
             )
 
-            # ✅ KEYBOARD에서도 클릭(포커스 잡기) 허용: PINCH로 좌클릭
+            kb_mouse_mod_g = get_binding(self.settings, "KEYBOARD", "MOUSE_MOD", default="FIST")
+            kb_mouse_gate = bool(got_other and (other_gesture == kb_mouse_mod_g))
+
+            # ✅ KEYBOARD에서 '두손 조합'일 때만 마우스 커서/클릭 허용
             can_mouse_inject_kb = (
                 self.enabled
                 and (mode_u == "KEYBOARD")
                 and (t >= self.reacquire_until)
                 and (not effective_locked)
                 and (not no_inject)
+                and kb_mouse_gate
             )
+
 
             can_ppt_inject = (
                 self.enabled
@@ -1589,7 +1594,13 @@ class HandsAgent:
                 elif mode_u == "PRESENTATION":
                     do_move = (cursor_gesture == "OPEN_PALM")
                 elif mode_u == "KEYBOARD":
-                    do_move = (cursor_gesture == "OPEN_PALM")
+                    # KEYBOARD: other-hand gate(MOUSE_MOD)일 때만 커서 이동
+                    if can_mouse_inject_kb:
+                        dragging = bool(getattr(self.mouse_click, "dragging", False)) if self.mouse_click else False
+                        do_move = (cursor_gesture == mouse_move_g) or (dragging and cursor_gesture == mouse_click_g)
+                    else:
+                        do_move = False
+
 
                 if do_move:
                     ux, uy = self.control.map_control_to_screen(cursor_cx, cursor_cy)
@@ -1599,7 +1610,7 @@ class HandsAgent:
             # -------------------------------------------------------------
             # ✅ 핵심: VKEY/KEYBOARD에서 PINCH를 SendInput 좌클릭으로 강제 주입
             # -------------------------------------------------------------
-            if _IS_WIN and (mode_u in ("VKEY", "KEYBOARD")) and self.enabled and (not self.ui_locked) and (not block_by_palette):
+            if _IS_WIN and (mode_u == "VKEY") and self.enabled and (not self.ui_locked) and (not block_by_palette):
                 is_pinch = (str(cursor_gesture).upper() == "PINCH_INDEX")
                 if is_pinch and (not self._vkey_prev_pinch):
                     if (t >= (self._vkey_last_click_ts + self._vkey_click_cd)) and (t >= self.reacquire_until) and (not no_inject):
@@ -1613,11 +1624,10 @@ class HandsAgent:
                 self._vkey_prev_pinch = False
 
             # mouse actions
-            if mode_u in ("MOUSE", "VKEY", "KEYBOARD"):
+            if mode_u in ("MOUSE", "KEYBOARD"):
                 allow_click = (
                     (can_mouse_inject and (not block_by_palette))
                     or (can_mouse_inject_kb and (not block_by_palette))
-                    or (mode_u == "VKEY" and can_vkey_click and (not block_by_palette))
                 )
 
                 if self.mouse_click:
@@ -1628,19 +1638,23 @@ class HandsAgent:
                         click_gesture=mouse_click_g,
                     )
 
-                # 우클릭은 MOUSE에서만
-                if mode_u == "MOUSE" and self.mouse_right:
+                # 우클릭: MOUSE, KEYBOARD(두손 조합 게이트일 때)
+                if self.mouse_right:
+                    can_rc = (can_mouse_inject if mode_u == "MOUSE" else can_mouse_inject_kb) and (not block_by_palette)
                     self.mouse_right.update(
                         t,
                         cursor_gesture,
-                        can_mouse_inject and (not block_by_palette),
+                        can_rc,
                         gesture=mouse_right_g,
                     )
+
             else:
+                # ✅ VKEY 포함: MouseClickDrag/RightClick 완전 OFF (VKEY는 _win_left_click()만 사용)
                 if self.mouse_click:
                     self.mouse_click.update(t, cursor_gesture, False, click_gesture=mouse_click_g)
                 if self.mouse_right:
                     self.mouse_right.update(t, cursor_gesture, False, gesture=mouse_right_g)
+
 
             # draw
             if mode_u == "DRAW" and self.draw:
@@ -1691,7 +1705,7 @@ class HandsAgent:
 
             # keyboard
             if (not block_by_palette) and self.kb:
-                kb_can = can_kb_inject
+                kb_can = can_kb_inject and (not can_mouse_inject_kb)
                 self.kb.update(
                     t,
                     kb_can,
@@ -1700,7 +1714,7 @@ class HandsAgent:
                     got_other,
                     other_gesture,
                     bindings=kb_bindings,
-                )
+                )     
             else:
                 if self.kb:
                     self.kb.reset()

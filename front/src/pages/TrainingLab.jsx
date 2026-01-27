@@ -16,6 +16,7 @@ const LABEL_LABEL = {
   PINCH_INDEX: "핀치",
   OTHER: "기타",
 };
+
 const HANDS = [
   { id: "cursor", label: "주 손(커서)" },
   { id: "other", label: "보조 손" },
@@ -23,7 +24,7 @@ const HANDS = [
 
 const api = axios.create({
   baseURL: "/api",
-  timeout: 5000,
+  timeout: 8000,
   headers: { Accept: "application/json" },
 });
 
@@ -84,7 +85,7 @@ function drawHands(canvas, opts) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
 
-  // subtle grid for orientation
+  // grid
   ctx.save();
   ctx.globalAlpha = 0.25;
   ctx.lineWidth = 1;
@@ -197,9 +198,7 @@ function StepDot({ done, label, hint }) {
         )}
       />
       <div className="min-w-0">
-        <div className="text-[12px] font-semibold leading-none truncate">
-          {label}
-        </div>
+        <div className="text-[12px] font-semibold leading-none truncate">{label}</div>
         {hint ? (
           <div className="text-[11px] opacity-70 leading-none mt-0.5 truncate">
             {hint}
@@ -208,6 +207,13 @@ function StepDot({ done, label, hint }) {
       </div>
     </div>
   );
+}
+
+function sanitizeProfileName(s) {
+  const raw = String(s || "").trim();
+  // 한글/영문/숫자/공백/_/- 허용 (서버에서 더 제한하면 여기 맞추면 됨)
+  const cleaned = raw.replace(/[^\p{Script=Hangul}a-zA-Z0-9 _-]/gu, "");
+  return cleaned.slice(0, 32).trim();
 }
 
 export default function TrainingLab({ theme = "dark" }) {
@@ -228,7 +234,7 @@ export default function TrainingLab({ theme = "dark" }) {
   // ✅ 수집 시작 전 준비(카운트다운)
   const [prepDelaySec, setPrepDelaySec] = useState(2);
   const [armLeftSec, setArmLeftSec] = useState(0);
-  const armRef = useRef(null); // { kind, fireAt, hand, label, seconds, hz }
+  const armRef = useRef(null);
   const armTimerRef = useRef(null);
 
   // ✅ 서버 learner 작업 중 표시
@@ -241,16 +247,15 @@ export default function TrainingLab({ theme = "dark" }) {
   // ✅ DB profile list
   const [dbProfiles, setDbProfiles] = useState([]);
 
+  // ✅ 로컬 카운트 실시간 표시용 state
+  const [localSampleCount, setLocalSampleCount] = useState(0);
+  const [capturedCountState, setCapturedCountState] = useState(0);
+
   // =========================
   // ✅ Auth / session scoping
   // =========================
   const memberIdRaw =
     user?.id ?? user?.memberId ?? user?.member_id ?? user?.email ?? null;
-
-  const memberKey = useMemo(() => {
-    const raw = memberIdRaw ? String(memberIdRaw) : "guest";
-    return raw.replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase();
-  }, [memberIdRaw]);
 
   const isGuest = !isAuthed || !memberIdRaw;
 
@@ -259,41 +264,16 @@ export default function TrainingLab({ theme = "dark" }) {
     return { "X-User-Id": String(memberIdRaw) };
   }, [isGuest, memberIdRaw]);
 
-  // 프로필 파일/이름 충돌 방지용 네임스페이스 (서버/DB에도 그대로 저장됨)
-  const NS = useMemo(() => (isGuest ? "" : `u${memberKey}__`), [isGuest, memberKey]);
-
-  const stripNS = useCallback(
-    (name) => {
-      const n = String(name || "").trim();
-      if (!NS) return n;
-      return n.startsWith(NS) ? n.slice(NS.length) : n;
-    },
-    [NS]
-  );
-
-  const withNS = useCallback(
-    (name) => {
-      const n = stripNS(name);
-      if (!n) return "";
-      return `${NS}${n}`;
-    },
-    [NS, stripNS]
-  );
-
-  const displayProfile = useCallback(
-    (p) => {
-      const s = String(p || "");
-      if (s === "default") return "default(기본)";
-      if (!NS) return s;
-      return s.startsWith(NS) ? s.slice(NS.length) : s; // 내꺼 아니면 원문 표시
-    },
-    [NS]
-  );
+  const displayProfile = useCallback((p) => {
+    const s = String(p || "");
+    if (s === "default") return "기본(default)";
+    return s;
+  }, []);
 
   const denyIfGuest = useCallback(
     (what = "이 작업") => {
       if (!isGuest) return false;
-      setInfo(`게스트 모드: ${what}은 로그인 후 가능합니다. (default만 사용 가능)`);
+      setInfo(`게스트 모드에서는 ${what}을(를) 사용할 수 없어. 로그인 후 다시 시도해줘. (기본 프로필만 사용 가능)`);
       return true;
     },
     [isGuest]
@@ -303,11 +283,10 @@ export default function TrainingLab({ theme = "dark" }) {
   // ✅ local dataset: user-scoped
   // =========================
   const datasetKey = useMemo(
-    () => `trainingLab.dataset.v1.${isGuest ? "guest" : memberKey}`,
-    [isGuest, memberKey]
+    () => `trainingLab.dataset.v1.${isGuest ? "guest" : String(memberIdRaw).replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase()}`,
+    [isGuest, memberIdRaw]
   );
 
-  // dataset stored in ref to avoid rerender per frame
   const datasetRef = useRef({
     meta: {
       app: "GestureOS TrainingLab",
@@ -322,6 +301,7 @@ export default function TrainingLab({ theme = "dark" }) {
     // 계정 변경/로그아웃 시 로컬 캡처 중단
     setCapturing(false);
     captureRef.current = null;
+    setCapturedCountState(0);
 
     try {
       const raw = localStorage.getItem(datasetKey);
@@ -352,13 +332,17 @@ export default function TrainingLab({ theme = "dark" }) {
     } catch (_) {}
   }, [datasetVersion, datasetKey]);
 
-  // ✅ Premium toast auto-dismiss
+  useEffect(() => {
+    setLocalSampleCount(datasetRef.current.samples.length);
+  }, [datasetVersion]);
+
+  // ✅ Toast auto-dismiss
   useEffect(() => {
     if (!info && !error) return;
     const t = setTimeout(() => {
       setInfo("");
       setError("");
-    }, 2200);
+    }, 2400);
     return () => clearTimeout(t);
   }, [info, error]);
 
@@ -376,20 +360,17 @@ export default function TrainingLab({ theme = "dark" }) {
   const cursorLm = status?.cursorLandmarks ?? [];
   const otherLm = status?.otherLandmarks ?? [];
 
-  // ✅ 서버 learner 상태 (AgentStatus에 들어있는 값)
+  // ✅ 서버 learner 상태
   const learnEnabled = !!status?.learnEnabled;
   const learnCounts = status?.learnCounts || null;
   const learnCapture = status?.learnCapture || null;
-  const learnLastPred = status?.learnLastPred || null;
   const learnLastTrainTs = status?.learnLastTrainTs || 0;
 
-  // ✅ profile (hands_agent STATUS에 실어보내는 값)
   const learnProfile = status?.learnProfile || "default";
   const learnProfiles = Array.isArray(status?.learnProfiles)
     ? status.learnProfiles
     : ["default"];
 
-  // (선택) Python/DTO에 learnHasBackup이 없으면 그냥 항상 true로 취급
   const learnHasBackup =
     typeof status?.learnHasBackup === "boolean" ? status.learnHasBackup : null;
   const canRollback = learnHasBackup === null ? true : !!learnHasBackup;
@@ -407,9 +388,7 @@ export default function TrainingLab({ theme = "dark" }) {
     };
   }, [status, cursorLm, otherLm]);
 
-
-  const selectedLmOk =
-    handId === "cursor" ? derived.cursorLmOk : derived.otherLmOk;
+  const selectedLmOk = handId === "cursor" ? derived.cursorLmOk : derived.otherLmOk;
   const selectedServerCount = getServerCount(learnCounts, handId, label);
 
   const isHandOkNow = (hand) => {
@@ -427,10 +406,10 @@ export default function TrainingLab({ theme = "dark" }) {
     return isHandOkNow(hand);
   };
 
-  // 사용자 관점 "진행 상태"
+  // 사용자 관점 진행 상태
   const stepProfile = !!learnProfile;
   const stepDetect = !!selectedLmOk;
-  const stepCollect = selectedServerCount >= MIN_TRAIN_SAMPLES; // learner 기본 min_samples
+  const stepCollect = selectedServerCount >= MIN_TRAIN_SAMPLES;
   const stepTrain = Number(learnLastTrainTs || 0) > 0;
   const stepApply = !!learnEnabled;
 
@@ -472,40 +451,16 @@ export default function TrainingLab({ theme = "dark" }) {
   }, [isGuest, userHeaders]);
 
   const profileOptions = useMemo(() => {
-    // 게스트는 default만
-    if (isGuest) return [{ value: "default", label: "default(기본)" }];
-
-    const set = new Set([
-      "default",
-      learnProfile,
-      ...(learnProfiles || []),
-      ...(dbProfiles || []),
-    ]);
-
-    // 내 네임스페이스 + default만 노출 (현재 선택이 외부값이면 안전하게 추가 노출)
+    const set = new Set(["default", learnProfile, ...(learnProfiles || []), ...(dbProfiles || [])]);
     const all = Array.from(set).filter(Boolean);
-
-    const mine = all
-      .filter((p) => p === "default" || String(p).startsWith(NS))
-      .map((p) => ({ value: p, label: displayProfile(p) }));
-
-    // 혹시 현재 프로필이 mine에 안 들어가면 포함
-    if (
-      learnProfile &&
-      learnProfile !== "default" &&
-      !mine.some((x) => x.value === learnProfile)
-    ) {
-      mine.push({ value: learnProfile, label: displayProfile(learnProfile) });
-    }
-
-    // label 기준 정렬 (default 맨 위)
-    const base = mine.filter((x) => x.value === "default");
-    const rest = mine
-      .filter((x) => x.value !== "default")
-      .sort((a, b) => a.label.localeCompare(b.label));
-
+    // default 맨 위
+    const base = all.filter((x) => x === "default").map((x) => ({ value: x, label: displayProfile(x) }));
+    const rest = all
+      .filter((x) => x !== "default")
+      .sort((a, b) => String(a).localeCompare(String(b)))
+      .map((x) => ({ value: x, label: displayProfile(x) }));
     return [...base, ...rest];
-  }, [isGuest, learnProfile, learnProfiles, dbProfiles, NS, displayProfile]);
+  }, [learnProfile, learnProfiles, dbProfiles, displayProfile]);
 
   // =========================
   // ✅ status polling
@@ -525,9 +480,7 @@ export default function TrainingLab({ theme = "dark" }) {
     } catch (e) {
       if (e?.name === "CanceledError" || e?.name === "AbortError") return;
       const msg = e?.response
-        ? `상태 조회 실패 (HTTP ${e.response.status})${
-            e.response.data ? `: ${String(e.response.data)}` : ""
-          }`
+        ? `상태 조회 실패 (HTTP ${e.response.status})${e.response.data ? `: ${String(e.response.data)}` : ""}`
         : e?.message || "상태 조회 실패";
       setError(msg);
     } finally {
@@ -573,7 +526,7 @@ export default function TrainingLab({ theme = "dark" }) {
     });
   }, [cursorLm, otherLm, theme, derived.gesture, derived.otherGesture]);
 
-  // capture loop: on each status update, append sample if capturing (로컬)
+  // capture loop: 로컬 샘플 수집 (실시간 카운트)
   useEffect(() => {
     if (!capturing) return;
 
@@ -595,8 +548,15 @@ export default function TrainingLab({ theme = "dark" }) {
         otherGesture: status?.otherGesture ?? null,
         landmarks: lm.map((p) => ({ x: p.x, y: p.y, z: p.z })),
       });
+
       st.collected += 1;
-      if (st.collected % 3 === 0) setDatasetVersion((v) => v + 1);
+
+      // ✅ UI 즉시 갱신
+      setCapturedCountState(st.collected);
+      setLocalSampleCount(datasetRef.current.samples.length);
+
+      // 너무 잦은 렌더 싫으면 2~3장마다만 올려도 됨.
+      setDatasetVersion((v) => v + 1);
     }
 
     if (elapsed >= limit) {
@@ -615,6 +575,7 @@ export default function TrainingLab({ theme = "dark" }) {
       hand: handId,
       collected: 0,
     };
+    setCapturedCountState(0);
     setCapturing(true);
   };
 
@@ -633,6 +594,7 @@ export default function TrainingLab({ theme = "dark" }) {
       otherGesture: status?.otherGesture ?? null,
       landmarks: lm.map((p) => ({ x: p.x, y: p.y, z: p.z })),
     });
+    setLocalSampleCount(datasetRef.current.samples.length);
     setDatasetVersion((v) => v + 1);
   };
 
@@ -645,6 +607,8 @@ export default function TrainingLab({ theme = "dark" }) {
       },
       samples: [],
     };
+    setCapturedCountState(0);
+    setLocalSampleCount(0);
     setDatasetVersion((v) => v + 1);
   };
 
@@ -652,8 +616,6 @@ export default function TrainingLab({ theme = "dark" }) {
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     downloadJson(`gestureos-training-${stamp}.json`, datasetRef.current);
   };
-
-  const capturedCount = captureRef.current?.collected ?? 0;
 
   // =========================
   // ✅ 서버 learner API
@@ -667,42 +629,39 @@ export default function TrainingLab({ theme = "dark" }) {
     setArmLeftSec(0);
   }, []);
 
+  const warnDefaultSharedOnce = useRef(false);
+  const warnDefaultShared = () => {
+    if (learnProfile !== "default") return;
+    if (warnDefaultSharedOnce.current) return;
+    warnDefaultSharedOnce.current = true;
+    setInfo("기본(default) 프로필은 공용일 수 있어. 가능하면 새 프로필 만들어서 진행해.");
+  };
+
   const serverCaptureNow = async (cfg) => {
     setError("");
     setInfo("");
 
-    if (denyIfGuest("서버 캡처")) return;
-    if (learnProfile === "default") {
-      setInfo("default는 공용 기본값이라 학습 저장은 새 프로필에서만 가능");
-      return;
-    }
-    if (!String(learnProfile).startsWith(NS)) {
-      setInfo("내 프로필에서만 캡처 가능");
-      return;
-    }
+    if (denyIfGuest("서버 샘플 수집")) return;
 
     const hand = cfg?.hand ?? handId;
     const lab = cfg?.label ?? label;
     const seconds = cfg?.seconds ?? (Number(captureSec) || 2);
     const hz = cfg?.hz ?? 15;
 
+    warnDefaultShared();
+
     setServerBusy(true);
     try {
       const { data } = await api.post("/train/capture", null, {
-        params: {
-          hand,
-          label: lab,
-          seconds,
-          hz,
-        },
+        params: { hand, label: lab, seconds, hz },
         headers: userHeaders,
       });
       setInfo(data?.ok ? "서버 샘플 수집 시작" : "서버 샘플 수집 실패");
       await fetchStatus();
     } catch (e) {
       const msg = e?.response
-        ? `서버 캡처 실패 (HTTP ${e.response.status})`
-        : e?.message || "서버 캡처 실패";
+        ? `서버 샘플 수집 실패 (HTTP ${e.response.status})${e.response.data ? `: ${String(e.response.data)}` : ""}`
+        : e?.message || "서버 샘플 수집 실패";
       setError(msg);
     } finally {
       setServerBusy(false);
@@ -713,15 +672,7 @@ export default function TrainingLab({ theme = "dark" }) {
     setError("");
     setInfo("");
 
-    if (denyIfGuest("서버 캡처")) return;
-    if (learnProfile === "default") {
-      setInfo("default는 공용 기본값이라 학습 저장은 새 프로필에서만 가능");
-      return;
-    }
-    if (!String(learnProfile).startsWith(NS)) {
-      setInfo("내 프로필에서만 캡처 가능");
-      return;
-    }
+    if (denyIfGuest("서버 샘플 수집")) return;
 
     const delay = Math.max(0, Math.min(10, Number(prepDelaySec) || 0));
     const cfg = {
@@ -738,9 +689,7 @@ export default function TrainingLab({ theme = "dark" }) {
       return;
     }
 
-    // 이미 예약 중이면 새로 걸기 전에 정리
     clearArming();
-
     armRef.current = cfg;
     setArmLeftSec(Math.ceil(delay));
 
@@ -766,15 +715,9 @@ export default function TrainingLab({ theme = "dark" }) {
     setError("");
     setInfo("");
 
-    if (denyIfGuest("서버 트레이닝")) return;
-    if (learnProfile === "default") {
-      setInfo("default는 공용 기본값이라 학습 저장은 새 프로필에서만 가능");
-      return;
-    }
-    if (!String(learnProfile).startsWith(NS)) {
-      setInfo("내 프로필에서만 트레이닝 가능");
-      return;
-    }
+    if (denyIfGuest("서버 학습")) return;
+
+    warnDefaultShared();
 
     setServerBusy(true);
     try {
@@ -785,7 +728,7 @@ export default function TrainingLab({ theme = "dark" }) {
       await fetchStatus();
     } catch (e) {
       const msg = e?.response
-        ? `서버 학습 실패 (HTTP ${e.response.status})`
+        ? `서버 학습 실패 (HTTP ${e.response.status})${e.response.data ? `: ${String(e.response.data)}` : ""}`
         : e?.message || "서버 학습 실패";
       setError(msg);
     } finally {
@@ -796,6 +739,8 @@ export default function TrainingLab({ theme = "dark" }) {
   const serverToggleEnable = async () => {
     setError("");
     setInfo("");
+    if (denyIfGuest("학습 적용")) return;
+
     setServerBusy(true);
     try {
       const next = !learnEnabled;
@@ -803,14 +748,12 @@ export default function TrainingLab({ theme = "dark" }) {
         params: { 적용: next },
         headers: userHeaders,
       });
-      setInfo(
-        data?.ok ? (next ? "학습 적용 켜짐" : "학습 적용 꺼짐") : "적용 전환 실패"
-      );
+      setInfo(data?.ok ? (next ? "학습 적용: 켜짐" : "학습 적용: 꺼짐") : "적용 전환 실패");
       await fetchStatus();
     } catch (e) {
       const msg = e?.response
-        ? `enable 실패 (HTTP ${e.response.status})`
-        : e?.message || "enable 실패";
+        ? `적용 전환 실패 (HTTP ${e.response.status})${e.response.data ? `: ${String(e.response.data)}` : ""}`
+        : e?.message || "적용 전환 실패";
       setError(msg);
     } finally {
       setServerBusy(false);
@@ -821,27 +764,22 @@ export default function TrainingLab({ theme = "dark" }) {
     setError("");
     setInfo("");
 
-    if (denyIfGuest("Reset")) return;
+    if (denyIfGuest("초기화")) return;
+
     if (learnProfile === "default") {
-      setInfo("default는 공용 기본값이라 Reset은 내 프로필에서만 가능");
-      return;
-    }
-    if (!String(learnProfile).startsWith(NS)) {
-      setInfo("내 프로필에서만 Reset 가능");
+      setInfo("기본(default)은 공용일 수 있어서 초기화는 막아뒀어. 새 프로필로 진행해.");
       return;
     }
 
     setServerBusy(true);
     try {
-      const { data } = await api.post("/train/reset", null, {
-        headers: userHeaders,
-      });
+      const { data } = await api.post("/train/reset", null, { headers: userHeaders });
       setInfo(data?.ok ? "초기화 완료" : "초기화 실패");
       await fetchStatus();
     } catch (e) {
       const msg = e?.response
-        ? `reset 실패 (HTTP ${e.response.status})`
-        : e?.message || "reset 실패";
+        ? `초기화 실패 (HTTP ${e.response.status})${e.response.data ? `: ${String(e.response.data)}` : ""}`
+        : e?.message || "초기화 실패";
       setError(msg);
     } finally {
       setServerBusy(false);
@@ -852,27 +790,22 @@ export default function TrainingLab({ theme = "dark" }) {
     setError("");
     setInfo("");
 
-    if (denyIfGuest("Rollback")) return;
+    if (denyIfGuest("되돌리기")) return;
+
     if (learnProfile === "default") {
-      setInfo("default는 공용 기본값이라 Rollback은 내 프로필에서만 가능");
-      return;
-    }
-    if (!String(learnProfile).startsWith(NS)) {
-      setInfo("내 프로필에서만 Rollback 가능");
+      setInfo("기본(default)은 공용일 수 있어서 되돌리기는 막아뒀어. 새 프로필로 진행해.");
       return;
     }
 
     setServerBusy(true);
     try {
-      const { data } = await api.post("/train/rollback", null, {
-        headers: userHeaders,
-      });
+      const { data } = await api.post("/train/rollback", null, { headers: userHeaders });
       setInfo(data?.ok ? "되돌리기 완료" : "되돌리기 실패");
       await fetchStatus();
     } catch (e) {
       const msg = e?.response
-        ? `롤백 실패 (HTTP ${e.response.status})`
-        : e?.message || "롤백 실패";
+        ? `되돌리기 실패 (HTTP ${e.response.status})${e.response.data ? `: ${String(e.response.data)}` : ""}`
+        : e?.message || "되돌리기 실패";
       setError(msg);
     } finally {
       setServerBusy(false);
@@ -883,11 +816,10 @@ export default function TrainingLab({ theme = "dark" }) {
   // ✅ profile API
   // =========================
   const serverSetProfile = async (name) => {
-    const target = isGuest ? "default" : name;
+    const target = isGuest ? "default" : String(name || "default");
 
-    // 게스트는 default만
     if (isGuest && target !== "default") {
-      setInfo("게스트 모드: default만 사용 가능");
+      setInfo("게스트 모드에서는 기본(default)만 사용할 수 있어.");
       return;
     }
 
@@ -899,19 +831,13 @@ export default function TrainingLab({ theme = "dark" }) {
         params: { name: target },
         headers: userHeaders,
       });
-      setInfo(data?.ok ? `프로필: ${displayProfile(target)}` : "프로필 적용 실패");
+      setInfo(data?.ok ? `프로필 적용: ${displayProfile(target)}` : "프로필 적용 실패");
       await fetchStatus();
-      // profile 바꾸면 DB list도 한번 갱신
-      if (!isGuest) {
-        try {
-          const r = await api.get("/train/profile/db/list", { headers: userHeaders });
-          setDbProfiles(Array.isArray(r?.data?.profiles) ? r.data.profiles : []);
-        } catch {}
-      }
     } catch (e) {
-      setError(
-        e?.response ? `profile set 실패 (HTTP ${e.response.status})` : e?.message || "profile set 실패"
-      );
+      const msg = e?.response
+        ? `프로필 적용 실패 (HTTP ${e.response.status})${e.response.data ? `: ${String(e.response.data)}` : ""}`
+        : e?.message || "프로필 적용 실패";
+      setError(msg);
     } finally {
       setServerBusy(false);
     }
@@ -920,23 +846,31 @@ export default function TrainingLab({ theme = "dark" }) {
   const serverCreateProfile = async () => {
     if (denyIfGuest("프로필 생성")) return;
 
-    const name = String(newProfile || "").trim();
-    if (!name) return;
-
-    const serverName = withNS(name);
-    if (!serverName) return;
+    const name = sanitizeProfileName(newProfile);
+    if (!name) {
+      setError("프로필 이름이 비었거나 사용할 수 없는 문자야.");
+      return;
+    }
 
     setError("");
     setInfo("");
     setServerBusy(true);
     try {
       const { data } = await api.post("/train/profile/create", null, {
-        params: { name: serverName, copy: true },
+        params: { name, copy: true },
         headers: userHeaders,
       });
-      setInfo(data?.ok ? `프로필 생성: ${displayProfile(serverName)}` : "프로필 생성 실패");
+
+      if (!data?.ok) {
+        setError(`프로필 생성 실패${data ? `: ${JSON.stringify(data)}` : ""}`);
+        return;
+      }
+
+      setInfo(`프로필 생성: ${displayProfile(name)}`);
       setNewProfile("");
-      await fetchStatus();
+
+      // 생성 후 바로 선택
+      await serverSetProfile(name);
 
       // DB list 갱신
       try {
@@ -944,7 +878,10 @@ export default function TrainingLab({ theme = "dark" }) {
         setDbProfiles(Array.isArray(r?.data?.profiles) ? r.data.profiles : []);
       } catch {}
     } catch (e) {
-      setError(e?.response ? `create 실패 (HTTP ${e.response.status})` : e?.message || "create 실패");
+      const msg = e?.response
+        ? `프로필 생성 실패 (HTTP ${e.response.status})${e.response.data ? `: ${String(e.response.data)}` : ""}`
+        : e?.message || "프로필 생성 실패";
+      setError(msg);
     } finally {
       setServerBusy(false);
     }
@@ -952,9 +889,8 @@ export default function TrainingLab({ theme = "dark" }) {
 
   const serverDeleteProfile = async () => {
     if (denyIfGuest("프로필 삭제")) return;
-    if (learnProfile === "default") return;
-    if (!String(learnProfile).startsWith(NS)) {
-      setInfo("내 프로필만 삭제 가능");
+    if (learnProfile === "default") {
+      setInfo("기본(default)은 삭제할 수 없어.");
       return;
     }
 
@@ -966,16 +902,18 @@ export default function TrainingLab({ theme = "dark" }) {
         params: { name: learnProfile },
         headers: userHeaders,
       });
-      setInfo(data?.ok ? `프로필 삭제: ${displayProfile(learnProfile)}` : "삭제 실패");
+      setInfo(data?.ok ? `프로필 삭제: ${displayProfile(learnProfile)}` : "프로필 삭제 실패");
       await fetchStatus();
 
-      // DB list 갱신
       try {
         const r = await api.get("/train/profile/db/list", { headers: userHeaders });
         setDbProfiles(Array.isArray(r?.data?.profiles) ? r.data.profiles : []);
       } catch {}
     } catch (e) {
-      setError(e?.response ? `delete 실패 (HTTP ${e.response.status})` : e?.message || "delete 실패");
+      const msg = e?.response
+        ? `프로필 삭제 실패 (HTTP ${e.response.status})${e.response.data ? `: ${String(e.response.data)}` : ""}`
+        : e?.message || "프로필 삭제 실패";
+      setError(msg);
     } finally {
       setServerBusy(false);
     }
@@ -983,118 +921,104 @@ export default function TrainingLab({ theme = "dark" }) {
 
   const serverRenameProfile = async () => {
     if (denyIfGuest("프로필 이름 변경")) return;
-
-    const to = String(renameTo || "").trim();
-    if (!to || learnProfile === "default") return;
-
-    if (!String(learnProfile).startsWith(NS)) {
-      setInfo("내 프로필만 rename 가능");
+    if (learnProfile === "default") {
+      setInfo("기본(default)은 이름을 바꿀 수 없어.");
       return;
     }
 
-    const serverTo = withNS(to);
-    if (!serverTo) return;
+    const to = sanitizeProfileName(renameTo);
+    if (!to) {
+      setError("새 이름이 비었거나 사용할 수 없는 문자야.");
+      return;
+    }
 
     setError("");
     setInfo("");
     setServerBusy(true);
     try {
       const { data } = await api.post("/train/profile/rename", null, {
-        params: { from: learnProfile, to: serverTo },
+        params: { from: learnProfile, to },
         headers: userHeaders,
       });
-      setInfo(
-        data?.ok
-          ? `이름 변경: ${displayProfile(learnProfile)} → ${displayProfile(serverTo)}`
-          : "이름 변경 실패"
-      );
+
+      setInfo(data?.ok ? `이름 변경: ${displayProfile(learnProfile)} → ${displayProfile(to)}` : "이름 변경 실패");
       setRenameTo("");
       await fetchStatus();
 
-      // DB list 갱신
       try {
         const r = await api.get("/train/profile/db/list", { headers: userHeaders });
         setDbProfiles(Array.isArray(r?.data?.profiles) ? r.data.profiles : []);
       } catch {}
     } catch (e) {
-      setError(e?.response ? `rename 실패 (HTTP ${e.response.status})` : e?.message || "rename 실패");
+      const msg = e?.response
+        ? `이름 변경 실패 (HTTP ${e.response.status})${e.response.data ? `: ${String(e.response.data)}` : ""}`
+        : e?.message || "이름 변경 실패";
+      setError(msg);
     } finally {
       setServerBusy(false);
     }
   };
 
   // =========================
-  // ✅ Guest/login profile automation
+  // ✅ 로그인 유저: main 자동 생성/선택 (실패 시 에러 토스트 표시)
   // =========================
-  const forcingDefaultRef = useRef(false);
-  useEffect(() => {
-    if (!derived.connected) return;
-    if (!isGuest) {
-      forcingDefaultRef.current = false;
-      return;
-    }
-    if (learnProfile === "default") return;
-    if (forcingDefaultRef.current) return;
-
-    forcingDefaultRef.current = true;
-    (async () => {
-      try {
-        await serverSetProfile("default");
-      } finally {
-        forcingDefaultRef.current = false;
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isGuest, derived.connected, learnProfile]);
-
-  // 로그인 유저는 main 자동 생성 + 선택 (1회)
-  const initMainProfileRef = useRef(null);
+  const initMainProfileRef = useRef(false);
   useEffect(() => {
     if (isGuest || !derived.connected) {
-      initMainProfileRef.current = null;
+      initMainProfileRef.current = false;
       return;
     }
-    if (initMainProfileRef.current === memberKey) return;
-    initMainProfileRef.current = memberKey;
-
-    const desired = withNS("main");
+    if (initMainProfileRef.current) return;
+    initMainProfileRef.current = true;
 
     (async () => {
       try {
-        const combined = new Set([
-          ...(learnProfiles || []),
-          ...(dbProfiles || []),
-          learnProfile,
-        ]);
+        const desired = "main";
 
+        // create if missing
+        const combined = new Set([...(learnProfiles || []), ...(dbProfiles || []), learnProfile]);
         if (!combined.has(desired)) {
-          await api.post("/train/profile/create", null, {
+          const r = await api.post("/train/profile/create", null, {
             params: { name: desired, copy: true },
             headers: userHeaders,
           });
+          if (!r?.data?.ok) {
+            setError(`자동 main 생성 실패: ${JSON.stringify(r?.data || {})}`);
+            return;
+          }
         }
 
-        if (learnProfile === "default" || !String(learnProfile).startsWith(NS)) {
-          await api.post("/train/profile/set", null, {
+        // set to main if currently default
+        if (learnProfile === "default") {
+          const s = await api.post("/train/profile/set", null, {
             params: { name: desired },
             headers: userHeaders,
           });
+          if (!s?.data?.ok) {
+            setError(`자동 main 선택 실패: ${JSON.stringify(s?.data || {})}`);
+            return;
+          }
         }
 
         await fetchStatus();
-      } catch {
-        // 실패해도 폴링으로 상태는 계속 갱신됨
+      } catch (e) {
+        const msg = e?.response
+          ? `자동 main 세팅 실패 (HTTP ${e.response.status})${e.response.data ? `: ${String(e.response.data)}` : ""}`
+          : e?.message || "자동 main 세팅 실패";
+        setError(msg);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isGuest, derived.connected, memberKey]);
+  }, [isGuest, derived.connected]);
 
   const serverCaptureText = useMemo(() => {
     if (!learnCapture) return null;
     const h = learnCapture.hand || "-";
     const l = learnCapture.label || "-";
     const c = learnCapture.collected ?? 0;
-    return `수집 중: ${h === "cursor" ? "주 손" : h === "other" ? "보조 손" : h} / ${LABEL_LABEL[l] ?? l} / ${c}`;
+    const handText = h === "cursor" ? "주 손" : h === "other" ? "보조 손" : h;
+    const labelText = LABEL_LABEL[l] ?? l;
+    return `수집 중: ${handText} / ${labelText} / ${c}`;
   }, [learnCapture]);
 
   const pendingCaptureText = useMemo(() => {
@@ -1102,7 +1026,9 @@ export default function TrainingLab({ theme = "dark" }) {
     const cfg = armRef.current;
     const h = cfg?.hand || handId;
     const l = cfg?.label || label;
-    return `준비 중: ${h === "cursor" ? "주 손" : h === "other" ? "보조 손" : h} / ${LABEL_LABEL[l] ?? l} / ${armLeftSec}s`;
+    const handText = h === "cursor" ? "주 손" : h === "other" ? "보조 손" : h;
+    const labelText = LABEL_LABEL[l] ?? l;
+    return `준비 중: ${handText} / ${labelText} / ${armLeftSec}s`;
   }, [armLeftSec, handId, label]);
 
   const lastTrainText = useMemo(() => {
@@ -1118,7 +1044,7 @@ export default function TrainingLab({ theme = "dark" }) {
 
   return (
     <div className="p-6 space-y-6 relative">
-      {/* ✅ Premium Toast */}
+      {/* ✅ Toast */}
       <div className="toast toast-top toast-end z-50">
         {info ? (
           <div className="flex items-start gap-3 rounded-2xl px-4 py-3 shadow-xl backdrop-blur-md bg-base-100/80 ring-1 ring-emerald-400/20">
@@ -1135,13 +1061,7 @@ export default function TrainingLab({ theme = "dark" }) {
               <div className="font-semibold text-emerald-400">완료</div>
               <div className="opacity-80">{info}</div>
             </div>
-            <button
-              type="button"
-              className="btn btn-ghost btn-xs rounded-xl"
-              onClick={() => setInfo("")}
-              aria-label="close"
-              title="close"
-            >
+            <button type="button" className="btn btn-ghost btn-xs rounded-xl" onClick={() => setInfo("")} aria-label="close" title="닫기">
               ✕
             </button>
           </div>
@@ -1162,13 +1082,7 @@ export default function TrainingLab({ theme = "dark" }) {
               <div className="font-semibold text-rose-400">오류</div>
               <div className="opacity-80">{error}</div>
             </div>
-            <button
-              type="button"
-              className="btn btn-ghost btn-xs rounded-xl"
-              onClick={() => setError("")}
-              aria-label="close"
-              title="close"
-            >
+            <button type="button" className="btn btn-ghost btn-xs rounded-xl" onClick={() => setError("")} aria-label="close" title="닫기">
               ✕
             </button>
           </div>
@@ -1178,35 +1092,36 @@ export default function TrainingLab({ theme = "dark" }) {
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div className="space-y-2">
           <div className="flex items-baseline gap-3 flex-wrap">
-            <div className="text-2xl font-bold">Training LAB</div>
+            <div className="text-2xl font-bold">모션 인식 학습</div>
+
             <div className="flex items-center gap-2 flex-wrap">
               <StatusChip tone={isGuest ? "warn" : "ok"} title="로그인 상태">
-                {isGuest ? "게스트(기본만)" : `사용자: ${memberKey}`}
+                {isGuest ? "게스트" : "로그인됨"}
               </StatusChip>
 
               <StatusChip tone={derived.connected ? "ok" : "bad"} title="Agent WebSocket">
                 {derived.connected ? "연결됨" : "연결 끊김"}
               </StatusChip>
+
               <StatusChip title="현재 모드">모드: {derived.mode}</StatusChip>
+
               <StatusChip title="학습 프로필">프로필: {displayProfile(learnProfile)}</StatusChip>
-              <StatusChip tone={learnEnabled ? "ok" : "neutral"} title="학습 적용 여부">
-                학습: {learnEnabled ? "켜짐" : "꺼짐"}
+
+              <StatusChip tone={learnEnabled ? "ok" : "neutral"} title="학습 적용">
+                학습 적용: {learnEnabled ? "켜짐" : "꺼짐"}
               </StatusChip>
             </div>
           </div>
 
           <details className="max-w-[720px]">
-            <summary className="cursor-pointer text-xs opacity-70 select-none">
-              사용 방법(간단)
-            </summary>
+            <summary className="cursor-pointer text-xs opacity-70 select-none">사용 방법(간단)</summary>
             <div className="mt-2 text-xs opacity-75 leading-relaxed">
-              1) <b>프로필</b> 선택 → 2) <b>샘플 수집</b> 클릭(준비시간 후 시작) → 3) <b>학습</b> → 4) <b>적용</b> 켜기. 문제가 생기면 <b>되돌리기</b> 또는 <b>초기화</b>.
+              1) <b>프로필</b> 선택 → 2) <b>샘플 수집</b> (준비시간 후 시작) → 3) <b>학습</b> → 4) <b>적용 켜기</b>.
+              문제가 생기면 <b>되돌리기</b> 또는 <b>초기화</b>.
               {isGuest ? (
                 <>
                   <br />
-                  <span className="text-amber-300/90">
-                    게스트 모드: 서버 학습/프로필 저장은 제한되고 default만 사용 가능
-                  </span>
+                  <span className="text-amber-300/90">게스트 모드: 서버 학습/프로필 저장은 제한되며 기본 프로필만 사용 가능</span>
                 </>
               ) : null}
             </div>
@@ -1219,10 +1134,7 @@ export default function TrainingLab({ theme = "dark" }) {
         <div className={cn("rounded-2xl ring-1 ring-base-300/50 bg-base-200/70 shadow-xl overflow-hidden")}>
           <div className="px-5 py-4 border-b border-base-300/40 flex items-center justify-between">
             <div className="font-semibold">랜드마크 미리보기</div>
-            <div className="text-xs opacity-70">
-              {loading ? "불러오는 중..." : derived.connected ? "연결됨" : "연결 끊김"}
-              
-            </div>
+            <div className="text-xs opacity-70">{loading ? "불러오는 중..." : derived.connected ? "연결됨" : "연결 끊김"}</div>
           </div>
 
           <div className="p-4">
@@ -1234,22 +1146,15 @@ export default function TrainingLab({ theme = "dark" }) {
               <div className={cn("rounded-xl ring-1 ring-base-300/40 bg-base-100/25 p-3")}>
                 <div className="text-xs opacity-70">주 손 랜드마크</div>
                 <div className="mt-1 text-sm font-semibold">
-                  {derived.cursorLmOk
-                    ? "정상 (21)"
-                    : Array.isArray(cursorLm)
-                    ? `미인식 (${cursorLm.length || 0})`
-                    : "-"}
+                  {derived.cursorLmOk ? "정상 (21)" : Array.isArray(cursorLm) ? `미인식 (${cursorLm.length || 0})` : "-"}
                 </div>
                 <div className="text-xs opacity-70 mt-1">제스처: {derived.gesture}</div>
               </div>
+
               <div className={cn("rounded-xl ring-1 ring-base-300/40 bg-base-100/25 p-3")}>
                 <div className="text-xs opacity-70">보조 손 랜드마크</div>
                 <div className="mt-1 text-sm font-semibold">
-                  {derived.otherLmOk
-                    ? "정상 (21)"
-                    : Array.isArray(otherLm)
-                    ? `미인식 (${otherLm.length || 0})`
-                    : "-"}
+                  {derived.otherLmOk ? "정상 (21)" : Array.isArray(otherLm) ? `미인식 (${otherLm.length || 0})` : "-"}
                 </div>
                 <div className="text-xs opacity-70 mt-1">제스처: {derived.otherGesture}</div>
               </div>
@@ -1265,38 +1170,38 @@ export default function TrainingLab({ theme = "dark" }) {
               <StatusChip tone={stepDetect ? "ok" : "warn"} title="선택한 손 랜드마크 상태">
                 {stepDetect ? "손 인식됨" : "손 미인식"}
               </StatusChip>
-              <StatusChip tone={stepCollect ? "ok" : "neutral"} title="선택 라벨 서버 샘플 수">
-                샘플 {selectedServerCount}/{MIN_TRAIN_SAMPLES}
+
+              <StatusChip tone={stepCollect ? "ok" : "neutral"} title="학습에 필요한 샘플 상태">
+                샘플: {stepCollect ? "충분" : "부족"}
               </StatusChip>
-              {lastTrainText ? (
-                <StatusChip title="마지막 학습">최근 학습 {lastTrainText}</StatusChip>
-              ) : null}
+
+              {lastTrainText ? <StatusChip title="마지막 학습">최근 학습: {lastTrainText}</StatusChip> : null}
             </div>
           </div>
 
           <div className="p-5 space-y-4">
-            {/* quick stepper */}
+            {/* stepper */}
             <div className={cn("rounded-2xl ring-1 ring-base-300/40 bg-base-100/15 p-4")} title="프로필 → 수집 → 학습 → 적용 순서">
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                 <StepDot done={stepProfile} label="1. 프로필" hint={displayProfile(learnProfile)} />
-                <StepDot done={stepDetect} label="2. 인식" hint={stepDetect ? "정상" : "손이 안잡힘"} />
-                <StepDot done={stepCollect} label="3. 수집" hint={`${selectedServerCount}/${MIN_TRAIN_SAMPLES}`} />
+                <StepDot done={stepDetect} label="2. 인식" hint={stepDetect ? "정상" : "손이 안 잡힘"} />
+                <StepDot done={stepCollect} label="3. 수집" hint={stepCollect ? "충분" : "부족"} />
                 <StepDot done={stepTrain} label="4. 학습" hint={stepTrain ? "완료" : "미실행"} />
                 <StepDot done={stepApply} label="5. 적용" hint={stepApply ? "적용됨" : "꺼짐"} />
               </div>
+
               <div className="mt-3 flex items-center justify-between gap-3 flex-wrap">
                 <div className="text-xs opacity-70">
-                  선택: <b>{handId === "cursor" ? "주 손" : "보조 손"}</b> · <b>{label}</b> · {Number(captureSec) || 2}초
+                  선택: <b>{handId === "cursor" ? "주 손" : "보조 손"}</b> · <b>{LABEL_LABEL[label] ?? label}</b> ·{" "}
+                  {Number(captureSec) || 2}초
                 </div>
+
                 <div className="flex items-center gap-2 flex-wrap">
-                  {pendingCaptureText ? (
-                    <StatusChip tone="warn" title="준비 중">{pendingCaptureText}</StatusChip>
-                  ) : null}
-                  {serverCaptureText ? (
-                    <StatusChip tone="warn" title="서버 수집 중">{serverCaptureText}</StatusChip>
-                  ) : null}
+                  {pendingCaptureText ? <StatusChip tone="warn" title="준비 중">{pendingCaptureText}</StatusChip> : null}
+                  {serverCaptureText ? <StatusChip tone="warn" title="서버 수집 중">{serverCaptureText}</StatusChip> : null}
+
                   <button type="button" className={cn("btn btn-xs btn-ghost rounded-xl")} onClick={fetchStatus} title="상태 새로고침">
-                    Refresh
+                    새로고침
                   </button>
                 </div>
               </div>
@@ -1322,7 +1227,7 @@ export default function TrainingLab({ theme = "dark" }) {
               </div>
 
               <div>
-                <div className="text-xs opacity-70 mb-1">시간(초)</div>
+                <div className="text-xs opacity-70 mb-1">수집 시간(초)</div>
                 <input
                   className="input input-sm w-full rounded-xl"
                   type="number"
@@ -1335,7 +1240,7 @@ export default function TrainingLab({ theme = "dark" }) {
               </div>
 
               <div>
-                <div className="text-xs opacity-70 mb-1">준비(초)</div>
+                <div className="text-xs opacity-70 mb-1">준비 시간(초)</div>
                 <input
                   className="input input-sm w-full rounded-xl"
                   type="number"
@@ -1394,7 +1299,7 @@ export default function TrainingLab({ theme = "dark" }) {
                   <button
                     className="btn btn-sm rounded-xl w-full"
                     onClick={serverCreateProfile}
-                    disabled={serverBusy || isGuest || !newProfile.trim()}
+                    disabled={serverBusy || isGuest || !sanitizeProfileName(newProfile)}
                     title={isGuest ? "게스트 모드에서는 프로필 생성 불가" : ""}
                   >
                     생성(복사)
@@ -1412,28 +1317,15 @@ export default function TrainingLab({ theme = "dark" }) {
                       className="input input-sm w-full rounded-xl"
                       value={renameTo}
                       onChange={(e) => setRenameTo(e.target.value)}
-                      placeholder={
-                        isGuest ? "게스트는 이름 변경 불가" : learnProfile === "default" ? "default는 이름 변경 불가" : "새 이름"
-                      }
-                      disabled={
-                        serverBusy ||
-                        isGuest ||
-                        learnProfile === "default" ||
-                        !String(learnProfile).startsWith(NS)
-                      }
+                      placeholder={isGuest ? "게스트는 이름 변경 불가" : learnProfile === "default" ? "기본 프로필은 이름 변경 불가" : "새 이름"}
+                      disabled={serverBusy || isGuest || learnProfile === "default"}
                     />
                   </div>
                   <div className="flex items-end gap-2">
                     <button
                       className="btn btn-sm rounded-xl w-full"
                       onClick={serverRenameProfile}
-                      disabled={
-                        serverBusy ||
-                        isGuest ||
-                        learnProfile === "default" ||
-                        !String(learnProfile).startsWith(NS) ||
-                        !renameTo.trim()
-                      }
+                      disabled={serverBusy || isGuest || learnProfile === "default" || !sanitizeProfileName(renameTo)}
                     >
                       이름 변경
                     </button>
@@ -1446,15 +1338,9 @@ export default function TrainingLab({ theme = "dark" }) {
                     onClick={() => {
                       if (isGuest) return;
                       if (learnProfile === "default") return;
-                      if (!String(learnProfile).startsWith(NS)) return;
                       if (window.confirm(`프로필 '${displayProfile(learnProfile)}' 를 삭제할까요?`)) serverDeleteProfile();
                     }}
-                    disabled={
-                      serverBusy ||
-                      isGuest ||
-                      learnProfile === "default" ||
-                      !String(learnProfile).startsWith(NS)
-                    }
+                    disabled={serverBusy || isGuest || learnProfile === "default"}
                   >
                     현재 프로필 삭제
                   </button>
@@ -1464,27 +1350,13 @@ export default function TrainingLab({ theme = "dark" }) {
               <div className="flex items-center gap-2 flex-wrap mt-3">
                 <button
                   type="button"
-                  className={cn(
-                    "btn btn-sm rounded-xl",
-                    armLeftSec > 0 ? "btn-warning" : "btn-primary"
-                  )}
+                  className={cn("btn btn-sm rounded-xl", armLeftSec > 0 ? "btn-warning" : "btn-primary")}
                   onClick={() => {
                     if (armLeftSec > 0) clearArming();
                     else armServerCapture();
                   }}
-                  disabled={
-                    (serverBusy ||
-                      !derived.connected ||
-                      isGuest ||
-                      learnProfile === "default" ||
-                      !String(learnProfile).startsWith(NS)) &&
-                    armLeftSec === 0
-                  }
-                  title={
-                    selectedLmOk
-                      ? ""
-                      : "손이 안 잡혀도 예약 수집 가능. 준비(초) 안에 손을 올려줘"
-                  }
+                  disabled={serverBusy || !derived.connected || isGuest}
+                  title={selectedLmOk ? "" : "손이 안 잡혀도 예약 수집 가능. 준비 시간 안에 손을 올려줘"}
                 >
                   {armLeftSec > 0 ? `준비중 ${armLeftSec}s · 취소` : "샘플 수집"}
                 </button>
@@ -1493,15 +1365,8 @@ export default function TrainingLab({ theme = "dark" }) {
                   type="button"
                   className={cn("btn btn-sm rounded-xl")}
                   onClick={serverTrain}
-                  disabled={
-                    serverBusy ||
-                    !derived.connected ||
-                    !stepCollect ||
-                    isGuest ||
-                    learnProfile === "default" ||
-                    !String(learnProfile).startsWith(NS)
-                  }
-                  title={!stepCollect ? `샘플이 부족함: ${selectedServerCount}/${MIN_TRAIN_SAMPLES}` : ""}
+                  disabled={serverBusy || !derived.connected || !stepCollect || isGuest}
+                  title={!stepCollect ? "샘플이 아직 부족해. 샘플 수집을 더 해줘" : ""}
                 >
                   학습
                 </button>
@@ -1510,7 +1375,7 @@ export default function TrainingLab({ theme = "dark" }) {
                   type="button"
                   className={cn("btn btn-sm rounded-xl", learnEnabled ? "btn-warning" : "btn-success")}
                   onClick={serverToggleEnable}
-                  disabled={serverBusy || !derived.connected || (!learnEnabled && !stepTrain)}
+                  disabled={serverBusy || !derived.connected || isGuest || (!learnEnabled && !stepTrain)}
                   title={!learnEnabled && !stepTrain ? "적용 전에 학습을 먼저 해줘" : ""}
                 >
                   {learnEnabled ? "적용 끄기" : "적용 켜기"}
@@ -1521,17 +1386,15 @@ export default function TrainingLab({ theme = "dark" }) {
                   className={cn("btn btn-sm btn-ghost rounded-xl")}
                   onClick={() => {
                     if (isGuest) return;
+                    if (learnProfile === "default") {
+                      setInfo("기본(default)은 공용일 수 있어서 초기화는 막아뒀어. 새 프로필로 진행해.");
+                      return;
+                    }
                     if (window.confirm("서버 학습기를 초기화할까요? (프로필 모델이 리셋돼요)")) serverReset();
                   }}
-                  disabled={
-                    serverBusy ||
-                    !derived.connected ||
-                    isGuest ||
-                    learnProfile === "default" ||
-                    !String(learnProfile).startsWith(NS)
-                  }
+                  disabled={serverBusy || !derived.connected || isGuest}
                 >
-                  Reset
+                  초기화
                 </button>
 
                 <button
@@ -1540,62 +1403,91 @@ export default function TrainingLab({ theme = "dark" }) {
                   onClick={() => {
                     if (isGuest) return;
                     if (!canRollback) return;
-                    if (window.confirm("직전 학습 상태로 롤백할까요?")) serverRollback();
+                    if (learnProfile === "default") {
+                      setInfo("기본(default)은 공용일 수 있어서 되돌리기는 막아뒀어. 새 프로필로 진행해.");
+                      return;
+                    }
+                    if (window.confirm("직전 학습 상태로 되돌릴까요?")) serverRollback();
                   }}
-                  disabled={
-                    serverBusy ||
-                    !derived.connected ||
-                    !canRollback ||
-                    isGuest ||
-                    learnProfile === "default" ||
-                    !String(learnProfile).startsWith(NS)
-                  }
-                  title={
-                    canRollback ? "바로 이전 학습 상태로 되돌리기" : "백업이 없어서 롤백 불가"
-                  }
+                  disabled={serverBusy || !derived.connected || !canRollback || isGuest}
+                  title={canRollback ? "바로 이전 학습 상태로 되돌리기" : "백업이 없어서 되돌리기 불가"}
                 >
-                  Rollback
+                  되돌리기
                 </button>
               </div>
 
-              {pendingCaptureText ? (
-                <div className="mt-2 text-xs opacity-70">{pendingCaptureText}</div>
-              ) : null}
-              {serverCaptureText ? (
-                <div className="mt-2 text-xs opacity-70">{serverCaptureText}</div>
-              ) : null}
-
+              {pendingCaptureText ? <div className="mt-2 text-xs opacity-70">{pendingCaptureText}</div> : null}
+              {serverCaptureText ? <div className="mt-2 text-xs opacity-70">{serverCaptureText}</div> : null}
               {lastTrainText ? (
                 <div className="mt-1 text-xs opacity-70">
                   최근 학습: <span className="font-semibold opacity-90">{lastTrainText}</span>
                 </div>
               ) : null}
 
-              <details className="mt-3 rounded-xl ring-1 ring-base-300/40 bg-base-100/10 p-3">
-                <summary className="cursor-pointer select-none text-sm font-semibold">
-                  서버 샘플 수 / 최근 예측
-                </summary>
-                <div className="mt-3">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                    {HANDS.map((h) => (
-                      <div key={h.id} className="rounded-xl ring-1 ring-base-300/30 bg-base-100/15 p-3">
-                        <div className="text-xs opacity-70">{h.label}</div>
-                        <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
-                          {LABELS.map((l) => (
-                            <div key={l} className="flex items-center justify-between">
-                              <span className="opacity-80">{l}</span>
-                              <span className="font-semibold">
-                                {getServerCount(learnCounts, h.id, l)}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
+              {/* ✅ "서버 샘플 수 / 최근 예측" 섹션 제거 */}
+            </div>
+
+            {/* 로컬 데이터셋 */}
+            <details className="rounded-xl ring-1 ring-base-300/40 bg-base-100/10 p-4">
+              <summary className="cursor-pointer select-none text-sm font-semibold">로컬 샘플 관리</summary>
+
+              <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="rounded-xl ring-1 ring-base-300/30 bg-base-100/15 p-3">
+                  <div className="text-xs opacity-70">로컬 누적 샘플</div>
+                  <div className="mt-1 text-sm font-semibold">{localSampleCount}</div>
+                  {capturing ? (
+                    <div className="text-xs opacity-70 mt-1">수집 중… (+{capturedCountState})</div>
+                  ) : (
+                    <div className="text-xs opacity-70 mt-1">대기</div>
+                  )}
+                </div>
+
+                <div className="flex items-end gap-2">
+                  <button className="btn btn-sm rounded-xl w-full" onClick={startCapture} disabled={!derived.connected}>
+                    로컬 연속 수집
+                  </button>
+                </div>
+
+                <div className="flex items-end gap-2">
+                  <button className="btn btn-sm btn-ghost rounded-xl w-full" onClick={addSnapshot} disabled={!derived.connected}>
+                    스냅샷 1장 추가
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-3 flex items-center gap-2 flex-wrap">
+                <button className="btn btn-sm btn-ghost rounded-xl" onClick={exportDataset}>
+                  내보내기(JSON)
+                </button>
+                <button
+                  className="btn btn-sm btn-ghost rounded-xl"
+                  onClick={() => {
+                    if (window.confirm("로컬 샘플을 전부 지울까?")) clearDataset();
+                  }}
+                >
+                  로컬 초기화
+                </button>
+              </div>
+
+              <details className="mt-3">
+                <summary className="cursor-pointer select-none text-xs opacity-70">라벨별 로컬 카운트 보기</summary>
+                <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2">
+                  {HANDS.map((h) => (
+                    <div key={h.id} className="rounded-xl ring-1 ring-base-300/30 bg-base-100/15 p-3">
+                      <div className="text-xs opacity-70">{h.label}</div>
+                      <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
+                        {LABELS.map((l) => (
+                          <div key={l} className="flex items-center justify-between">
+                            <span className="opacity-80">{LABEL_LABEL[l] ?? l}</span>
+                            <span className="font-semibold">{counts?.[h.id]?.[l] ?? 0}</span>
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
+                    </div>
+                  ))}
                 </div>
               </details>
-            </div>
+            </details>
           </div>
         </div>
       </div>

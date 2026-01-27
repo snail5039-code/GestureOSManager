@@ -1,5 +1,18 @@
-import React, { createContext, useContext, useEffect, useMemo, useRef, useState, useCallback } from "react";
-import { accountApi, attachAccountInterceptors, tryRefreshAccessToken } from "../api/accountClient";
+// src/auth/AuthProvider.jsx
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useCallback,
+} from "react";
+import {
+  accountApi,
+  attachAccountInterceptors,
+  tryRefreshAccessToken,
+} from "../api/accountClient";
 
 const AuthContext = createContext(null);
 export const useAuth = () => useContext(AuthContext);
@@ -27,7 +40,9 @@ export default function AuthProvider({ children }) {
 
   const logout = useCallback(async () => {
     try {
-      await accountApi.post("/auth/logout", null); // refreshToken DB 삭제 + 쿠키 만료
+      // refreshToken DB 삭제 + 쿠키 만료
+      // (인터셉터가 /auth/logout엔 refresh 재시도 안 하도록 accountClient에서 막아둠)
+      await accountApi.post("/auth/logout", null);
     } catch {
       // ignore
     }
@@ -60,7 +75,6 @@ export default function AuthProvider({ children }) {
           return null;
         }
 
-        // 나머지는 UI에서 필요 시 처리하게 두고 user는 유지
         throw e;
       } finally {
         inflightRef.current = null;
@@ -79,7 +93,7 @@ export default function AuthProvider({ children }) {
       setToken(token);
       return await refreshMe();
     },
-    [refreshMe],
+    [refreshMe]
   );
 
   // 인터셉터는 최초 1회만
@@ -109,9 +123,6 @@ export default function AuthProvider({ children }) {
           }
         }
       } catch {
-        // 여기서 무조건 logout 하면, 일시적 네트워크에도 튕겨서
-        // 인증 에러(401/403)는 refreshMe에서 처리하도록 했고
-        // 그 외는 부팅만 완료시키고 user는 null 유지
         await logout();
       } finally {
         setBooting(false);
@@ -120,10 +131,7 @@ export default function AuthProvider({ children }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /**
-   * ✅ 웹페이지에서 프로필 수정 후,
-   * 매니저 창으로 돌아오는 순간에 즉시 동기화
-   */
+  // ✅ 포커스/탭 복귀 시 me 동기화
   useEffect(() => {
     if (booting) return;
     if (!user) return;
@@ -142,10 +150,7 @@ export default function AuthProvider({ children }) {
     };
   }, [booting, user, refreshMe]);
 
-  /**
-   * (옵션) 주기적 동기화가 필요하면 DEFAULT_POLL_MS를 15000 등으로 변경
-   * - 프로필 변경이 자주 발생하거나, 포커스 이벤트가 안 잡히는 환경 대비
-   */
+  // (옵션) 주기적 동기화
   useEffect(() => {
     if (booting) return;
     if (!user) return;
@@ -167,11 +172,9 @@ export default function AuthProvider({ children }) {
       loginWithCredentials,
       refreshMe,
       logout,
-
-      // 이미지 캐시 bust 등에 쓰기 좋음
       profileBump,
     }),
-    [user, booting, loginWithCredentials, refreshMe, logout, profileBump],
+    [user, booting, loginWithCredentials, refreshMe, logout, profileBump]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
