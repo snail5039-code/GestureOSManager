@@ -1044,8 +1044,8 @@ export default function TrainingLab({ theme = "dark" }) {
 
   return (
     <div className="p-6 space-y-6 relative">
-      {/* ✅ Toast */}
-      <div className="toast toast-top toast-end z-50">
+      {/* ✅ Toast (AgentHUD(z-[9998])에 가려지지 않게 z-index↑ + 살짝 아래로) */}
+      <div className="toast toast-top toast-end z-[10050] mt-16">
         {info ? (
           <div className="flex items-start gap-3 rounded-2xl px-4 py-3 shadow-xl backdrop-blur-md bg-base-100/80 ring-1 ring-emerald-400/20">
             <svg className="h-5 w-5 mt-0.5 shrink-0 text-emerald-400" viewBox="0 0 24 24" fill="none">
