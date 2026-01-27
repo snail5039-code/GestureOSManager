@@ -215,6 +215,21 @@ def _action_keyboard(st: dict, locked: bool) -> str:
     g = str(st.get("gesture", "NONE") or "NONE").upper()
     og = str(st.get("otherGesture", "NONE") or "NONE").upper()
 
+    # KEYBOARD 안에서 마우스 게이트(두 손 조합)로 커서/클릭을 쓰는 경우,
+    # 말풍선은 방향키 레이어가 아니라 마우스 액션을 우선 표시한다.
+    if bool(st.get("kbMouseGate", False)):
+        if bool(st.get("scrollActive", False)):
+            return "스크롤"
+        if g == "OPEN_PALM":
+            return "이동"
+        if g == "PINCH_INDEX":
+            return "클릭/드래그"
+        if g == "V_SIGN":
+            return "우클릭"
+        if g == "FIST":
+            return "잠금(홀드)"
+        return "대기"
+
     kb_base = st.get("kbBase") if isinstance(st.get("kbBase"), dict) else None
     kb_fn = st.get("kbFn") if isinstance(st.get("kbFn"), dict) else None
     fn_hold = _pick_first_str(st, ["kbFnHold"]) or "PINCH_INDEX"
