@@ -1170,19 +1170,42 @@ class HandsAgent:
 
             res = self.hands.process(rgb)
 
+            # NOTE: frame is mirrored (cv2.flip(frame, 1)). MediaPipe handedness labels
+            # must be swapped to match the user's physical left/right.
+            MIRROR_MODE = False
+
+            # hands_list keeps the legacy shape: [(label, lm), ...] for downstream modules
             hands_list: List[Tuple[Optional[str], Any]] = []
+            # hands_meta: richer info for reliable main/aux hand selection
+            hands_meta: List[dict] = []
+
             if res.multi_hand_landmarks:
-                labels = []
+                labels: List[Optional[str]] = []
+                scores: List[float] = []
+
                 if res.multi_handedness:
                     for h in res.multi_handedness:
-                        labels.append(h.classification[0].label)
+                        cls = h.classification[0]
+                        labels.append(getattr(cls, "label", None))
+                        try:
+                            scores.append(float(getattr(cls, "score", 0.0)))
+                        except Exception:
+                            scores.append(0.0)
                 else:
                     labels = [None] * len(res.multi_hand_landmarks)
+                    scores = [0.0] * len(res.multi_hand_landmarks)
 
                 for i, lm_obj in enumerate(res.multi_hand_landmarks):
                     lm = [(p.x, p.y, p.z) for p in lm_obj.landmark]
-                    label = labels[i] if i < len(labels) else None
-                    hands_list.append((label, lm))
+                    handed = labels[i] if i < len(labels) else None
+                    score = scores[i] if i < len(scores) else 0.0
+
+                    # Swap handedness if we mirrored the frame
+                    if MIRROR_MODE and handed in ("Left", "Right"):
+                        handed = "Right" if handed == "Left" else "Left"
+
+                    hands_list.append((handed, lm))
+                    hands_meta.append({"handed": handed, "score": float(score), "lm": lm})
 
             # rush left/right packs (hands-based default)
             rush_left, rush_right = (None, None)
@@ -1196,33 +1219,52 @@ class HandsAgent:
                 except Exception as e:
                     print("[RUSH_COLOR] tracker error:", e, flush=True)
 
-            # handedness 신뢰 X: 화면 x로 분리
-            cursor_lm = None
-            other_lm = None
-            if hands_list:
-                hands_with_pos = []
-                for label, lm in hands_list:
-                    try:
-                        cx, cy = palm_center(lm)
-                    except Exception:
-                        cx, cy = (0.5, 0.5)
-                    hands_with_pos.append((cx, label, lm))
+            # ✅ Main hand policy: physical RIGHT hand is always the main/cursor hand.
+            # We prefer MediaPipe handedness (after MIRROR swap above). If handedness is missing
+            # (rare), we fall back to x-position with mirror awareness.
+            cursor_lm = None  # main (RIGHT)
+            other_lm = None   # aux  (LEFT)
 
-                hands_with_pos.sort(key=lambda x: x[0])  # left -> right
+            if hands_meta:
+                rights = [h for h in hands_meta if h.get("handed") == "Right"]
+                lefts = [h for h in hands_meta if h.get("handed") == "Left"]
 
-                if len(hands_with_pos) == 1:
-                    cursor_lm = hands_with_pos[0][2]
-                    other_lm = None
-                else:
-                    left_lm = hands_with_pos[0][2]
-                    right_lm = hands_with_pos[-1][2]
-                    if self.cursor_hand_label == "Right":
-                        cursor_lm = right_lm
-                        other_lm = left_lm
+                def _best(xs):
+                    return max(xs, key=lambda h: float(h.get("score", 0.0))) if xs else None
+
+                main_h = _best(rights)
+                aux_h = _best(lefts)
+
+                if main_h is not None:
+                    cursor_lm = main_h["lm"]
+                    if aux_h is not None:
+                        other_lm = aux_h["lm"]
                     else:
-                        cursor_lm = left_lm
-                        other_lm = right_lm
+                        # If there is another hand but it wasn't labeled LEFT, keep it as aux
+                        others = [h for h in hands_meta if h is not main_h]
+                        if others:
+                            other_lm = _best(others)["lm"]
+                else:
+                    # Strict main-hand policy: if RIGHT hand is not present, keep cursor_lm=None.
+                    # Still expose LEFT as aux so UI can show it.
+                    if aux_h is not None:
+                        other_lm = aux_h["lm"]
 
+                    # Fallback when handedness is missing/None for all hands:
+                    if (main_h is None) and (aux_h is None) and hands_list:
+                        hands_with_pos = []
+                        for label, lm in hands_list:
+                            try:
+                                cx, cy = palm_center(lm)
+                            except Exception:
+                                cx, cy = (0.5, 0.5)
+                            hands_with_pos.append((cx, lm))
+                        hands_with_pos.sort(key=lambda x: x[0])  # left -> right in mirrored frame
+
+                        # In mirrored frame, physical RIGHT hand tends to appear on the LEFT side.
+                        # Use the remaining hand as aux only (strict main policy).
+                        if len(hands_with_pos) >= 1:
+                            other_lm = hands_with_pos[-1][1]
             self.learner.tick_capture(cursor_lm=cursor_lm, other_lm=other_lm)
 
             got_cursor = (cursor_lm is not None)
