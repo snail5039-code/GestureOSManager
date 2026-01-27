@@ -127,6 +127,9 @@ export default function DebugChat({ resetKey, t, busy, preview, derived, view, a
   const scrollBoxRef = useRef(null);
   const bottomRef = useRef(null);
 
+  // ✅ 입력창 포커스 제어용 ref (전송 후 다시 입력 가능하게)
+  const inputRef = useRef(null);
+
   const pushMsg = useCallback((role, text, extra) => {
     const msg = { id: mkId(), role, ts: nowHHMM(), text: String(text ?? ""), ...(extra || {}) };
     setMessages((prev) => [...prev, msg]);
@@ -139,8 +142,14 @@ export default function DebugChat({ resetKey, t, busy, preview, derived, view, a
     setInput("");
     setSending(false);
 
-    // 리셋 직후 스크롤도 맨 아래로
+    // 리셋 직후 스크롤도 맨 아래 + 입력 포커스
     requestAnimationFrame(() => {
+      try {
+        inputRef.current?.focus();
+      } catch {
+        // ignore
+      }
+
       try {
         bottomRef.current?.scrollIntoView({ block: "end" });
       } catch {
@@ -307,6 +316,15 @@ export default function DebugChat({ resetKey, t, busy, preview, derived, view, a
       pushMsg("assistant", `오류: ${e?.message || String(e)}`);
     } finally {
       setSending(false);
+
+      // ✅ 전송 후 다시 입력할 수 있게 포커스 복구
+      requestAnimationFrame(() => {
+        try {
+          inputRef.current?.focus();
+        } catch {
+          // ignore
+        }
+      });
     }
   };
 
@@ -445,6 +463,7 @@ export default function DebugChat({ resetKey, t, busy, preview, derived, view, a
 
       <div className="grid grid-cols-[1fr_auto] gap-2">
         <input
+          ref={inputRef}
           className={cn("h-10 px-3 text-sm outline-none ring-1 rounded-xl transition disabled:opacity-50", t?.input)}
           placeholder="명령 입력… (예: 시작해줘 / 감도 1.6)"
           value={input}

@@ -467,7 +467,7 @@ class HandsAgent:
         # ✅ VKEY/KEYBOARD 강제 클릭(핀치) 엣지 감지
         self._vkey_prev_pinch = False
         self._vkey_last_click_ts = 0.0
-        self._vkey_click_cd = 0.18  # 과다 클릭 방지
+        self._vkey_click_cd = 0.28  # 과다 클릭 방지
 
         # ws
         self.ws = WSClient(
@@ -1624,11 +1624,10 @@ class HandsAgent:
                 self._vkey_prev_pinch = False
 
             # mouse actions
-            if mode_u in ("MOUSE", "VKEY", "KEYBOARD"):
+            if mode_u in ("MOUSE", "KEYBOARD"):
                 allow_click = (
                     (can_mouse_inject and (not block_by_palette))
                     or (can_mouse_inject_kb and (not block_by_palette))
-                    or (mode_u == "VKEY" and can_vkey_click and (not block_by_palette))
                 )
 
                 if self.mouse_click:
@@ -1640,7 +1639,7 @@ class HandsAgent:
                     )
 
                 # 우클릭: MOUSE, KEYBOARD(두손 조합 게이트일 때)
-                if mode_u in ("MOUSE", "KEYBOARD") and self.mouse_right:
+                if self.mouse_right:
                     can_rc = (can_mouse_inject if mode_u == "MOUSE" else can_mouse_inject_kb) and (not block_by_palette)
                     self.mouse_right.update(
                         t,
@@ -1650,10 +1649,12 @@ class HandsAgent:
                     )
 
             else:
+                # ✅ VKEY 포함: MouseClickDrag/RightClick 완전 OFF (VKEY는 _win_left_click()만 사용)
                 if self.mouse_click:
                     self.mouse_click.update(t, cursor_gesture, False, click_gesture=mouse_click_g)
                 if self.mouse_right:
                     self.mouse_right.update(t, cursor_gesture, False, gesture=mouse_right_g)
+
 
             # draw
             if mode_u == "DRAW" and self.draw:
