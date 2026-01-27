@@ -409,6 +409,14 @@ class HandsAgent:
         self._hud_bootstrap_done = False
         self._hud_bootstrap_t0 = time.time()
 
+        # ---- command timing guards ----
+        # 일부 UI/상태 동기화 타이밍에서 SET_MODE 직후 DISABLE이 연달아 오는 케이스가 있어
+        # KEYBOARD 모드 입력 파이프라인이 바로 꺼지는 문제를 디버깅/완화하기 위한 가드.
+        self._last_set_mode_ts = 0.0
+        self._disable_guard_sec = float(os.getenv("GESTUREOS_DISABLE_GUARD_SEC", "0.8"))
+        self._disable_guard = os.getenv("GESTUREOS_DISABLE_GUARD", "1").strip() in ("1", "true", "True", "YES", "yes")
+        self._kb_dbg_last_ts = 0.0
+
         # ---- OSK state ----
         self.osk_open = False
         self._osk_proc = None  # ✅ 내가 띄운 osk pid 추적(가능한 경우)
@@ -670,6 +678,20 @@ class HandsAgent:
             self.locked = False
 
         elif typ == "DISABLE":
+            # ✅ KEYBOARD 모드에서 SET_MODE 직후 들어오는 DISABLE(동기화 레이스)로
+            # 입력 파이프라인이 바로 꺼지는 케이스가 있어 가드(기본 ON).
+            if (
+                getattr(self, "_disable_guard", False)
+                and str(getattr(self, "mode", "")).upper() == "KEYBOARD"
+            ):
+                try:
+                    dt = time.time() - float(getattr(self, "_last_set_mode_ts", 0.0))
+                except Exception:
+                    dt = 999.0
+                if dt <= float(getattr(self, "_disable_guard_sec", 0.8)):
+                    print(f"[PY] IGNORE DISABLE (guard {dt:.3f}s after SET_MODE)", flush=True)
+                    return
+
             self.enabled = False
             self._reset_side_effects()
             self._osk_close()
@@ -879,6 +901,10 @@ class HandsAgent:
                     pass
 
         print("[PY] apply_set_mode ->", self.mode, flush=True)
+        try:
+            self._last_set_mode_ts = time.time()
+        except Exception:
+            self._last_set_mode_ts = 0.0
 
         if nm == "VKEY":
             self._enter_vkey_mode()
@@ -1758,6 +1784,29 @@ class HandsAgent:
                 if can_mouse_inject_kb:
                     if cursor_gesture in (mouse_move_g, mouse_click_g):  # 기본: OPEN_PALM, PINCH_INDEX
                         cursor_g_for_kb = "NONE"
+
+                # 디버그: 키보드 파이프라인 상태(왜 안 나가는지) 출력
+                if os.getenv("KEYBOARD_DEBUG", "0") in ("1", "true", "True", "YES", "yes"):
+                    try:
+                        if (t - float(getattr(self, "_kb_dbg_last_ts", 0.0))) >= 0.25:
+                            self._kb_dbg_last_ts = t
+                            print(
+                                "[KB_PIPE]",
+                                f"enabled={self.enabled}",
+                                f"mode={mode_u}",
+                                f"kb_can={kb_can}",
+                                f"kb_mouse_gate={can_mouse_inject_kb}",
+                                f"ui_locked={self.ui_locked}",
+                                f"locked={self.locked}",
+                                f"reacquire_in={max(0.0, self.reacquire_until - t):.3f}",
+                                f"got_cursor={got_cursor}",
+                                f"cursor={cursor_gesture}->{cursor_g_for_kb}",
+                                f"got_other={got_other}",
+                                f"other={other_gesture}",
+                                flush=True,
+                            )
+                    except Exception:
+                        pass
 
                 self.kb.update(
                     t,

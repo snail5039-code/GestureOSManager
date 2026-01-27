@@ -4,27 +4,105 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Optional
 
+import os
 import time
 import ctypes
 from ctypes import wintypes
 
 # -----------------------------------------------------------------------------
-# Win11 안정형 키 입력: SendInput
-# (주의) 관리자 권한 앱(UAC 상승된 창)에는 일반 권한 프로세스가 키 주입 못함.
-# 그 경우 GestureOS Agent를 "관리자 권한으로 실행"해야 함.
+# KEYBOARD MODE (Windows): robust key injection
+#
+# Why keys were "not working":
+# - SendInput was returning ERROR_INVALID_PARAMETER (87) because our ctypes INPUT
+#   struct was smaller than Windows' expected INPUT size (we defined only KEYBDINPUT
+#   in the union). Windows validates cbSize strictly.
+#
+# Fix:
+# - Define full INPUT union (MOUSEINPUT/KEYBDINPUT/HARDWAREINPUT) to match the
+#   real WinAPI struct size.
+# - Use WinDLL(use_last_error=True) + ctypes.get_last_error() for debugging.
+# - Prefer SCANCODE injection; arrows must include EXTENDED flag.
 # -----------------------------------------------------------------------------
 
-user32 = ctypes.windll.user32
+KEYBOARD_DEBUG = os.getenv("KEYBOARD_DEBUG", "0").strip() in ("1", "true", "True", "YES", "yes")
 
+def _dlog(*a):
+    if KEYBOARD_DEBUG:
+        try:
+            print("[KB]", *a, flush=True)
+        except Exception:
+            pass
+
+# Load user32 with last-error support
+user32 = ctypes.WinDLL("user32", use_last_error=True)
+
+# Types
+INPUT_MOUSE = 0
 INPUT_KEYBOARD = 1
-KEYEVENTF_KEYUP = 0x0002
+INPUT_HARDWARE = 2
 
-# ✅ 일부 Python/환경에서 wintypes.ULONG_PTR 없음
+KEYEVENTF_EXTENDEDKEY = 0x0001
+KEYEVENTF_KEYUP       = 0x0002
+KEYEVENTF_SCANCODE    = 0x0008
+
+MAPVK_VK_TO_VSC = 0
+
+# wintypes.ULONG_PTR isn't always present
 try:
     ULONG_PTR = wintypes.ULONG_PTR
 except AttributeError:
     ULONG_PTR = ctypes.c_uint64 if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_uint32
 
+# -----------------------------------------------------------------------------
+# WinAPI structs (must match Windows headers)
+# -----------------------------------------------------------------------------
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx",          wintypes.LONG),
+        ("dy",          wintypes.LONG),
+        ("mouseData",   wintypes.DWORD),
+        ("dwFlags",     wintypes.DWORD),
+        ("time",        wintypes.DWORD),
+        ("dwExtraInfo", ULONG_PTR),
+    ]
+
+class KEYBDINPUT(ctypes.Structure):
+    _fields_ = [
+        ("wVk",         wintypes.WORD),
+        ("wScan",       wintypes.WORD),
+        ("dwFlags",     wintypes.DWORD),
+        ("time",        wintypes.DWORD),
+        ("dwExtraInfo", ULONG_PTR),
+    ]
+
+class HARDWAREINPUT(ctypes.Structure):
+    _fields_ = [
+        ("uMsg",    wintypes.DWORD),
+        ("wParamL", wintypes.WORD),
+        ("wParamH", wintypes.WORD),
+    ]
+
+class INPUT_UNION(ctypes.Union):
+    _fields_ = [
+        ("mi", MOUSEINPUT),
+        ("ki", KEYBDINPUT),
+        ("hi", HARDWAREINPUT),
+    ]
+
+class INPUT(ctypes.Structure):
+    _fields_ = [
+        ("type", wintypes.DWORD),
+        ("u",    INPUT_UNION),
+    ]
+
+LPINPUT = ctypes.POINTER(INPUT)
+
+# Functions
+user32.SendInput.argtypes = (wintypes.UINT, LPINPUT, ctypes.c_int)
+user32.SendInput.restype  = wintypes.UINT
+
+user32.MapVirtualKeyW.argtypes = (wintypes.UINT, wintypes.UINT)
+user32.MapVirtualKeyW.restype  = wintypes.UINT
 
 # Virtual-Key Codes
 VK = {
@@ -38,31 +116,49 @@ VK = {
     "esc": 0x1B,
 }
 
-
-class KEYBDINPUT(ctypes.Structure):
-    _fields_ = [
-        ("wVk", wintypes.WORD),
-        ("wScan", wintypes.WORD),
-        ("dwFlags", wintypes.DWORD),
-        ("time", wintypes.DWORD),
-        ("dwExtraInfo", ULONG_PTR),
-    ]
-
-
-class INPUT_UNION(ctypes.Union):
-    _fields_ = [("ki", KEYBDINPUT)]
-
-
-class INPUT(ctypes.Structure):
-    _fields_ = [("type", wintypes.DWORD), ("u", INPUT_UNION)]
-
+def _send_inputs(inputs) -> int:
+    """Call SendInput and return sent count."""
+    sent = int(user32.SendInput(len(inputs), inputs, ctypes.sizeof(INPUT)))
+    if sent != len(inputs):
+        err = ctypes.get_last_error()
+        _dlog(f"SendInput partial/failed sent={sent} need={len(inputs)} last_error={err}")
+    return sent
 
 def _send_vk(vk_code: int):
-    inp_down = INPUT(type=INPUT_KEYBOARD, u=INPUT_UNION(ki=KEYBDINPUT(vk_code, 0, 0, 0, 0)))
-    inp_up = INPUT(type=INPUT_KEYBOARD, u=INPUT_UNION(ki=KEYBDINPUT(vk_code, 0, KEYEVENTF_KEYUP, 0, 0)))
-    arr = (INPUT * 2)(inp_down, inp_up)
-    user32.SendInput(2, ctypes.byref(arr), ctypes.sizeof(INPUT))
+    """Send a key press using a scancode-first strategy (more reliable on Win11)."""
+    vk_code = int(vk_code)
 
+    # Extended keys that often need KEYEVENTF_EXTENDEDKEY
+    is_extended = vk_code in (0x25, 0x26, 0x27, 0x28)  # LEFT/UP/RIGHT/DOWN
+
+    # 1) Preferred: scancode injection
+    scan = int(user32.MapVirtualKeyW(vk_code, MAPVK_VK_TO_VSC)) & 0xFFFF
+    if scan:
+        flags_down = KEYEVENTF_SCANCODE | (KEYEVENTF_EXTENDEDKEY if is_extended else 0)
+        flags_up   = flags_down | KEYEVENTF_KEYUP
+
+        inp_down = INPUT(type=INPUT_KEYBOARD)
+        inp_down.u.ki = KEYBDINPUT(0, scan, flags_down, 0, 0)
+
+        inp_up = INPUT(type=INPUT_KEYBOARD)
+        inp_up.u.ki = KEYBDINPUT(0, scan, flags_up, 0, 0)
+
+        arr = (INPUT * 2)(inp_down, inp_up)
+        _send_inputs(arr)
+        return
+
+    # 2) Fallback: wVk injection
+    flags_down = (KEYEVENTF_EXTENDEDKEY if is_extended else 0)
+    flags_up   = flags_down | KEYEVENTF_KEYUP
+
+    inp_down = INPUT(type=INPUT_KEYBOARD)
+    inp_down.u.ki = KEYBDINPUT(vk_code, 0, flags_down, 0, 0)
+
+    inp_up = INPUT(type=INPUT_KEYBOARD)
+    inp_up.u.ki = KEYBDINPUT(vk_code, 0, flags_up, 0, 0)
+
+    arr = (INPUT * 2)(inp_down, inp_up)
+    _send_inputs(arr)
 
 def _pick_token(gesture: str, mapping: Dict[str, str], order: list[str]) -> Optional[str]:
     g = str(gesture or "").upper()
@@ -70,7 +166,6 @@ def _pick_token(gesture: str, mapping: Dict[str, str], order: list[str]) -> Opti
         if g == str(mapping.get(tok, "")).upper():
             return tok
     return None
-
 
 DEFAULT_BASE: Dict[str, str] = {
     "LEFT": "FIST",
@@ -87,7 +182,6 @@ DEFAULT_FN: Dict[str, str] = {
 }
 
 DEFAULT_FN_HOLD = "PINCH_INDEX"
-
 
 @dataclass
 class KeyboardHandler:
@@ -175,14 +269,11 @@ class KeyboardHandler:
         vk = VK.get(k)
         if vk is None:
             return
+        _dlog(f"press {token} vk={hex(vk)} extended={vk in (0x25,0x26,0x27,0x28)}")
         try:
             _send_vk(int(vk))
-        except Exception:
-            try:
-                time.sleep(0.001)
-                _send_vk(int(vk))
-            except Exception:
-                pass
+        except Exception as e:
+            _dlog("send_vk exception:", repr(e))
 
     def update(
         self,
@@ -259,6 +350,7 @@ class KeyboardHandler:
 
         if token in repeat_tokens:
             if not self.pressed_once:
+                _dlog("fired token=", token, "cursor=", cursor_gesture, "other=", other_gesture, "mod=", mod_active)
                 self._press_token(token)
                 self.last_fire_map[token] = t
                 self.pressed_once = True
@@ -269,6 +361,7 @@ class KeyboardHandler:
             if (t - self.repeat_start_ts) < self.repeat_start_sec:
                 return
             if t >= self.last_repeat_ts + self.repeat_sec:
+                _dlog("repeat token=", token)
                 self._press_token(token)
                 self.last_fire_map[token] = t
                 self.last_repeat_ts = t
@@ -277,6 +370,7 @@ class KeyboardHandler:
         if token in one_shot_tokens:
             if not self.armed:
                 return
+            _dlog("fired token=", token, "cursor=", cursor_gesture, "other=", other_gesture, "mod=", mod_active)
             self._press_token(token)
             self.last_fire_map[token] = t
             self.armed = False
