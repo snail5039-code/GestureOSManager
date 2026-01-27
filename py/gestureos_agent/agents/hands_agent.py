@@ -1594,6 +1594,13 @@ class HandsAgent:
                 and kb_mouse_gate
             )
 
+            # HUD/상태 표시용(말풍선에서 KEYBOARD 내 마우스 게이트 구분)
+            try:
+                self._kb_mouse_gate = bool(can_mouse_inject_kb)
+                self._kb_mouse_mod_g = str(kb_mouse_mod_g)
+            except Exception:
+                pass
+
 
             can_ppt_inject = (
                 self.enabled
@@ -1977,6 +1984,10 @@ class HandsAgent:
                 payload["kbFn"] = dict(fn)
                 if fn_hold:
                     payload["kbFnHold"] = str(fn_hold)
+
+                # KEYBOARD 모드에서 마우스 게이트가 켜졌는지(말풍선 표시용)
+                payload["kbMouseGate"] = bool(getattr(self, "_kb_mouse_gate", False))
+                payload["kbMouseMod"] = str(getattr(self, "_kb_mouse_mod_g", ""))
             except Exception:
                 pass
 
