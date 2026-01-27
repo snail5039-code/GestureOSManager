@@ -1584,6 +1584,10 @@ class HandsAgent:
             kb_mouse_mod_g = get_binding(self.settings, "KEYBOARD", "MOUSE_MOD", default="FIST")
             kb_mouse_gate = bool(got_other and (other_gesture == kb_mouse_mod_g))
 
+            # HUD/status에 게이트 상태도 노출(설정 바꿔도 말풍선/패널이 따라오게)
+            self._kb_mouse_gate = bool(kb_mouse_gate)
+            self._kb_mouse_mod_g = str(kb_mouse_mod_g)
+
             # ✅ KEYBOARD에서 '두손 조합'일 때만 마우스 커서/클릭 허용
             can_mouse_inject_kb = (
                 self.enabled
@@ -1974,6 +1978,7 @@ class HandsAgent:
             "gain": float(getattr(self.control, "gain", 1.0)),
         }
 
+        # --- mode-specific extra fields ---
         if mode_u == "KEYBOARD":
             try:
                 kb_bind = ((self.settings.get("bindings") or {}).get("KEYBOARD") or {})
@@ -1985,12 +1990,35 @@ class HandsAgent:
                 if fn_hold:
                     payload["kbFnHold"] = str(fn_hold)
 
-                # KEYBOARD 모드에서 마우스 게이트가 켜졌는지(말풍선 표시용)
+                # KEYBOARD에서 마우스 게이트(두손 조합) 상태
                 payload["kbMouseGate"] = bool(getattr(self, "_kb_mouse_gate", False))
                 payload["kbMouseMod"] = str(getattr(self, "_kb_mouse_mod_g", ""))
             except Exception:
                 pass
 
+        if mode_u == "MOUSE":
+            try:
+                m_bind = ((self.settings.get("bindings") or {}).get("MOUSE") or {})
+                if isinstance(m_bind, dict):
+                    payload["mouseBindings"] = dict(m_bind)
+            except Exception:
+                pass
+
+        if mode_u == "PRESENTATION":
+            try:
+                ppt_bind = ((self.settings.get("bindings") or {}).get("PRESENTATION") or {})
+                if isinstance(ppt_bind, dict):
+                    nav = ppt_bind.get("NAV") if isinstance(ppt_bind.get("NAV"), dict) else {}
+                    inter = ppt_bind.get("INTERACT") if isinstance(ppt_bind.get("INTERACT"), dict) else {}
+                    hold = ppt_bind.get("INTERACT_HOLD")
+                    payload["pptNav"] = dict(nav)
+                    payload["pptInteract"] = dict(inter)
+                    if hold:
+                        payload["pptInteractHold"] = str(hold)
+            except Exception:
+                pass
+
+        # --- common HUD/UI fields (모드와 무관하게 항상 나가야 함) ---
         if getattr(self, "cursor_bubble", None):
             payload["cursorBubble"] = str(self.cursor_bubble)
 
@@ -2039,6 +2067,7 @@ class HandsAgent:
 
         payload["tracking"] = bool(payload.get("isTracking", False))
 
+        # --- send WS + HUD ---
         self.ws.send_dict(payload)
 
         hud = getattr(self.cfg, "hud", None)
@@ -2048,10 +2077,11 @@ class HandsAgent:
             hud_payload["tracking"] = bool(payload.get("isTracking", False))
             hud.push(hud_payload)
 
-        # ✅ 첫 push 이후 0.3초 지나면 1회만: HUD/Tip/Handle topmost+재배치 강제
-        if (not self._hud_bootstrap_done) and (time.time() - self._hud_bootstrap_t0 >= 0.3):
-            self._hud_bootstrap_done = True
-            try:
-                hud.force_refresh()
-            except Exception:
-                pass
+            # 첫 push 이후 1회 강제 refresh
+            if (not self._hud_bootstrap_done) and (time.time() - self._hud_bootstrap_t0 >= 0.3):
+                self._hud_bootstrap_done = True
+                try:
+                    hud.force_refresh()
+                except Exception:
+                    pass
+

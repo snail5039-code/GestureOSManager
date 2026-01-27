@@ -143,23 +143,45 @@ def _common_state_label(st: dict, locked: bool):
     return None
 
 
-def _action_mouse(st: dict, locked: bool) -> str:
-    common = _common_state_label(st, locked)
-    if common:
-        return common
-    if bool(st.get("scrollActive", False)):
-        return "스크롤"
-    g = str(st.get("gesture", "NONE") or "NONE").upper()
-    if g == "OPEN_PALM":
-        return "이동"
-    if g == "PINCH_INDEX":
-        return "클릭/드래그"
-    if g == "V_SIGN":
-        return "우클릭"
-    if g == "FIST":
-        return "잠금(홀드)"
-    return "대기"
 
+def _action_mouse(st: dict, locked: bool) -> str:
+    # ✅ 상태/바인딩 기반으로 "현재 동작"을 표시 (설정 변경 즉시 반영)
+    if not st.get("enabled", False):
+        return "OFF"
+
+    if locked:
+        return "잠금"
+
+    g = str(st.get("gesture", "NONE") or "NONE").upper()
+    scroll_active = bool(st.get("scrollActive", False))
+
+    m = st.get("mouseBindings") or {}
+    if not isinstance(m, dict):
+        m = {}
+
+    move_g = str(m.get("MOVE", "OPEN_PALM") or "OPEN_PALM").upper()
+    click_g = str(m.get("CLICK_DRAG", "PINCH_INDEX") or "PINCH_INDEX").upper()
+    rc_g = str(m.get("RIGHT_CLICK", "V_SIGN") or "V_SIGN").upper()
+    lock_g = str(m.get("LOCK_TOGGLE", "FIST") or "FIST").upper()
+    scroll_hold_g = str(m.get("SCROLL_HOLD", "FIST") or "FIST").upper()
+
+    # 우선순위: 스크롤(활성) > 잠금 토글 제스처 > 클릭/우클릭 > 이동
+    if scroll_active or (g == scroll_hold_g):
+        return "스크롤"
+
+    if g == lock_g:
+        return "잠금 토글"
+
+    if g == click_g:
+        return "클릭/드래그"
+
+    if g == rc_g:
+        return "우클릭"
+
+    if g == move_g:
+        return "이동"
+
+    return "대기"
 
 def _action_draw(st: dict, locked: bool) -> str:
     common = _common_state_label(st, locked)
@@ -180,133 +202,92 @@ def _action_draw(st: dict, locked: bool) -> str:
     return "대기"
 
 
+
 def _action_presentation(st: dict, locked: bool) -> str:
-    common = _common_state_label(st, locked)
-    if common:
-        return common
-    act = _pick_first_str(st, ["pptAction", "presentationAction", "slideAction", "action"])
-    if act:
-        return act
+    if not st.get("enabled", False):
+        return "OFF"
+
+    if locked:
+        return "잠금"
+
     g = str(st.get("gesture", "NONE") or "NONE").upper()
-    if g == "V_SIGN":
-        return "이전"
-    if g == "FIST":
+
+    # ✅ hands_agent STATUS의 바인딩(pptNav/pptInteract)을 우선 사용 (설정 변경 즉시 반영)
+    nav = st.get("pptNav") or {}
+    inter = st.get("pptInteract") or {}
+    if not isinstance(nav, dict):
+        nav = {}
+    if not isinstance(inter, dict):
+        inter = {}
+
+    def _match(action_key: str, default_g: str = "") -> bool:
+        want = nav.get(action_key)
+        if want is None:
+            want = inter.get(action_key)
+        if want is None and default_g:
+            want = default_g
+        want = str(want or "").upper()
+        return bool(want) and (g == want)
+
+    if _match("NEXT"):
         return "다음"
-    if g == "PINCH_INDEX":
-        return "클릭"
+    if _match("PREV"):
+        return "이전"
+    if _match("ACTIVATE") or _match("CLICK") or _match("ENTER"):
+        return "활성/클릭"
+    if _match("TAB"):
+        return "TAB"
+    if _match("SHIFT_TAB"):
+        return "SHIFT+TAB"
+    if _match("PLAY_PAUSE"):
+        return "재생/일시정지"
+
+    # fallback (기존 하드코딩)
     if g == "OPEN_PALM":
         return "포인터"
+    if g == "PINCH_INDEX":
+        return "활성/클릭"
+    if g == "FIST":
+        return "다음"
+    if g == "V_SIGN":
+        return "이전"
+
     return "대기"
 
 
 def _action_keyboard(st: dict, locked: bool) -> str:
-    """KEYBOARD 모드 말풍선(액션 표시).
-
-    - 기본 레이어:  ←/→/↑/↓
-    - FN 레이어(보조손 FN_HOLD):  ⌫/␠/⏎/ESC
-
-    bindings는 HandsAgent가 STATUS에 kbBase/kbFn/kbFnHold 를 실어주면 그대로 따르고,
-    없으면 기본값(DEFAULT_SETTINGS)을 가정한다.
-    """
-    common = _common_state_label(st, locked)
-    if common:
-        return common
+    if not st.get("enabled", False):
+        return "OFF"
+    if locked:
+        return "잠금"
 
     g = str(st.get("gesture", "NONE") or "NONE").upper()
     og = str(st.get("otherGesture", "NONE") or "NONE").upper()
 
-    # KEYBOARD 안에서 마우스 게이트(두 손 조합)로 커서/클릭을 쓰는 경우,
-    # 말풍선은 방향키 레이어가 아니라 마우스 액션을 우선 표시한다.
+    # 두손 조합(MOUSE_MOD)으로 마우스 게이트가 켜져 있으면 그걸 우선 표기
     if bool(st.get("kbMouseGate", False)):
-        if bool(st.get("scrollActive", False)):
-            return "스크롤"
-        if g == "OPEN_PALM":
-            return "이동"
-        if g == "PINCH_INDEX":
-            return "클릭/드래그"
-        if g == "V_SIGN":
-            return "우클릭"
-        if g == "FIST":
-            return "잠금(홀드)"
-        return "대기"
+        mod_g = str(st.get("kbMouseMod", "") or "").upper()
+        return f"마우스 게이트({mod_g})" if mod_g else "마우스 게이트"
 
-    kb_base = st.get("kbBase") if isinstance(st.get("kbBase"), dict) else None
-    kb_fn = st.get("kbFn") if isinstance(st.get("kbFn"), dict) else None
-    fn_hold = _pick_first_str(st, ["kbFnHold"]) or "PINCH_INDEX"
-    fn_hold = str(fn_hold).upper()
+    base = st.get("kbBase") or {}
+    fn = st.get("kbFn") or {}
+    if not isinstance(base, dict):
+        base = {}
+    if not isinstance(fn, dict):
+        fn = {}
 
-    if kb_base is None:
-        kb_base = {
-            "LEFT": "FIST",
-            "RIGHT": "V_SIGN",
-            "UP": "PINCH_INDEX",
-            "DOWN": "OPEN_PALM",
-        }
-    if kb_fn is None:
-        kb_fn = {
-            "BACKSPACE": "FIST",
-            "SPACE": "OPEN_PALM",
-            "ENTER": "PINCH_INDEX",
-            "ESC": "V_SIGN",
-        }
+    fn_hold = str(st.get("kbFnHold", "") or "").upper()
+    fn_active = bool(fn_hold) and (og == fn_hold)
 
-    def pick_token(gesture: str, mapping: dict, order: list[str]):
-        for tok in order:
-            try:
-                if gesture == str(mapping.get(tok, "")).upper():
-                    return tok
-            except Exception:
-                continue
-        return None
+    mapping = fn if fn_active else base
 
-    ICON = {
-        "LEFT": "LEFT",
-        "RIGHT": "RIGHT",
-        "UP": "UP",
-        "DOWN": "DOWN",
-        "BACKSPACE": "BACKSPACE",
-        "SPACE": "SPACE",
-        "ENTER": "ENTER",
-        "ESC": "ESC",
-    }
+    # reverse lookup: 현재 커서 제스처가 어떤 키 액션으로 매핑됐는지
+    for key, gest in mapping.items():
+        if str(gest or "").upper() == g:
+            # key는 LEFT/RIGHT/UP/DOWN/ENTER/SPACE... 등
+            return f"{'FN:' if fn_active else ''}{str(key)}"
 
-    mod_active = (og == fn_hold)
-
-    if mod_active:
-        tok = pick_token(g, kb_fn, ["BACKSPACE", "SPACE", "ENTER", "ESC"])
-        if tok:
-            return f"FN • {ICON.get(tok, tok)}"
-        return "FN"
-
-    tok = pick_token(g, kb_base, ["LEFT", "RIGHT", "UP", "DOWN"])
-    if tok:
-        return str(ICON.get(tok, tok))
-
-    def sg(v: str) -> str:
-        s = str(v or "").upper()
-        return {
-            "FIST": "FIST",
-            "V_SIGN": "V",
-            "PINCH_INDEX": "PINCH",
-            "OPEN_PALM": "PALM",
-            "NONE": "-",
-            "": "-",
-        }.get(s, s or "-")
-
-    legend = (
-        f"←={sg(kb_base.get('LEFT'))} →={sg(kb_base.get('RIGHT'))} "
-        f"↑={sg(kb_base.get('UP'))} ↓={sg(kb_base.get('DOWN'))}"
-    )
-    legend_fn = (
-        f"FN(보조손 {sg(fn_hold)}): "
-        f"⌫={sg(kb_fn.get('BACKSPACE'))} ␠={sg(kb_fn.get('SPACE'))} "
-        f"⏎={sg(kb_fn.get('ENTER'))} ESC={sg(kb_fn.get('ESC'))}"
-    )
-
-    if HUD_DEBUG:
-        return f"{legend} / {legend_fn}"
     return "대기"
-
 
 def _action_vkey(st: dict, locked: bool) -> str:
     common = _common_state_label(st, locked)
