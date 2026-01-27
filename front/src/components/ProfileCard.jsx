@@ -53,19 +53,26 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
   }, []);
 
   // ===== profile switch (same as your logic)
-  const memberIdRaw = user?.id ?? user?.memberId ?? user?.member_id ?? user?.email ?? null;
+  // ✅ X-User-Id는 서버에서 Long으로 파싱됨 → 숫자만 허용
+  const memberId = useMemo(() => {
+    const raw = user?.id ?? user?.memberId ?? user?.member_id ?? null;
+    if (raw === null || raw === undefined) return null;
+    const s = String(raw).trim();
+    if (!/^\d+$/.test(s)) return null;
+    return s;
+  }, [user]);
 
   const memberKey = useMemo(() => {
-    const raw = memberIdRaw ? String(memberIdRaw) : "guest";
+    const raw = memberId ? String(memberId) : "guest";
     return raw.replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase();
-  }, [memberIdRaw]);
+  }, [memberId]);
 
-  const isGuest = !isAuthed || !memberIdRaw;
+  const isGuest = !isAuthed || !memberId;
 
   const userHeaders = useMemo(() => {
     if (isGuest) return {};
-    return { "X-User-Id": String(memberIdRaw) };
-  }, [isGuest, memberIdRaw]);
+    return { "X-User-Id": memberId };
+  }, [isGuest, memberId]);
 
   const NS = useMemo(() => (isGuest ? "" : `u${memberKey}__`), [isGuest, memberKey]);
 

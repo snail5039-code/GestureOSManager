@@ -35,28 +35,50 @@ public class TrainingController {
     this.files = files;
   }
 
+  // NOTE: 프론트가 X-User-Id를 숫자 대신 email 등으로 보내면
+  // Spring이 Long 변환 단계에서 400을 내버린다.
+  // 여기서는 String으로 받은 뒤 직접 파싱해서, 파싱 실패 시 게스트로 처리한다.
+  private Long parseMemberId(String raw) {
+    if (raw == null) return null;
+    String s = raw.trim();
+    if (s.isEmpty()) return null;
+    // digits only
+    for (int i = 0; i < s.length(); i++) {
+      char c = s.charAt(i);
+      if (c < '0' || c > '9') return null;
+    }
+    try {
+      return Long.parseLong(s);
+    } catch (Exception e) {
+      return null;
+    }
+  }
+
   private boolean isGuest(Long memberId) {
     return memberId == null;
   }
 
   @GetMapping("/profile/db/list")
-  public ResponseEntity<?> dbProfiles(@RequestHeader(value = "X-User-Id", required = false) Long memberId) {
+  public ResponseEntity<?> dbProfiles(@RequestHeader(value = "X-User-Id", required = false) String memberIdRaw) {
+    Long memberId = parseMemberId(memberIdRaw);
     return ResponseEntity.ok(Map.of("ok", true, "profiles", profileDb.list(memberId)));
   }
 
   @PostMapping("/capture")
-  public ResponseEntity<?> capture(@RequestHeader(value = "X-User-Id", required = false) Long memberId,
+  public ResponseEntity<?> capture(@RequestHeader(value = "X-User-Id", required = false) String memberIdRaw,
                                    @RequestParam String hand,
                                    @RequestParam String label,
                                    @RequestParam(defaultValue = "2") double seconds,
                                    @RequestParam(defaultValue = "15") int hz) {
+    Long memberId = parseMemberId(memberIdRaw);
     // 게스트도 가능(현재 프로필에서 캡처)
     boolean ok = controlService.trainCapture(hand, label, seconds, hz);
     return ResponseEntity.ok(Map.of("ok", ok));
   }
 
   @PostMapping("/train")
-  public ResponseEntity<?> train(@RequestHeader(value = "X-User-Id", required = false) Long memberId) {
+  public ResponseEntity<?> train(@RequestHeader(value = "X-User-Id", required = false) String memberIdRaw) {
+    Long memberId = parseMemberId(memberIdRaw);
     double before = statusService.getSnapshot().getLearnLastTrainTs() == null ? 0.0
         : statusService.getSnapshot().getLearnLastTrainTs();
 
@@ -86,8 +108,9 @@ public class TrainingController {
   }
 
   @PostMapping("/enable")
-  public ResponseEntity<?> enable(@RequestHeader(value = "X-User-Id", required = false) Long memberId,
+  public ResponseEntity<?> enable(@RequestHeader(value = "X-User-Id", required = false) String memberIdRaw,
                                   @RequestParam boolean enabled) {
+    Long memberId = parseMemberId(memberIdRaw);
     boolean ok = controlService.trainEnable(enabled);
 
     // enable/save는 즉시 반영되므로 바로 push 시도
@@ -101,7 +124,8 @@ public class TrainingController {
   }
 
   @PostMapping("/reset")
-  public ResponseEntity<?> reset(@RequestHeader(value = "X-User-Id", required = false) Long memberId) {
+  public ResponseEntity<?> reset(@RequestHeader(value = "X-User-Id", required = false) String memberIdRaw) {
+    Long memberId = parseMemberId(memberIdRaw);
     boolean ok = controlService.trainReset();
 
     boolean synced = false;
@@ -121,8 +145,9 @@ public class TrainingController {
   }
 
   @PostMapping("/profile/set")
-  public ResponseEntity<?> setProfile(@RequestHeader(value = "X-User-Id", required = false) Long memberId,
+  public ResponseEntity<?> setProfile(@RequestHeader(value = "X-User-Id", required = false) String memberIdRaw,
                                       @RequestParam String name) {
+    Long memberId = parseMemberId(memberIdRaw);
     // ✅ 로그인 안 하면 default만
     String target = isGuest(memberId) ? "default" : files.sanitizeProfile(name);
 
@@ -140,9 +165,10 @@ public class TrainingController {
   }
 
   @PostMapping("/profile/create")
-  public ResponseEntity<?> createProfile(@RequestHeader(value = "X-User-Id", required = false) Long memberId,
+  public ResponseEntity<?> createProfile(@RequestHeader(value = "X-User-Id", required = false) String memberIdRaw,
                                         @RequestParam String name,
                                         @RequestParam(defaultValue = "true") boolean copy) {
+    Long memberId = parseMemberId(memberIdRaw);
     if (isGuest(memberId)) {
       return ResponseEntity.ok(Map.of("ok", false, "reason", "LOGIN_REQUIRED"));
     }
@@ -156,8 +182,9 @@ public class TrainingController {
   }
 
   @PostMapping("/profile/delete")
-  public ResponseEntity<?> deleteProfile(@RequestHeader(value = "X-User-Id", required = false) Long memberId,
+  public ResponseEntity<?> deleteProfile(@RequestHeader(value = "X-User-Id", required = false) String memberIdRaw,
                                         @RequestParam String name) {
+    Long memberId = parseMemberId(memberIdRaw);
     if (isGuest(memberId)) {
       return ResponseEntity.ok(Map.of("ok", false, "reason", "LOGIN_REQUIRED"));
     }
@@ -168,9 +195,10 @@ public class TrainingController {
   }
 
   @PostMapping("/profile/rename")
-  public ResponseEntity<?> renameProfile(@RequestHeader(value = "X-User-Id", required = false) Long memberId,
+  public ResponseEntity<?> renameProfile(@RequestHeader(value = "X-User-Id", required = false) String memberIdRaw,
                                         @RequestParam String from,
                                         @RequestParam String to) {
+    Long memberId = parseMemberId(memberIdRaw);
     if (isGuest(memberId)) {
       return ResponseEntity.ok(Map.of("ok", false, "reason", "LOGIN_REQUIRED"));
     }
@@ -187,7 +215,8 @@ public class TrainingController {
   }
 
   @PostMapping("/rollback")
-  public ResponseEntity<?> rollback(@RequestHeader(value = "X-User-Id", required = false) Long memberId) {
+  public ResponseEntity<?> rollback(@RequestHeader(value = "X-User-Id", required = false) String memberIdRaw) {
+    Long memberId = parseMemberId(memberIdRaw);
     boolean ok = controlService.trainRollback();
 
     boolean synced = false;

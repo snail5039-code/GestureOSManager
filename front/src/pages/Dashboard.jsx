@@ -415,16 +415,20 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
     };
   }, []);
 
-  const memberIdRaw = useMemo(
-    () => user?.id ?? user?.memberId ?? user?.member_id ?? user?.email ?? null,
-    [user],
-  );
+  // ✅ X-User-Id는 서버에서 Long으로 파싱됨 → 숫자만 허용
+  const memberId = useMemo(() => {
+    const raw = user?.id ?? user?.memberId ?? user?.member_id ?? null;
+    if (raw === null || raw === undefined) return null;
+    const s = String(raw).trim();
+    if (!/^\d+$/.test(s)) return null;
+    return s;
+  }, [user]);
   const autoProfileDoneRef = useRef(false);
 
   useEffect(() => {
     const connected = !!status?.connected;
     if (!connected) return;
-    if (!isAuthed || !memberIdRaw) return;
+    if (!isAuthed || !memberId) return;
     if (autoProfileDoneRef.current) return;
 
     const cur = String(status?.learnProfile || "default").toLowerCase();
@@ -434,12 +438,12 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
       return;
     }
 
-    const target = `u${String(memberIdRaw)}__main`;
+    const target = `u${String(memberId)}__main`;
 
     (async () => {
       try {
         await api.post(`/train/profile/set?name=${encodeURIComponent(target)}`, null, {
-          headers: { "X-User-Id": String(memberIdRaw) },
+          headers: { "X-User-Id": String(memberId) },
         });
       } catch {
         // ignore
@@ -447,7 +451,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
         autoProfileDoneRef.current = true;
       }
     })();
-  }, [status?.connected, status?.learnProfile, isAuthed, memberIdRaw, status]);
+  }, [status?.connected, status?.learnProfile, isAuthed, memberId, status]);
 
   useEffect(() => {
     previewRef.current = preview;
