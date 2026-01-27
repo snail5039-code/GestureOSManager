@@ -74,6 +74,8 @@ def update_jab(current_x_move, current_time):
 
 chance_requested = False
 force_attack_mode = False
+chance_phase = "idle"  # "idle" | "ready" | "analyzing"
+chance_consumed = False
 prev_hand = {
     "left": {"x": 0.0, "y": 0.0, "z": 0.0, "t": 0.0, "init": False},
     "right": {"x": 0.0, "y": 0.0, "z": 0.0, "t": 0.0, "init": False},
@@ -96,33 +98,40 @@ def elbow_angle(shoulder, elbow, wrist):
 
 @socketio.on("chance")
 def handle_chance(data):
-    global chance_active, chance_requested, box_state
+    global chance_active, chance_requested, chance_phase, box_state, chance_consumed
     if force_attack_mode:
         chance_requested = True
         chance_active = True
+        chance_phase = "ready"
+        chance_consumed = False
         return
     chance_requested = bool(data.get("active"))
     chance_active = chance_requested
-    if not chance_requested:
+    if chance_requested:
+        chance_phase = "ready"
+        chance_consumed = False
+    else:
+        chance_phase = "idle"
+        chance_consumed = False
         box_state["active"] = False
         box_state["path_x"] = []
         box_state["path_y"] = []
         box_state["path_z"] = []
 
 def run_vision():
-    global box_state, chance_active, chance_requested, prev_hand, prev_shoulder, last_jab_valid_ts
+    global box_state, chance_active, chance_requested, prev_hand, prev_shoulder, last_jab_valid_ts, chance_phase, chance_consumed
     cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
     last_send_time = 0
     last_defense = "none"
     last_defense_time = 0.0
     defense_hold = 0.15
-    min_punch_time = 0.1
+    min_punch_time = 0.18
     max_punch_time = 0.45
-    speed_threshold = 0.015
-    speed_end = 0.008
+    speed_threshold = 0.008
+    speed_end = 0.004
     extended_angle = 150
     bent_angle = 120
-    z_threshold = 0.1
+    z_threshold = 0.04
     y_threshold = 0.08
     x_small = 0.04
     x_large = 0.1
@@ -200,8 +209,8 @@ def run_vision():
                 last_jab_valid_ts = now_t
 
 
-            # 공격 감지 (찬스타임일 때만)
-            if chance_requested and not is_guarding:
+            # 공격 감지 (찬스타임일 때만, 이미 소비되지 않았을 때)
+            if chance_requested and not is_guarding and not chance_consumed:
                 if not box_state["active"]:
                     # 공격 시작 조건 강화: 움직임의 명확한 의도 필요
                     # 어퍼컷 시작: 수직 상향 이동이 지배적일 때만
@@ -211,14 +220,20 @@ def run_vision():
                         and abs(dz) < z_threshold * 0.5  # 깊이 이동 최소
                         and elbow_ang < uppercut_elbow_max
                     )
-                    # 직선/훅 시작: 깊이(z) 방향 움직임이 뚜렷할 때만
+                    # 직선 시작: 깊이(z) 방향 움직임이 뚜렷할 때만
                     straight_start = (
                         dz < -z_threshold * 0.5  # 깊이 이동 필수
                         and elbow_ang > extended_angle
                     )
+                    # 훅 시작: 수평(x) 지배적, 깊이(z) 최소
+                    hook_start = (
+                        abs(dx) > x_large * 0.6  # 수평 이동 지배적
+                        and abs(dz) < z_threshold * 0.6  # 깊이 이동 최소
+                        and abs(dy) < y_threshold * 0.8  # 수직 이동 제한
+                    )
                     
-                    # 속도 2배 기준 + 명확한 방향 + 어깨 떨림이 아닌 팔 펼침/접힘
-                    if speed > speed_threshold * 2 and (uppercut_start or straight_start):
+                    # 속도 임계값을 완화하고 훅 시작 조건 포함
+                    if speed > speed_threshold and (abs(dx) > 0.01 or dz < -0.01 or dy < -0.01):
                         box_state = {
                             "active": True,
                             "hand": "left" if is_left else "right",
@@ -230,6 +245,7 @@ def run_vision():
                             "max_dx": abs(dx), "max_dy": abs(dy), "max_dz": abs(dz),
                             "min_y": curr_y,
                         }
+                        chance_phase = "analyzing"
                 elif box_state["active"]:
                     if box_state["hand"] != ("left" if is_left else "right"):
                         active_hand = lw if box_state["hand"] == "left" else rw
@@ -250,8 +266,8 @@ def run_vision():
                     box_state["min_y"] = min(box_state["min_y"], curr_y)
 
                     elapsed = now_t - box_state["start_time"]
-                    # 타임아웃 또는 감속 감지 시 즉시 판정
-                    should_judge = (elapsed >= max_punch_time) or (elapsed >= min_punch_time)
+                    # 감속 감지 또는 타임아웃 시 판정 (감속 임계값을 더 관대하게)
+                    should_judge = (elapsed >= max_punch_time) or (elapsed >= min_punch_time and speed < speed_end * 1.5)
                     
                     if should_judge:
                         dx_total = curr_x - box_state["start_x"]
@@ -267,47 +283,63 @@ def run_vision():
 
                         uppercut_i_shape = curr_y < active_elbow.y and box_state["start_y"] > active_shldr.y
                         
-                        # 최종 판정 단계: 우선순위 명확히
-                        # ① jab / straight (z 축 지배적)
-                        if (
-                            dz_total < -z_threshold
-                            and z_move >= x_move * 1.2
-                            and z_move >= y_move * 1.3
-                            and dy_total >= -y_threshold * 0.5
-                            and curr_y >= active_elbow.y - 0.02
-                        ):
-                            if x_move < x_small and elapsed < 0.22:
-                                # Apply User's Jab Optimization
-                                # Check if our optimized detector fired recently
-                                if now_t - last_jab_valid_ts < 0.5:
-                                    final_attack = "jab"
-                                else:
-                                    # Fallback or ignore if not validated by optimizations
-                                    # Assuming user wants strict filtering:
-                                    final_attack = "none" 
-                            else:
-                                final_attack = "straight"
-                        # ② hook (x 축 지배적, y 최소)
-                        elif x_move > x_large and y_move < y_threshold * 0.8 and abs(dy_total) < y_threshold * 0.4:
-                            final_attack = "hook"
-                        # ③ uppercut (y 축 지배적)
-                        elif (
-                            dy_total < -y_threshold * 0.6
-                            and y_move > y_threshold
-                            and y_move > z_move * 1.1
-                            and y_move > x_move * 1.2
-                            and x_move < x_large * 0.5
-                            and abs(dx_total) < x_large * 0.6   # ⭐ 훅 잔여 수평 제거
-                            and curr_y < active_elbow.y + 0.02
+                        # 판정 우선순위 (1순위부터 4순위까지, 오직 하나만 판정)
+                        # 1️⃣ uppercut (Y축 지배 + 아래→위 동작)
+                        uppercut_like = (
+                            dy_total < 0
+                            and y_move >= x_move * 1.5
+                            and y_move >= z_move * 1.2
+                            and x_move < x_large * 0.6
                             and elbow_ang < uppercut_elbow_max
-                        ):
+                            and curr_y < active_elbow.y + 0.02
+                        )
+                        
+                        # 2️⃣ hook (X축 지배 + Z/Y 최소) - 훅 보호막
+                        hook_like = (
+                            x_move > x_large
+                            and x_move >= y_move * 1.6
+                            and x_move >= z_move * 1.4
+                            and y_move < y_threshold * 0.7
+                            and abs(dy_total) < y_threshold * 0.4
+                        )
+                        
+                        if uppercut_like:
                             final_attack = "uppercut"
+                        elif hook_like:
+                            final_attack = "hook"
+                        # 3️⃣ straight / jab (Z축 지배, 훅·어퍼컷 아닐 때만)
+                        elif not uppercut_like and not hook_like:
+                            # 3-1️⃣ straight (Z축 지배 + X 제약)
+                            if (
+                                dz_total < -z_threshold
+                                and z_move >= x_move * 1.2
+                                and z_move >= y_move * 1.3
+                                and dy_total >= -y_threshold * 0.5
+                                and curr_y >= active_elbow.y - 0.02
+                                and x_move >= x_small
+                            ):
+                                final_attack = "straight"
+                            # 3-2️⃣ jab (Z축 짧고 빠른 직선, straight 아닐 때만)
+                            elif (
+                                dz_total < -z_threshold * 0.7
+                                and z_move >= x_move * 1.1
+                                and z_move >= y_move * 1.2
+                                and dy_total >= -y_threshold * 0.3
+                                and curr_y >= active_elbow.y - 0.02
+                                and x_move < x_small * 0.8
+                                and elapsed < 0.22
+                            ):
+                                final_attack = "jab"
 
                         box_state["active"] = False
-                        chance_active = False
+                        if final_attack != "none":
+                            chance_consumed = True
+                            chance_active = False
+                            chance_requested = False
+                            chance_phase = "idle"
 
-            # 일반 모드에서는 가드/위빙만 emit
-            if not chance_requested:
+            # 일반 모드에서는 가드/위빙만 emit (공격 판정 프레임 제외)
+            if not chance_requested and final_attack == "none":
                 is_punch_like = speed > speed_threshold and elbow_ang > extended_angle
                 if abs(head_x) > 0.18 and not is_punch_like:
                     now_t = time.time()
@@ -332,8 +364,28 @@ def run_vision():
             prev_shoulder["right"] = {"z": rs.z, "init": True}
 
         # 화면 디버깅
-        status_msg = "ANALYZING..." if box_state["active"] else "READY"
-        cv2.putText(frame, status_msg, (10, 40), 1, 1.5, (0, 255, 255), 2)
+        if chance_phase == "analyzing":
+            status_msg = "ANALYZING..."
+        elif chance_phase == "ready":
+            status_msg = "READY"
+        else:
+            status_msg = ""
+        
+        if status_msg:
+            cv2.putText(frame, status_msg, (10, 40), 1, 1.5, (0, 255, 255), 2)
+        
+        # START 디버그 표시
+        if box_state["active"]:
+            cv2.putText(frame, "START", (10, 70), 1, 1.5, (0, 255, 0), 2)
+        
+        # 찬스타임 상태 디버그 (보너스)
+        cv2.putText(
+            frame,
+            f"chance={chance_requested} active={box_state['active']} consumed={chance_consumed}",
+            (10, 120),
+            1, 1.1, (255, 0, 255), 2
+        )
+        
         if final_attack != "none":
             cv2.putText(frame, f"ACTION: {final_attack.upper()}", (10, 100), 1, 2.5, (0, 0, 255), 3)
 
@@ -350,6 +402,8 @@ def run_vision():
             cv2.putText(frame, f"elbow={elbow_ang:.1f}", (10, debug_y), 1, 1.2, (255, 255, 0), 2)
             debug_y += 22
             cv2.putText(frame, f"active={box_state['active']} t={elapsed_dbg:.2f}", (10, debug_y), 1, 1.2, (255, 255, 0), 2)
+            debug_y += 22
+            cv2.putText(frame, f"START chk spd={speed:.3f} dx={dx:.3f} dy={dy:.3f} dz={dz:.3f}", (10, debug_y), 1, 1.0, (0, 200, 255), 2)
 
         cv2.imshow("Motion Debug", frame)
         if cv2.waitKey(1) & 0xFF == 27:  # ESC
