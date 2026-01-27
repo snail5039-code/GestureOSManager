@@ -1300,7 +1300,7 @@ class HandsAgent:
                 if cursor_gesture_rule == "PINCH_INDEX":
                     cursor_gesture = "PINCH_INDEX"
                 else:
-                    if mode_u in ("DRAW", "VKEY"):
+                    if mode_u in ("DRAW", "VKEY", "KEYBOARD"):
                         cursor_gesture = cursor_gesture_rule
                     else:
                         if sm_pred is not None and str(sm_pred) != "PINCH_INDEX":
@@ -1745,21 +1745,33 @@ class HandsAgent:
                 if self.mouse_scroll:
                     self.mouse_scroll.update(t, False, 0.5, False)
 
+            # keyboard (KEYBOARD 모드에서도 키입력은 유지하되, 마우스 게이트 중 충돌 제스처는 무시)
             # keyboard
             if (not block_by_palette) and self.kb:
-                kb_can = can_kb_inject and (not can_mouse_inject_kb)
+                # ✅ 키보드 입력은 KEYBOARD 모드에서 항상 켠다
+                kb_can = can_kb_inject
+
+                # ✅ KEYBOARD에서 다른 손 FIST(MOUSE_MOD)로 마우스 게이트가 켜진 상태면
+                # OPEN_PALM/PINCH_INDEX는 "마우스 이동/클릭"로 쓰이므로
+                # 키보드 방향키(UP/DOWN)로도 같이 발사되는 걸 막는다.
+                cursor_g_for_kb = cursor_gesture
+                if can_mouse_inject_kb:
+                    if cursor_gesture in (mouse_move_g, mouse_click_g):  # 기본: OPEN_PALM, PINCH_INDEX
+                        cursor_g_for_kb = "NONE"
+
                 self.kb.update(
                     t,
                     kb_can,
                     got_cursor,
-                    cursor_gesture,
+                    cursor_g_for_kb,
                     got_other,
                     other_gesture,
                     bindings=kb_bindings,
-                )     
+                )
             else:
                 if self.kb:
                     self.kb.reset()
+
 
             self._send_status(
                 fps=fps,

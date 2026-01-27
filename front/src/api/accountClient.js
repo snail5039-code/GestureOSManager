@@ -64,3 +64,23 @@ export async function tryRefreshAccessToken() {
   const r = await refreshApi.post("/auth/token", null);
   return r?.data?.accessToken || null;
 }
+
+/* ===============================
+   Bridge (Manager -> Web SSO)
+   =============================== */
+
+// accessToken을 직접 넘기고 싶으면 인자로 전달.
+// (이미 interceptor로 Authorization이 붙는다면 인자 없이도 동작)
+export async function bridgeStart(accessToken) {
+  const headers = {};
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+  const r = await accountApi.post("/auth/bridge/start", null, { headers });
+  return r?.data;
+}
+
+// 프론트(5174)에서 /bridge?code= 로 들어가면 App.jsx가 consume 하도록 구성 권장.
+// 그래도 필요하면 이걸로 탭을 열 수 있음.
+export function openWebWithBridge({ code, webOrigin = "http://localhost:5174" } = {}) {
+  const url = `${webOrigin}/bridge?code=${encodeURIComponent(code)}`;
+  window.open(url, "_blank", "noreferrer");
+}

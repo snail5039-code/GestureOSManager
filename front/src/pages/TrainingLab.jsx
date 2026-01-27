@@ -3,10 +3,7 @@ import axios from "axios";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../auth/AuthProvider";
 
-// 너무 빠른 폴링(120ms) + 요청 abort 난사 때문에
-// 상태가 불안정하게 갱신되거나(특히 네트워크/서버가 조금만 느려도)
-// 계속 CanceledError가 나는 문제가 생길 수 있어서 완화.
-const POLL_MS = 250;
+const POLL_MS = 120;
 
 // 학습/저장(서버 트레이닝) 가능 최소 샘플 수
 const MIN_TRAIN_SAMPLES = 50;
@@ -257,21 +254,15 @@ export default function TrainingLab({ theme = "dark" }) {
   // =========================
   // ✅ Auth / session scoping
   // =========================
-  // ✅ X-User-Id는 서버에서 Long으로 파싱되므로 "숫자"만 허용
-  const memberId = useMemo(() => {
-    const raw = user?.id ?? user?.memberId ?? user?.member_id ?? null;
-    if (raw === null || raw === undefined) return null;
-    const s = String(raw).trim();
-    if (!/^\d+$/.test(s)) return null;
-    return s;
-  }, [user]);
+  const memberIdRaw =
+    user?.id ?? user?.memberId ?? user?.member_id ?? user?.email ?? null;
 
-  const isGuest = !isAuthed || !memberId;
+  const isGuest = !isAuthed || !memberIdRaw;
 
   const userHeaders = useMemo(() => {
     if (isGuest) return {};
-    return { "X-User-Id": memberId };
-  }, [isGuest, memberId]);
+    return { "X-User-Id": String(memberIdRaw) };
+  }, [isGuest, memberIdRaw]);
 
   const displayProfile = useCallback((p) => {
     const s = String(p || "");
@@ -292,8 +283,8 @@ export default function TrainingLab({ theme = "dark" }) {
   // ✅ local dataset: user-scoped
   // =========================
   const datasetKey = useMemo(
-    () => `trainingLab.dataset.v1.${isGuest ? "guest" : String(memberId).replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase()}`,
-    [isGuest, memberId]
+    () => `trainingLab.dataset.v1.${isGuest ? "guest" : String(memberIdRaw).replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase()}`,
+    [isGuest, memberIdRaw]
   );
 
   const datasetRef = useRef({
@@ -356,7 +347,6 @@ export default function TrainingLab({ theme = "dark" }) {
   }, [info, error]);
 
   const abortRef = useRef(null);
-  const inFlightRef = useRef(false);
   const pollTimerRef = useRef(null);
   const unmountedRef = useRef(false);
   const canvasRef = useRef(null);
@@ -476,9 +466,7 @@ export default function TrainingLab({ theme = "dark" }) {
   // ✅ status polling
   // =========================
   const fetchStatus = useCallback(async () => {
-    if (inFlightRef.current) return; // in-flight면 스킵
-    inFlightRef.current = true;
-
+    if (abortRef.current) abortRef.current.abort();
     const controller = new AbortController();
     abortRef.current = controller;
 
@@ -496,7 +484,6 @@ export default function TrainingLab({ theme = "dark" }) {
         : e?.message || "상태 조회 실패";
       setError(msg);
     } finally {
-      inFlightRef.current = false;
       setLoading(false);
     }
   }, [userHeaders]);
@@ -758,7 +745,7 @@ export default function TrainingLab({ theme = "dark" }) {
     try {
       const next = !learnEnabled;
       const { data } = await api.post("/train/enable", null, {
-        params: { enabled: next },
+        params: { 적용: next },
         headers: userHeaders,
       });
       setInfo(data?.ok ? (next ? "학습 적용: 켜짐" : "학습 적용: 꺼짐") : "적용 전환 실패");
@@ -1057,8 +1044,8 @@ export default function TrainingLab({ theme = "dark" }) {
 
   return (
     <div className="p-6 space-y-6 relative">
-      {/* ✅ Toast */}
-      <div className="toast toast-top toast-end z-50">
+      {/* ✅ Toast (AgentHUD(z-[9998])에 가려지지 않게 z-index↑ + 살짝 아래로) */}
+      <div className="toast toast-top toast-end z-[10050] mt-16">
         {info ? (
           <div className="flex items-start gap-3 rounded-2xl px-4 py-3 shadow-xl backdrop-blur-md bg-base-100/80 ring-1 ring-emerald-400/20">
             <svg className="h-5 w-5 mt-0.5 shrink-0 text-emerald-400" viewBox="0 0 24 24" fill="none">

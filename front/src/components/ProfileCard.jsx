@@ -52,7 +52,7 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
     window.setTimeout(() => setToast(null), 1400);
   }, []);
 
-  // ===== profile switch (same as your logic)
+  // ===== profile switch
   // ✅ X-User-Id는 서버에서 Long으로 파싱됨 → 숫자만 허용
   const memberId = useMemo(() => {
     const raw = user?.id ?? user?.memberId ?? user?.member_id ?? null;
@@ -102,7 +102,7 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
       const ps = Array.isArray(data?.learnProfiles) ? data.learnProfiles : [];
       setLearnProfile(p);
       setLearnProfiles(ps);
-      setProfileSel(p);
+      setProfileSel((cur) => (profileBusy ? cur : p));
 
       if (!isGuest) {
         try {
@@ -120,7 +120,7 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
     } finally {
       setProfileBusy(false);
     }
-  }, [isGuest, userHeaders]);
+  }, [isGuest, userHeaders, profileBusy]);
 
   useEffect(() => {
     if (!isAuthed) {
@@ -135,21 +135,27 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
     fetchProfiles();
   }, [isAuthed, fetchProfiles]);
 
+  // ✅ 수정 포인트: 내 프로필(NS) + 공용(NS 없음) 둘 다 노출
   const profileOptions = useMemo(() => {
     if (isGuest) return [{ value: "default", label: "default(기본)" }];
 
     const set = new Set(["default", learnProfile, ...(learnProfiles || []), ...(dbProfiles || [])]);
     const all = Array.from(set).filter(Boolean);
 
-    const mine = all
-      .filter((p) => p === "default" || String(p).startsWith(NS))
-      .map((p) => ({ value: p, label: displayProfile(p) }));
+    const mineRaw = all.filter((p) => p === "default" || String(p).startsWith(NS));
+    const sharedRaw = all.filter((p) => p !== "default" && !String(p).startsWith(NS));
 
-    const base = mine.filter((x) => x.value === "default");
-    const rest = mine
-      .filter((x) => x.value !== "default")
+    const mine = mineRaw
+      .map((p) => ({ value: p, label: displayProfile(p) }))
+      .sort((a, b) => (a.value === "default" ? -1 : b.value === "default" ? 1 : a.label.localeCompare(b.label)));
+
+    const shared = sharedRaw
+      .map((p) => ({ value: p, label: `공용 · ${p}` }))
       .sort((a, b) => a.label.localeCompare(b.label));
-    return [...base, ...rest];
+
+    const sep = shared.length > 0 ? [{ value: "__sep_shared__", label: "──────── 공용 프로필 ────────", disabled: true }] : [];
+
+    return [...mine, ...sep, ...shared];
   }, [NS, dbProfiles, displayProfile, isGuest, learnProfile, learnProfiles]);
 
   const setServerProfile = useCallback(
@@ -158,29 +164,63 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
       if (isGuest && target !== "default") {
         showToast("게스트: default만 가능");
         setProfileSel("default");
+        setLearnProfile("default");
         return;
       }
 
+      // ✅ 낙관적 반영: UI는 즉시 바뀐 것처럼 보여줌
+      setLearnProfile(target);
+      setProfileSel(target);
+
       setProfileBusy(true);
       setProfileError("");
+
       try {
         const { data } = await api.post("/train/profile/set", null, {
           params: { name: target },
           headers: userHeaders,
         });
-        if (data?.ok) showToast(`프로필 적용: ${displayProfile(target)}`);
-        else showToast("프로필 적용 실패");
+
+        if (!data?.ok) {
+          showToast("프로필 적용 실패");
+          // 실패 시 서버값으로 되돌림
+          await fetchProfiles();
+          return;
+        }
+
+        showToast(`프로필 적용: ${displayProfile(target)}`);
+
+        // ✅ stats가 늦게 따라오므로 짧게 폴링해서 "진짜 반영"을 기다림
+        const deadline = Date.now() + 1500; // 1.5초만
+        while (Date.now() < deadline) {
+          try {
+            const r = await api.get("/train/stats", { headers: userHeaders });
+            const p = r?.data?.learnProfile || "default";
+            setLearnProfile(p);
+
+            // 서버가 target으로 바뀌면 종료
+            if (p === target) break;
+          } catch {
+            // ignore
+          }
+          await new Promise((res) => setTimeout(res, 120));
+        }
+
+        // 마지막으로 목록 동기화(learnProfiles/dbProfiles 갱신)
         await fetchProfiles();
       } catch (e) {
         const msg = e?.response ? `프로필 적용 실패 (HTTP ${e.response.status})` : e?.message || "프로필 적용 실패";
         setProfileError(msg);
         showToast("프로필 적용 실패");
+        // 서버값으로 복구
+        await fetchProfiles();
       } finally {
         setProfileBusy(false);
       }
     },
     [displayProfile, fetchProfiles, isGuest, userHeaders, showToast],
   );
+
 
   const isBright = theme === "light" || theme === "rose";
 
@@ -317,12 +357,16 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
                       alt=""
                       className="h-full w-full object-cover"
                       onError={(e) => {
-                        e.target.style.display = 'none';
-                        e.target.parentElement.innerText = /[^\x00-\x7F]/.test(displayName) ? displayName.slice(0, 1) : displayName.slice(0, 2).toUpperCase();
+                        e.target.style.display = "none";
+                        e.target.parentElement.innerText = /[^\x00-\x7F]/.test(displayName)
+                          ? displayName.slice(0, 1)
+                          : displayName.slice(0, 2).toUpperCase();
                       }}
                     />
+                  ) : /[^\x00-\x7F]/.test(displayName) ? (
+                    displayName.slice(0, 1)
                   ) : (
-                    /[^\x00-\x7F]/.test(displayName) ? displayName.slice(0, 1) : displayName.slice(0, 2).toUpperCase()
+                    displayName.slice(0, 2).toUpperCase()
                   )}
                 </div>
               </div>
@@ -364,6 +408,7 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
                   value={profileSel}
                   onChange={(e) => {
                     const v = e.target.value;
+                    if (v === "__sep_shared__") return; // ✅ 구분선 선택 방지
                     setProfileSel(v);
                     setServerProfile(v);
                   }}
@@ -375,7 +420,7 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
                   )}
                 >
                   {profileOptions.map((p) => (
-                    <option key={p.value} value={p.value}>
+                    <option key={p.value} value={p.value} disabled={!!p.disabled}>
                       {p.label}
                     </option>
                   ))}
@@ -431,7 +476,11 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
                 disabled={busy}
               />
               {err ? <div className={cn("text-xs", isBright ? "text-rose-600" : "text-rose-200")}>{err}</div> : null}
-              <button type="submit" disabled={busy} className={cn("w-full rounded-md py-3 text-sm font-semibold ring-1 transition disabled:opacity-50", t.btn)}>
+              <button
+                type="submit"
+                disabled={busy}
+                className={cn("w-full rounded-md py-3 text-sm font-semibold ring-1 transition disabled:opacity-50", t.btn)}
+              >
                 {busy ? "로그인 중..." : "로그인"}
               </button>
             </form>
@@ -442,7 +491,11 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
           <div className={cn("rounded-md ring-1 overflow-hidden", t.panel)}>
             <div className={cn("px-4 py-3 border-b flex items-center justify-between", isBright ? "border-slate-200" : "border-white/10")}>
               <div className={cn("text-sm font-semibold", t.text)}>로그아웃</div>
-              <button type="button" className={cn("px-2.5 py-1.5 text-xs rounded-md ring-1 transition", t.btn)} onClick={() => !busy && setLogoutOpen(false)}>
+              <button
+                type="button"
+                className={cn("px-2.5 py-1.5 text-xs rounded-md ring-1 transition", t.btn)}
+                onClick={() => !busy && setLogoutOpen(false)}
+              >
                 닫기
               </button>
             </div>
@@ -450,10 +503,20 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
             <div className="px-4 py-4 space-y-3">
               <div className={cn("text-sm", t.text)}>정말 로그아웃할까요?</div>
               <div className="flex gap-2">
-                <button type="button" className={cn("flex-1 rounded-md py-3 text-sm font-semibold ring-1 transition", t.btn)} onClick={() => !busy && setLogoutOpen(false)} disabled={busy}>
+                <button
+                  type="button"
+                  className={cn("flex-1 rounded-md py-3 text-sm font-semibold ring-1 transition", t.btn)}
+                  onClick={() => !busy && setLogoutOpen(false)}
+                  disabled={busy}
+                >
                   취소
                 </button>
-                <button type="button" className={cn("flex-1 rounded-md py-3 text-sm font-semibold ring-1 transition", t.btn)} onClick={onConfirmLogout} disabled={busy}>
+                <button
+                  type="button"
+                  className={cn("flex-1 rounded-md py-3 text-sm font-semibold ring-1 transition", t.btn)}
+                  onClick={onConfirmLogout}
+                  disabled={busy}
+                >
                   {busy ? "처리 중..." : "로그아웃"}
                 </button>
               </div>

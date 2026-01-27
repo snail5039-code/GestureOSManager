@@ -10,6 +10,9 @@ import DebugChat from "../components/DebugChat";
 // ✅ WS import 추가
 import { connectAgentWs, addAgentWsListener, closeAgentWs } from "../api/agentWs";
 
+// ✅ Bridge import 추가
+import { bridgeStart, openWebWithBridge } from "../api/accountClient";
+
 const POLL_MS = 500;
 
 const MODE_OPTIONS = ["MOUSE", "KEYBOARD", "PRESENTATION", "DRAW", "VKEY"];
@@ -266,10 +269,7 @@ function Switch({ t, checked, onChange, disabled }) {
       role="switch"
     >
       <span
-        className={cn(
-          "inline-block h-4 w-4 transform rounded-full bg-white transition",
-          checked ? "translate-x-4" : "translate-x-1",
-        )}
+        className={cn("inline-block h-4 w-4 transform rounded-full bg-white transition", checked ? "translate-x-4" : "translate-x-1")}
       />
     </button>
   );
@@ -318,13 +318,7 @@ function PointerMiniMap({ t, theme, x, y }) {
   const forceWhiteMap = theme === "rose" || theme === "kuromi";
 
   return (
-    <div
-      className={cn(
-        "rounded-lg ring-1 p-2.5 overflow-hidden",
-        t.panelSoft,
-        isBright ? "ring-slate-200" : "ring-white/12",
-      )}
-    >
+    <div className={cn("rounded-lg ring-1 p-2.5 overflow-hidden", t.panelSoft, isBright ? "ring-slate-200" : "ring-white/12")}>
       <div className="flex items-center justify-between">
         <div className={cn("text-[11px]", t.muted)}>포인터</div>
         <div className={cn("text-[11px] tabular-nums", t.muted)}>
@@ -346,10 +340,7 @@ function PointerMiniMap({ t, theme, x, y }) {
           <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(15,23,42,.08)_1px,transparent_1px),linear-gradient(to_bottom,rgba(15,23,42,.08)_1px,transparent_1px)] bg-[size:16px_16px]" />
         </div>
 
-        <div
-          className={cn("absolute h-2 w-2 rounded-full", t.dot)}
-          style={{ left: `${left}%`, top: `${top}%`, transform: "translate(-50%,-50%)" }}
-        />
+        <div className={cn("absolute h-2 w-2 rounded-full", t.dot)} style={{ left: `${left}%`, top: `${top}%`, transform: "translate(-50%,-50%)" }} />
       </div>
     </div>
   );
@@ -360,6 +351,29 @@ function PointerMiniMap({ t, theme, x, y }) {
 ========================= */
 export default function Dashboard({ onHudState, onHudActions, theme = "dark", onChangeScreen } = {}) {
   const { user, isAuthed } = useAuth();
+
+  // ✅ Manager(5173)에서 Web(5174)을 "로그인 상태로" 열기
+  const openWebAuthed = useCallback(async () => {
+    try {
+      const accessToken =
+        localStorage.getItem("accessToken") ||
+        localStorage.getItem("gos_accessToken") ||
+        localStorage.getItem("token") ||
+        null;
+
+      const data = await bridgeStart(accessToken);
+      const code = data?.code;
+
+      if (!code) {
+        window.open("http://localhost:5174", "_blank", "noreferrer");
+        return;
+      }
+
+      openWebWithBridge({ code, webOrigin: "http://localhost:5174" });
+    } catch {
+      window.open("http://localhost:5174", "_blank", "noreferrer");
+    }
+  }, []);
 
   const chatResetKey = useMemo(() => {
     const ident = user?.id ?? user?.memberId ?? user?.member_id ?? user?.email ?? "anon";
@@ -800,8 +814,6 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
 
     return () => {
       unsubscribe?.();
-      // 프로젝트 정책상 다른 화면에서도 WS를 쓸 수 있으면 close를 빼도 됨.
-      // 여기서는 안전하게 닫음.
       try {
         ws?.close?.();
       } catch {}
@@ -817,7 +829,6 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
 
   return (
     <div className={cn("w-full min-w-0 relative", t.page)}>
-      {/* COMPACT: padding/gap 줄임 */}
       <div className="relative w-full min-w-0 px-3 pt-0 pb-7 md:px-4 md:pt-3 md:pb-7 flex flex-col gap-3">
         {error ? (
           <div
@@ -833,14 +844,13 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
         ) : null}
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-start">
-          {/* left */}
           <div className="lg:col-span-5 flex flex-col gap-3">
             <ProfileCard
               t={t}
               theme={theme}
               currentProfile={derived.learnProfile}
               onOpenTraining={() => onChangeScreen && onChangeScreen("train")}
-              onOpenWeb={() => window.open("http://localhost:8082", "_blank", "noreferrer")}
+              onOpenWeb={openWebAuthed}
             />
 
             <Card t={t} title="모드" accent="blue">
@@ -946,7 +956,6 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
             </Card>
           </div>
 
-          {/* right */}
           <div className="lg:col-span-7 grid gap-3 grid-rows-[auto_auto]">
             <Card
               t={t}
@@ -1008,7 +1017,6 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
             </Card>
 
             <Card t={t} title="명령 채팅창" accent="slate">
-              {/* COMPACT: 높이 줄임 */}
               <div className="h-[min(38vh,280px)] flex flex-col">
                 {showRaw ? (
                   <pre
