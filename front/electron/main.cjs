@@ -1,10 +1,6 @@
 const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const path = require("path");
 
-// App icon (BrowserWindow icon is not always used on Windows taskbar in dev;
-// packaged EXE icon should be configured separately for production builds.)
-const ICON_PATH = path.join(__dirname, "assets", "icon.png");
-
 let win;
 const DEV_URL = "http://localhost:5173";
 const PROTOCOL = "gestureos";
@@ -57,7 +53,6 @@ function createWindow() {
     backgroundColor: "#0b1020",
     autoHideMenuBar: true,
     title: "Gesture Agent Manager",
-    icon: ICON_PATH,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -90,12 +85,6 @@ ipcMain.handle("shell:openExternal", async (_e, url) => {
 });
 
 app.whenReady().then(() => {
-  // Helps Windows group the taskbar icon correctly.
-  if (process.platform === "win32") {
-    try {
-      app.setAppUserModelId("com.gestureos.manager");
-    } catch {}
-  }
   registerProtocolClient();
   createWindow();
 

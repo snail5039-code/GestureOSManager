@@ -189,8 +189,8 @@ PALETTE_MAP = {
 # =============================================================================
 # OSK toggle gesture (VKEY only)
 # =============================================================================
-OSK_TOGGLE_HOLD_SEC = 0.8
-OSK_TOGGLE_COOLDOWN_SEC = 1.2
+OSK_TOGGLE_HOLD_SEC = 0.4
+OSK_TOGGLE_COOLDOWN_SEC = 0.6
 
 # =============================================================================
 # UI LOCK toggle gesture (global)
@@ -468,8 +468,7 @@ class HandsAgent:
         # ✅✅ pinch debounce / hysteresis (cursor hand)
         self._pinch_down = False
         self._pinch_t0 = 0.0  # pinch candidate start time
-        # ✅ PINCH 과민(오동작) 완화: 더 오래 유지해야 "다운"으로 인정
-        self._pinch_hold_ms = 130  # tweakable: 100~180ms
+        self._pinch_hold_ms = 90  # tweakable: 70~140ms
         self._pinch_hys_on = 1.00  # ON threshold multiplier (tight)
         self._pinch_hys_off = 1.25  # OFF threshold multiplier (looser)
 
@@ -683,7 +682,7 @@ class HandsAgent:
             # 입력 파이프라인이 바로 꺼지는 케이스가 있어 가드(기본 ON).
             if (
                 getattr(self, "_disable_guard", False)
-                and str(getattr(self, "mode", "")).upper() in ("KEYBOARD", "PRESENTATION")
+                and str(getattr(self, "mode", "")).upper() == "KEYBOARD"
             ):
                 try:
                     dt = time.time() - float(getattr(self, "_last_set_mode_ts", 0.0))
@@ -1299,8 +1298,7 @@ class HandsAgent:
             if got_cursor:
                 cursor_cx, cursor_cy = palm_center(cursor_lm)
 
-                # ✅ 기본 PINCH 민감도 완화(작을수록 덜 민감)
-                ratio = float(getattr(self.learner, "pinch_ratio_thresh", {}).get("cursor", 0.28))
+                ratio = float(getattr(self.learner, "pinch_ratio_thresh", {}).get("cursor", 0.35))
                 base = _pinch_thresh_from_ratio(cursor_lm, ratio, fallback=0.06)
                 pth = base * (self._pinch_hys_off if self._pinch_down else self._pinch_hys_on)
 
@@ -1328,9 +1326,7 @@ class HandsAgent:
                 if cursor_gesture_rule == "PINCH_INDEX":
                     cursor_gesture = "PINCH_INDEX"
                 else:
-                    # ✅ 학습기(MLP)가 PPT 제스처를 덮어쓰면 FIST/V_SIGN 등이 안 나갈 수 있음.
-                    # PPT는 규칙 기반 제스처를 그대로 쓰도록 강제.
-                    if mode_u in ("DRAW", "VKEY", "KEYBOARD", "PRESENTATION"):
+                    if mode_u in ("DRAW", "VKEY", "KEYBOARD"):
                         cursor_gesture = cursor_gesture_rule
                     else:
                         if sm_pred is not None and str(sm_pred) != "PINCH_INDEX":
@@ -1371,7 +1367,7 @@ class HandsAgent:
             other_cx, other_cy = (0.5, 0.5)
             if got_other:
                 other_cx, other_cy = palm_center(other_lm)
-                ratio_o = float(getattr(self.learner, "pinch_ratio_thresh", {}).get("other", 0.28))
+                ratio_o = float(getattr(self.learner, "pinch_ratio_thresh", {}).get("other", 0.35))
                 pth_o = _pinch_thresh_from_ratio(other_lm, ratio_o, fallback=0.06)
                 other_gesture = classify_gesture(other_lm, pinch_thresh=pth_o)
 
@@ -1399,9 +1395,7 @@ class HandsAgent:
             # - 정지 상태 Start: 양손 V_SIGN 홀드
             # - 실행 상태 Stop: 양손 FIST 홀드
             # -----------------------------------------------------------------
-            # ✅ PPT에선 (양손 FIST hold=ESC)와 전역 STOP(양손 FIST hold)이 충돌해서
-            # PPT 동작이 막힌다. PPT 모드에선 전역 START/STOP 제스처를 비활성.
-            if (not block_by_palette) and got_cursor and got_other and mode_u != "PRESENTATION":
+            if (not block_by_palette) and got_cursor and got_other:
                 can_fire = (t >= (self.last_app_cmd_ts + APP_CMD_COOLDOWN_SEC))
 
                 # START: enabled=False일 때만
@@ -1456,7 +1450,7 @@ class HandsAgent:
             # UI 잠금 토글 (FIST 홀드)
             block_osk_toggle_by_ui_lock = False
 
-            if self.enabled and got_cursor and (cursor_gesture == "FIST"):
+            if self.enabled and got_cursor and (cursor_gesture == "FIST") and (mode_u != "VKEY"):
                 block_osk_toggle_by_ui_lock = True
 
                 if self.ui_lock_hold_start is None:

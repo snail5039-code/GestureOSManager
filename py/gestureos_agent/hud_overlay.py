@@ -147,7 +147,7 @@ def _common_state_label(st: dict, locked: bool):
 def _action_mouse(st: dict, locked: bool) -> str:
     # ✅ 상태/바인딩 기반으로 "현재 동작"을 표시 (설정 변경 즉시 반영)
     if not st.get("enabled", False):
-        return "비활성"
+        return "OFF"
 
     if locked:
         return "잠금"
@@ -204,33 +204,53 @@ def _action_draw(st: dict, locked: bool) -> str:
 
 
 def _action_presentation(st: dict, locked: bool) -> str:
-    if not st.get("enabled", False):
-        return "비활성"
+    """PPT/PRESENTATION 모드 액션 라벨(모드 Pill에 표시).
+
+    요구사항(단순 고정):
+      - OPEN_PALM: 커서 이동
+      - PINCH_INDEX: 클릭(선택)
+      - FIST: 다음 슬라이드
+      - V_SIGN: 이전 슬라이드
+      - (양손) OPEN_PALM+OPEN_PALM: 발표 시작(F5)
+      - (양손) FIST+FIST(홀드): 발표 종료(ESC)
+      - (양손) PINCH_INDEX+PINCH_INDEX(홀드): ALT+TAB
+
+    HUD는 홀드 시간을 모르므로 '양손 제스처가 들어오면' 라벨을 미리 보여준다.
+    실제 키 주입/홀드 디바운스는 hands_agent/presentation handler에서 처리.
+    """
+    g = str(st.get("gesture", "NONE") or "NONE").upper()
+    og = str(st.get("otherGesture", "NONE") or "NONE").upper()
+
+    # global lock 안내 우선
+    if locked:
+        return "잠금"
+
+    # 양손 제스처(피드백용)
+    if g == "OPEN_PALM" and og == "OPEN_PALM":
+        return "발표 시작(F5)"
+    if g == "FIST" and og == "FIST":
+        return "발표 종료(ESC)"
+    if g == "PINCH_INDEX" and og == "PINCH_INDEX":
+        return "직전 앱(ALT+TAB)"
+
+    # 한손 제스처
+    if g == "OPEN_PALM":
+        return "커서"
+    if g == "PINCH_INDEX":
+        return "클릭"
+    if g == "FIST":
+        return "다음(→)"
+    if g == "V_SIGN":
+        return "이전(←)"
+
+    return "대기"
 
     if locked:
         return "잠금"
 
     g = str(st.get("gesture", "NONE") or "NONE").upper()
 
-    # ✅ Prefer server-provided fixed mapping if present.
-    # This prevents conflicts from legacy/user bindings that include TAB/SHIFT_TAB.
-    fixed = st.get("pptFixed")
-    if isinstance(fixed, dict):
-        try:
-            next_g = str(fixed.get("NEXT", "FIST") or "FIST").upper()
-            prev_g = str(fixed.get("PREV", "V_SIGN") or "V_SIGN").upper()
-            act_g = str(fixed.get("ACTIVATE", "PINCH_INDEX") or "PINCH_INDEX").upper()
-        except Exception:
-            next_g, prev_g, act_g = ("FIST", "V_SIGN", "PINCH_INDEX")
-
-        if g == next_g:
-            return "다음"
-        if g == prev_g:
-            return "이전"
-        if g == act_g:
-            return "활성/클릭"
-
-    # ✅ Otherwise, use bindings from hands_agent STATUS (pptNav/pptInteract)
+    # ✅ hands_agent STATUS의 바인딩(pptNav/pptInteract)을 우선 사용 (설정 변경 즉시 반영)
     nav = st.get("pptNav") or {}
     inter = st.get("pptInteract") or {}
     if not isinstance(nav, dict):
@@ -253,8 +273,12 @@ def _action_presentation(st: dict, locked: bool) -> str:
         return "이전"
     if _match("ACTIVATE") or _match("CLICK") or _match("ENTER"):
         return "활성/클릭"
-
-    # TAB/SHIFT_TAB/PLAY_PAUSE are intentionally not shown here.
+    if _match("TAB"):
+        return "TAB"
+    if _match("SHIFT_TAB"):
+        return "SHIFT+TAB"
+    if _match("PLAY_PAUSE"):
+        return "재생/일시정지"
 
     # fallback (기존 하드코딩)
     if g == "OPEN_PALM":
@@ -271,7 +295,7 @@ def _action_presentation(st: dict, locked: bool) -> str:
 
 def _action_keyboard(st: dict, locked: bool) -> str:
     if not st.get("enabled", False):
-        return "비활성"
+        return "OFF"
     if locked:
         return "잠금"
 

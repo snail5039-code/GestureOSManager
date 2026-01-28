@@ -96,7 +96,7 @@ class MLPLearner:
         # 핀치 제스처 인식을 위한 보정용 버퍼
         self._pinch_pos: Dict[str, List[float]] = {"cursor": [], "other": []} # 핀치 중일 때의 비율들
         self._pinch_neg: Dict[str, List[float]] = {"cursor": [], "other": []} # 핀치가 아닐 때의 비율들
-        self.pinch_ratio_thresh: Dict[str, float] = {"cursor": 0.42, "other": 0.35} # 핀치 판단 기준점
+        self.pinch_ratio_thresh: Dict[str, float] = {"cursor": 0.35, "other": 0.35} # 핀치 판단 기준점
 
         # 실제 학습된 가중치와 파라미터가 저장되는 딕셔너리
         self.mlp: Dict[str, Dict[str, Any]] = {"cursor": {}, "other": {}}

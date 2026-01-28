@@ -43,21 +43,19 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         },
         "PRESENTATION": {
             "NAV": {
-                # ✅ PPT 기본: 다음=FIST, 이전=V_SIGN
-                # (설정에서 변경 가능)
+                # 기본값(디폴트): 다음 = FIST, 이전 = V_SIGN
+                # (PINCH_INDEX는 PPT 모드에서 '클릭(선택)'으로 고정 사용)
                 "NEXT": "FIST",
                 "PREV": "V_SIGN",
             },
             "INTERACT": {
-                # ✅ PPT 기본: 선택/클릭=PINCH_INDEX
-                # (Tab/Shift+Tab 같은 UI 탐색은 기본 비활성. 필요하면 설정으로 켤 수 있게 남겨둠)
+                # 기본은 전부 비활성(NONE). 필요하면 설정에서 켜서 사용.
                 "TAB": "NONE",
                 "SHIFT_TAB": "NONE",
-                "ACTIVATE": "PINCH_INDEX",
+                "ENTER": "NONE",
                 "PLAY_PAUSE": "NONE",
             },
-            # ✅ 보조 손 게이트(기본 비활성)
-            "INTERACT_HOLD": "NONE",
+            "INTERACT_HOLD": "NONE",  # other-hand gate (NONE이면 항상 비활성)
         },
     },
 }
@@ -125,6 +123,16 @@ def merge_settings(base: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, 
             g = _sanitize_gesture(v)
             if g is not None:
                 b[mode_u][key_u] = g
+
+    # ------------------------------------------------------------------
+    # Guardrail: PRESENTATION.NAV.NEXT 는 PINCH_INDEX를 기본적으로 피함
+    # (PPT 모드에서 PINCH_INDEX는 '클릭(선택)'으로 고정 사용하므로 충돌 위험)
+    try:
+        nav = b.get("PRESENTATION", {}).get("NAV", {})
+        if isinstance(nav, dict) and nav.get("NEXT") == "PINCH_INDEX":
+            nav["NEXT"] = "FIST"
+    except Exception:
+        pass
 
     return out
 

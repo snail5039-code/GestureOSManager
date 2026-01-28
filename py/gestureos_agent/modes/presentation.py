@@ -40,8 +40,13 @@ class PresentationHandler:
         "PREV": 0.08,
         "START": 0.20,
         "END": 0.75,          # ✅ 종료는 길게
-        "ACTIVATE": 0.10,     # 클릭
+        "ACTIVATE": 0.10,     # (옵션) 클릭
         "SWITCH_APP": 0.45,   # ✅ Alt+Tab도 길게(튐 방지)
+        # (옵션) 보조 제스처 레이어
+        "TAB": 0.10,
+        "SHIFT_TAB": 0.10,
+        "ENTER": 0.10,
+        "PLAY_PAUSE": 0.10,
     })
 
     # 연타 방지(특히 Alt+Tab은 토글이라 쿨다운 길게)
@@ -52,6 +57,10 @@ class PresentationHandler:
         "END": 0.90,
         "ACTIVATE": 0.35,
         "SWITCH_APP": 1.20,   # ✅ 왕복 토글 방지
+        "TAB": 0.25,
+        "SHIFT_TAB": 0.25,
+        "ENTER": 0.25,
+        "PLAY_PAUSE": 0.35,
     })
 
     last_token: str | None = None
@@ -66,6 +75,10 @@ class PresentationHandler:
         "END": 0.0,
         "ACTIVATE": 0.0,
         "SWITCH_APP": 0.0,
+        "TAB": 0.0,
+        "SHIFT_TAB": 0.0,
+        "ENTER": 0.0,
+        "PLAY_PAUSE": 0.0,
     })
 
     # hands_agent 호환용 필드
@@ -95,6 +108,15 @@ class PresentationHandler:
         elif token == "SWITCH_APP":
             # ✅ 직전 앱 토글(대부분 브라우저↔PPT 복귀용으로 잘 먹힘)
             pyautogui.hotkey("alt", "tab")
+        elif token == "TAB":
+            pyautogui.press("tab")
+        elif token == "SHIFT_TAB":
+            pyautogui.hotkey("shift", "tab")
+        elif token == "ENTER":
+            pyautogui.press("enter")
+        elif token == "PLAY_PAUSE":
+            # PPT 내 영상/웹 영상 등에서 보통 Space가 토글
+            pyautogui.press("space")
 
     def update(
         self,
@@ -110,11 +132,10 @@ class PresentationHandler:
             self.reset()
             return
 
-        # ✅ PPT는 "고정 제스처"만 사용한다.
-        # (설정 UI에서 NAV/INTERACT를 바꿔도 PPT 동작이 흔들리지 않게)
-        #   - FIST: NEXT, V_SIGN: PREV, PINCH_INDEX: ACTIVATE
-        #   - 양손 OPEN: START, 양손 FIST(hold): END, 양손 PINCH(hold): ALT+TAB
-        _ = bindings  # reserved (API 호환)
+        bindings = bindings or {}
+        nav: Dict[str, str] = dict(bindings.get("NAV") or {})
+        inter: Dict[str, str] = dict(bindings.get("INTERACT") or {})
+        interact_hold = (bindings.get("INTERACT_HOLD") or "NONE")
 
         # 예전 로직 호환
         if cursor_gesture == "KNIFE":
@@ -139,17 +160,22 @@ class PresentationHandler:
                 token = "START"
 
         # -------------------------
-        # 1손 제스처
+        # 보조 레이어(Other-hand hold) → Tab/Shift+Tab/Enter/PlayPause
+        # -------------------------
+        if token is None and got_cursor and got_other and interact_hold and interact_hold != "NONE":
+            if other_gesture == interact_hold:
+                token = _pick_token(cursor_gesture, inter, ["TAB", "SHIFT_TAB", "ENTER", "PLAY_PAUSE"])
+
+        # -------------------------
+        # 1손 제스처(슬라이드 이동)
         # -------------------------
         if token is None and got_cursor:
-            # ✅ 클릭(선택)
-            if cursor_gesture == "PINCH_INDEX":
+            token = _pick_token(cursor_gesture, nav, ["NEXT", "PREV"])
+
+        # (옵션) 클릭 매핑(기본 NONE). PPT 모드 클릭은 hands_agent의 MouseClickDrag가 담당.
+        if token is None and got_cursor:
+            if cursor_gesture == inter.get("ACTIVATE"):
                 token = "ACTIVATE"
-            # ✅ 슬라이드 이동
-            elif cursor_gesture == "FIST":
-                token = "NEXT"
-            elif cursor_gesture == "V_SIGN":
-                token = "PREV"
 
         if token is None:
             self.last_token = None

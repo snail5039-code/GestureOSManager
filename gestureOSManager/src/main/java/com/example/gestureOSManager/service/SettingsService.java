@@ -177,7 +177,7 @@ public class SettingsService {
     // PRESENTATION
     Map<String, Object> ppt = new LinkedHashMap<>();
     Map<String, Object> nav = new LinkedHashMap<>();
-    nav.put("NEXT", "PINCH_INDEX");
+    nav.put("NEXT", "FIST");
     nav.put("PREV", "V_SIGN");
     ppt.put("NAV", nav);
 

@@ -221,6 +221,26 @@ export default function GestureSettingsPanel({ theme, embedded = false, onReques
 
   const activeConf = MODE_CONFIG[mode];
 
+  const notes = useMemo(() => {
+    if (mode === "PRESENTATION") {
+      const nav = (bindings?.PRESENTATION?.NAV) || {};
+      const next = nav.NEXT || "FIST";
+      const prev = nav.PREV || "V_SIGN";
+      return [
+        "고정: OPEN_PALM = 커서 이동",
+        "고정: PINCH_INDEX = 클릭(선택)",
+        "고정: 양손 OPEN_PALM = 발표 시작(F5)",
+        "고정: 양손 FIST(홀드) = 발표 종료(ESC)",
+        "고정: 양손 PINCH_INDEX(홀드) = 직전 앱(ALT+TAB)",
+        `설정: 다음(→) = ${next}`,
+        `설정: 이전(←) = ${prev}`,
+      ];
+    }
+    return activeConf?.notes || [];
+  }, [mode, bindings, activeConf]);
+
+
+
   const load = async () => {
     setBusy(true);
     try {
@@ -395,11 +415,11 @@ export default function GestureSettingsPanel({ theme, embedded = false, onReques
 
       {/* Body */}
       <div className={cn(bodyCls, embedded ? "mt-4" : "")}>
-        {activeConf && activeConf.notes && activeConf.notes.length ? (
+        {notes && notes.length ? (
           <div className="rounded-xl ring-1 ring-base-300/45 bg-base-100/10 p-4 mb-4">
             <div className="text-sm font-semibold">참고</div>
             <ul className="list-disc pl-5 mt-2 text-[12px] opacity-80 space-y-1">
-              {activeConf.notes.map((x, i) => (
+              {notes.map((x, i) => (
                 <li key={i}>{x}</li>
               ))}
             </ul>
