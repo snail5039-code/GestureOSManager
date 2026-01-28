@@ -468,7 +468,8 @@ class HandsAgent:
         # ✅✅ pinch debounce / hysteresis (cursor hand)
         self._pinch_down = False
         self._pinch_t0 = 0.0  # pinch candidate start time
-        self._pinch_hold_ms = 120  # tweakable: 70~140ms
+        # ✅ PINCH 과민(오동작) 완화: 더 오래 유지해야 "다운"으로 인정
+        self._pinch_hold_ms = 130  # tweakable: 100~180ms
         self._pinch_hys_on = 1.00  # ON threshold multiplier (tight)
         self._pinch_hys_off = 1.25  # OFF threshold multiplier (looser)
 
@@ -682,7 +683,7 @@ class HandsAgent:
             # 입력 파이프라인이 바로 꺼지는 케이스가 있어 가드(기본 ON).
             if (
                 getattr(self, "_disable_guard", False)
-                and str(getattr(self, "mode", "")).upper() == "KEYBOARD"
+                and str(getattr(self, "mode", "")).upper() in ("KEYBOARD", "PRESENTATION")
             ):
                 try:
                     dt = time.time() - float(getattr(self, "_last_set_mode_ts", 0.0))
@@ -1298,7 +1299,8 @@ class HandsAgent:
             if got_cursor:
                 cursor_cx, cursor_cy = palm_center(cursor_lm)
 
-                ratio = float(getattr(self.learner, "pinch_ratio_thresh", {}).get("cursor", 0.35))
+                # ✅ 기본 PINCH 민감도 완화(작을수록 덜 민감)
+                ratio = float(getattr(self.learner, "pinch_ratio_thresh", {}).get("cursor", 0.28))
                 base = _pinch_thresh_from_ratio(cursor_lm, ratio, fallback=0.06)
                 pth = base * (self._pinch_hys_off if self._pinch_down else self._pinch_hys_on)
 
@@ -1326,7 +1328,9 @@ class HandsAgent:
                 if cursor_gesture_rule == "PINCH_INDEX":
                     cursor_gesture = "PINCH_INDEX"
                 else:
-                    if mode_u in ("DRAW", "VKEY", "KEYBOARD"):
+                    # ✅ 학습기(MLP)가 PPT 제스처를 덮어쓰면 FIST/V_SIGN 등이 안 나갈 수 있음.
+                    # PPT는 규칙 기반 제스처를 그대로 쓰도록 강제.
+                    if mode_u in ("DRAW", "VKEY", "KEYBOARD", "PRESENTATION"):
                         cursor_gesture = cursor_gesture_rule
                     else:
                         if sm_pred is not None and str(sm_pred) != "PINCH_INDEX":
@@ -1367,7 +1371,7 @@ class HandsAgent:
             other_cx, other_cy = (0.5, 0.5)
             if got_other:
                 other_cx, other_cy = palm_center(other_lm)
-                ratio_o = float(getattr(self.learner, "pinch_ratio_thresh", {}).get("other", 0.35))
+                ratio_o = float(getattr(self.learner, "pinch_ratio_thresh", {}).get("other", 0.28))
                 pth_o = _pinch_thresh_from_ratio(other_lm, ratio_o, fallback=0.06)
                 other_gesture = classify_gesture(other_lm, pinch_thresh=pth_o)
 
@@ -1395,7 +1399,9 @@ class HandsAgent:
             # - 정지 상태 Start: 양손 V_SIGN 홀드
             # - 실행 상태 Stop: 양손 FIST 홀드
             # -----------------------------------------------------------------
-            if (not block_by_palette) and got_cursor and got_other:
+            # ✅ PPT에선 (양손 FIST hold=ESC)와 전역 STOP(양손 FIST hold)이 충돌해서
+            # PPT 동작이 막힌다. PPT 모드에선 전역 START/STOP 제스처를 비활성.
+            if (not block_by_palette) and got_cursor and got_other and mode_u != "PRESENTATION":
                 can_fire = (t >= (self.last_app_cmd_ts + APP_CMD_COOLDOWN_SEC))
 
                 # START: enabled=False일 때만
@@ -1703,11 +1709,10 @@ class HandsAgent:
                 self._vkey_prev_pinch = False
 
             # mouse actions
-            if mode_u in ("MOUSE", "KEYBOARD", "PRESENTATION"):
+            if mode_u in ("MOUSE", "KEYBOARD"):
                 allow_click = (
-                    ((mode_u == "MOUSE") and can_mouse_inject and (not block_by_palette))
-                    or ((mode_u == "KEYBOARD") and can_mouse_inject_kb and (not block_by_palette))
-                    or ((mode_u == "PRESENTATION") and can_ppt_inject and (not block_by_palette))
+                    (can_mouse_inject and (not block_by_palette))
+                    or (can_mouse_inject_kb and (not block_by_palette))
                 )
 
                 if self.mouse_click:
@@ -1720,9 +1725,7 @@ class HandsAgent:
 
                 # 우클릭: MOUSE, KEYBOARD(두손 조합 게이트일 때)
                 if self.mouse_right:
-                    can_rc = (
-                        (can_mouse_inject if mode_u == "MOUSE" else (can_mouse_inject_kb if mode_u == "KEYBOARD" else can_ppt_inject))
-                    ) and (not block_by_palette)
+                    can_rc = (can_mouse_inject if mode_u == "MOUSE" else can_mouse_inject_kb) and (not block_by_palette)
                     self.mouse_right.update(
                         t,
                         cursor_gesture,
@@ -1754,7 +1757,7 @@ class HandsAgent:
             # presentation
             if mode_u == "PRESENTATION" and self.ppt:
                 if not block_by_palette:
-                    bubble = self.ppt.update(
+                    self.ppt.update(
                         t,
                         can_ppt_inject,
                         got_cursor,
@@ -1762,11 +1765,7 @@ class HandsAgent:
                         got_other,
                         other_gesture,
                         bindings=ppt_bindings,
-                        send_event=lambda name, payload: self.send_event(name, payload),
                     )
-                    if bubble and (not getattr(self, "cursor_bubble", None)):
-                        self.cursor_bubble = str(bubble)
-
                 else:
                     self.ppt.reset()
             else:

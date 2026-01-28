@@ -43,16 +43,21 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         },
         "PRESENTATION": {
             "NAV": {
+                # ✅ PPT 기본: 다음=FIST, 이전=V_SIGN
+                # (설정에서 변경 가능)
                 "NEXT": "FIST",
                 "PREV": "V_SIGN",
             },
             "INTERACT": {
+                # ✅ PPT 기본: 선택/클릭=PINCH_INDEX
+                # (Tab/Shift+Tab 같은 UI 탐색은 기본 비활성. 필요하면 설정으로 켤 수 있게 남겨둠)
                 "TAB": "NONE",
                 "SHIFT_TAB": "NONE",
                 "ACTIVATE": "PINCH_INDEX",
-                "PLAY_PAUSE": "OPEN_PALM",
+                "PLAY_PAUSE": "NONE",
             },
-            "INTERACT_HOLD": "FIST",  # other-hand gate
+            # ✅ 보조 손 게이트(기본 비활성)
+            "INTERACT_HOLD": "NONE",
         },
     },
 }
