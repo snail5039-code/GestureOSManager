@@ -43,12 +43,12 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         },
         "PRESENTATION": {
             "NAV": {
-                "NEXT": "PINCH_INDEX",
+                "NEXT": "FIST",
                 "PREV": "V_SIGN",
             },
             "INTERACT": {
-                "TAB": "FIST",
-                "SHIFT_TAB": "V_SIGN",
+                "TAB": "NONE",
+                "SHIFT_TAB": "NONE",
                 "ACTIVATE": "PINCH_INDEX",
                 "PLAY_PAUSE": "OPEN_PALM",
             },

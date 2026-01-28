@@ -147,7 +147,7 @@ def _common_state_label(st: dict, locked: bool):
 def _action_mouse(st: dict, locked: bool) -> str:
     # ✅ 상태/바인딩 기반으로 "현재 동작"을 표시 (설정 변경 즉시 반영)
     if not st.get("enabled", False):
-        return "OFF"
+        return "비활성"
 
     if locked:
         return "잠금"
@@ -205,14 +205,32 @@ def _action_draw(st: dict, locked: bool) -> str:
 
 def _action_presentation(st: dict, locked: bool) -> str:
     if not st.get("enabled", False):
-        return "OFF"
+        return "비활성"
 
     if locked:
         return "잠금"
 
     g = str(st.get("gesture", "NONE") or "NONE").upper()
 
-    # ✅ hands_agent STATUS의 바인딩(pptNav/pptInteract)을 우선 사용 (설정 변경 즉시 반영)
+    # ✅ Prefer server-provided fixed mapping if present.
+    # This prevents conflicts from legacy/user bindings that include TAB/SHIFT_TAB.
+    fixed = st.get("pptFixed")
+    if isinstance(fixed, dict):
+        try:
+            next_g = str(fixed.get("NEXT", "FIST") or "FIST").upper()
+            prev_g = str(fixed.get("PREV", "V_SIGN") or "V_SIGN").upper()
+            act_g = str(fixed.get("ACTIVATE", "PINCH_INDEX") or "PINCH_INDEX").upper()
+        except Exception:
+            next_g, prev_g, act_g = ("FIST", "V_SIGN", "PINCH_INDEX")
+
+        if g == next_g:
+            return "다음"
+        if g == prev_g:
+            return "이전"
+        if g == act_g:
+            return "활성/클릭"
+
+    # ✅ Otherwise, use bindings from hands_agent STATUS (pptNav/pptInteract)
     nav = st.get("pptNav") or {}
     inter = st.get("pptInteract") or {}
     if not isinstance(nav, dict):
@@ -235,12 +253,8 @@ def _action_presentation(st: dict, locked: bool) -> str:
         return "이전"
     if _match("ACTIVATE") or _match("CLICK") or _match("ENTER"):
         return "활성/클릭"
-    if _match("TAB"):
-        return "TAB"
-    if _match("SHIFT_TAB"):
-        return "SHIFT+TAB"
-    if _match("PLAY_PAUSE"):
-        return "재생/일시정지"
+
+    # TAB/SHIFT_TAB/PLAY_PAUSE are intentionally not shown here.
 
     # fallback (기존 하드코딩)
     if g == "OPEN_PALM":
@@ -257,7 +271,7 @@ def _action_presentation(st: dict, locked: bool) -> str:
 
 def _action_keyboard(st: dict, locked: bool) -> str:
     if not st.get("enabled", False):
-        return "OFF"
+        return "비활성"
     if locked:
         return "잠금"
 

@@ -468,7 +468,7 @@ class HandsAgent:
         # ✅✅ pinch debounce / hysteresis (cursor hand)
         self._pinch_down = False
         self._pinch_t0 = 0.0  # pinch candidate start time
-        self._pinch_hold_ms = 90  # tweakable: 70~140ms
+        self._pinch_hold_ms = 120  # tweakable: 70~140ms
         self._pinch_hys_on = 1.00  # ON threshold multiplier (tight)
         self._pinch_hys_off = 1.25  # OFF threshold multiplier (looser)
 
@@ -1703,10 +1703,11 @@ class HandsAgent:
                 self._vkey_prev_pinch = False
 
             # mouse actions
-            if mode_u in ("MOUSE", "KEYBOARD"):
+            if mode_u in ("MOUSE", "KEYBOARD", "PRESENTATION"):
                 allow_click = (
-                    (can_mouse_inject and (not block_by_palette))
-                    or (can_mouse_inject_kb and (not block_by_palette))
+                    ((mode_u == "MOUSE") and can_mouse_inject and (not block_by_palette))
+                    or ((mode_u == "KEYBOARD") and can_mouse_inject_kb and (not block_by_palette))
+                    or ((mode_u == "PRESENTATION") and can_ppt_inject and (not block_by_palette))
                 )
 
                 if self.mouse_click:
@@ -1719,7 +1720,9 @@ class HandsAgent:
 
                 # 우클릭: MOUSE, KEYBOARD(두손 조합 게이트일 때)
                 if self.mouse_right:
-                    can_rc = (can_mouse_inject if mode_u == "MOUSE" else can_mouse_inject_kb) and (not block_by_palette)
+                    can_rc = (
+                        (can_mouse_inject if mode_u == "MOUSE" else (can_mouse_inject_kb if mode_u == "KEYBOARD" else can_ppt_inject))
+                    ) and (not block_by_palette)
                     self.mouse_right.update(
                         t,
                         cursor_gesture,
@@ -1751,7 +1754,7 @@ class HandsAgent:
             # presentation
             if mode_u == "PRESENTATION" and self.ppt:
                 if not block_by_palette:
-                    self.ppt.update(
+                    bubble = self.ppt.update(
                         t,
                         can_ppt_inject,
                         got_cursor,
@@ -1759,7 +1762,11 @@ class HandsAgent:
                         got_other,
                         other_gesture,
                         bindings=ppt_bindings,
+                        send_event=lambda name, payload: self.send_event(name, payload),
                     )
+                    if bubble and (not getattr(self, "cursor_bubble", None)):
+                        self.cursor_bubble = str(bubble)
+
                 else:
                     self.ppt.reset()
             else:
