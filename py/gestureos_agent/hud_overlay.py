@@ -147,7 +147,7 @@ def _common_state_label(st: dict, locked: bool):
 def _action_mouse(st: dict, locked: bool) -> str:
     # ✅ 상태/바인딩 기반으로 "현재 동작"을 표시 (설정 변경 즉시 반영)
     if not st.get("enabled", False):
-        return "OFF"
+        return "비활성"
 
     if locked:
         return "잠금"
@@ -295,7 +295,7 @@ def _action_presentation(st: dict, locked: bool) -> str:
 
 def _action_keyboard(st: dict, locked: bool) -> str:
     if not st.get("enabled", False):
-        return "OFF"
+        return "비활성"
     if locked:
         return "잠금"
 
