@@ -88,9 +88,15 @@ export default function GamePage() {
   const judgeTimeoutRef = useRef(null);
   const lastChanceAttackRef = useRef("none");
   const lastMotionAtRef = useRef(0);
+  const lastMotionAtRef = useRef(0);
   const motionRef = useRef({ x: 0, z: 0, dir: "none" });
 
-  const attackTypes = new Set(["jab", "straight", "hook", "uppercut"]);
+  // Chance Time Timer
+  const [chanceTimer, setChanceTimer] = useState(1.2);
+  const chanceStartTimeRef = useRef(0);
+  const timerReqRef = useRef(null);
+
+  const attackTypes = new Set(["jab", "straight", "hook", "uppercut", "fail"]);
   const enemyHitDelayMs = {
     jab_l: 250,
     jab_r: 250,
@@ -127,92 +133,138 @@ export default function GamePage() {
       lastChanceAttackRef.current = motion.dir;
       handlePlayerAttack(motion.dir);
     }
-  }, [motion]);
+    useEffect(() => {
+      if (gameState === "ATTACK_CHANCE" && attackTypes.has(motion.dir) && motion.dir !== lastChanceAttackRef.current) {
+        lastChanceAttackRef.current = motion.dir;
+        handlePlayerAttack(motion.dir);
+      }
+    }, [motion]);
 
-  const showMessage = (msg, duration = 600) => {
-    setGameMsg(msg);
-    if (msgTimeoutRef.current) clearTimeout(msgTimeoutRef.current);
-    msgTimeoutRef.current = setTimeout(() => setGameMsg(""), duration);
-  };
+    // Timer Logic
+    useEffect(() => {
+      if (gameState === "ATTACK_CHANCE") {
+        chanceStartTimeRef.current = Date.now();
+        const updateTimer = () => {
+          const elapsed = (Date.now() - chanceStartTimeRef.current) / 1000;
+          const remaining = Math.max(0, 1.2 - elapsed);
+          setChanceTimer(remaining);
+          if (remaining > 0) {
+            timerReqRef.current = requestAnimationFrame(updateTimer);
+          }
+        };
+        timerReqRef.current = requestAnimationFrame(updateTimer);
+      } else {
+        if (timerReqRef.current) cancelAnimationFrame(timerReqRef.current);
+        setChanceTimer(1.2);
+      }
+      return () => {
+        if (timerReqRef.current) cancelAnimationFrame(timerReqRef.current);
+      };
+    }, [gameState]);
 
-  const handlePlayerAttack = (type) => {
-    const damages = { jab: 15, straight: 25, hook: 70, uppercut: 100 };
-    setEnemyHp((prev) => Math.max(0, prev - (damages[type] || 20)));
-    setAttackGauge(0);
-    setGameState("DEFENSE");
-    setActiveKey("base");
-    showMessage(`${type.toUpperCase()}!!`, 400);
-  };
+    const showMessage = (msg, duration = 600) => {
+      setGameMsg(msg);
+      if (msgTimeoutRef.current) clearTimeout(msgTimeoutRef.current);
+      msgTimeoutRef.current = setTimeout(() => setGameMsg(""), duration);
+    };
 
-  const handleEnemyAttackJudge = () => {
-    if (gameState !== "DEFENSE") return;
+    const handlePlayerAttack = (type) => {
+      if (type === "fail") {
+        setAttackGauge(0);
+        setGameState("DEFENSE");
+        setActiveKey("base");
+        setAttackGauge(0);
+        setGameState("DEFENSE");
+        setActiveKey("base");
+        showMessage("TIME UP", 200);
+        return;
+      }
+      const damages = { jab: 15, straight: 25, hook: 70, uppercut: 100 };
+      setEnemyHp((prev) => Math.max(0, prev - (damages[type] || 20)));
+      setAttackGauge(0);
+      setGameState("DEFENSE");
+      setActiveKey("base");
+      showMessage(`${type.toUpperCase()}!!`, 400);
+    };
 
-    const now = Date.now();
-    const snapshot = motionRef.current;
-    const isFresh = now - lastMotionAtRef.current < 180;
-    const isDodged = isFresh && snapshot.dir === "weaving";
-    const isGuarded = isFresh && snapshot.dir === "guard";
+    const handleEnemyAttackJudge = () => {
+      if (gameState !== "DEFENSE") return;
 
-    if (isDodged || isGuarded) {
-      setAttackGauge((prev) => {
-        const next = Math.min(100, prev + (isDodged ? 40 : 20));
-        if (next >= 100) {
-          setGameState("ATTACK_CHANCE");
-          showMessage("🔥 CHANCE! 🔥", 1000);
-        } else {
-          showMessage(isDodged ? "💨 DODGE!" : "🛡️ GUARD!");
-        }
-        return next;
-      });
-    } else {
-      setPlayerHp((prev) => Math.max(0, prev - 15));
-      showMessage("💥 HIT!");
-    }
-    enemyAttackPendingRef.current = false;
-  };
+      const now = Date.now();
+      const snapshot = motionRef.current;
+      const isFresh = now - lastMotionAtRef.current < 180;
+      const isDodged = isFresh && snapshot.dir === "weaving";
+      const isGuarded = isFresh && snapshot.dir === "guard";
 
-  // 랜덤 공격 모션 재생
-  useEffect(() => {
-    if (gameState !== "DEFENSE" || activeKey !== "base") return;
-    const timer = setTimeout(() => {
-      if (enemyAttackPendingRef.current) return;
-      const attacks = ["jab_l", "jab_r", "straight", "hook", "uppercut"];
-      const nextAttack = attacks[Math.floor(Math.random() * attacks.length)];
-      setActiveKey(nextAttack);
-      enemyAttackPendingRef.current = true;
-      if (judgeTimeoutRef.current) clearTimeout(judgeTimeoutRef.current);
-      const hitDelay = enemyHitDelayMs[nextAttack] ?? 350;
-      judgeTimeoutRef.current = setTimeout(handleEnemyAttackJudge, hitDelay);
-    }, 2000);
-    return () => clearTimeout(timer);
-  }, [activeKey, gameState]);
+      if (isDodged || isGuarded) {
+        setAttackGauge((prev) => {
+          const next = Math.min(100, prev + (isDodged ? 40 : 20));
+          if (next >= 100) {
+            setGameState("ATTACK_CHANCE");
+            showMessage("🔥 CHANCE! 🔥", 1000);
+          } else {
+            showMessage(isDodged ? "💨 DODGE!" : "🛡️ GUARD!");
+          }
+          return next;
+        });
+      } else {
+        setPlayerHp((prev) => Math.max(0, prev - 15));
+        showMessage("💥 HIT!");
+      }
+      enemyAttackPendingRef.current = false;
+    };
 
-  return (
-    <div style={{ width: "100vw", height: "100vh", position: "relative", overflow: "hidden", backgroundColor: "#000" }}>
-      <div style={{ position: "absolute", top: 30, width: "100%", textAlign: "center", color: "white", zIndex: 10 }}>
-        <div style={{ width: "400px", height: "16px", background: "#222", margin: "0 auto", borderRadius: "10px", border: "2px solid #fff", overflow: "hidden" }}>
-          <div style={{ width: `${enemyHp}%`, height: "100%", background: "linear-gradient(90deg, #f00, #ff416c)", transition: "width 0.4s" }} />
+    // 랜덤 공격 모션 재생
+    useEffect(() => {
+      if (gameState !== "DEFENSE" || activeKey !== "base") return;
+      const timer = setTimeout(() => {
+        if (enemyAttackPendingRef.current) return;
+        const attacks = ["jab_l", "jab_r", "straight", "hook", "uppercut"];
+        const nextAttack = attacks[Math.floor(Math.random() * attacks.length)];
+        setActiveKey(nextAttack);
+        enemyAttackPendingRef.current = true;
+        if (judgeTimeoutRef.current) clearTimeout(judgeTimeoutRef.current);
+        const hitDelay = enemyHitDelayMs[nextAttack] ?? 350;
+        judgeTimeoutRef.current = setTimeout(handleEnemyAttackJudge, hitDelay);
+      }, 2000);
+      return () => clearTimeout(timer);
+    }, [activeKey, gameState]);
+
+    return (
+      <div style={{ width: "100vw", height: "100vh", position: "relative", overflow: "hidden", backgroundColor: "#000" }}>
+        <div style={{ position: "absolute", top: 30, width: "100%", textAlign: "center", color: "white", zIndex: 10 }}>
+          <div style={{ width: "400px", height: "16px", background: "#222", margin: "0 auto", borderRadius: "10px", border: "2px solid #fff", overflow: "hidden" }}>
+            <div style={{ width: `${enemyHp}%`, height: "100%", background: "linear-gradient(90deg, #f00, #ff416c)", transition: "width 0.4s" }} />
+          </div>
+          <div style={{ width: "400px", height: "16px", background: "#222", margin: "8px auto 0", borderRadius: "10px", border: "2px solid #fff", overflow: "hidden" }}>
+            <div style={{ width: `${playerHp}%`, height: "100%", background: "linear-gradient(90deg, #00b3ff, #00ffd5)", transition: "width 0.4s" }} />
+          </div>
+          {gameMsg && <h1 style={{ fontSize: "80px", fontWeight: "900", textShadow: "4px 4px 10px #000", margin: "10px 0" }}>{gameMsg}</h1>}
+          <div style={{ width: "500px", height: "20px", background: "rgba(0,0,0,0.5)", border: "2px solid #555", margin: "10px auto", borderRadius: "10px", overflow: "hidden" }}>
+            <div style={{ width: `${attackGauge}%`, height: "100%", background: "cyan", boxShadow: "0 0 15px cyan", transition: "width 0.2s" }} />
+          </div>
+          {gameState === "ATTACK_CHANCE" && (
+            <div style={{ width: "300px", height: "10px", background: "#333", margin: "5px auto", borderRadius: "5px", overflow: "hidden" }}>
+              <div style={{
+                width: `${(chanceTimer / 1.2) * 100}%`,
+                height: "100%",
+                background: chanceTimer < 0.3 ? "#ff0000" : "#00ff00",
+              }} />
+            </div>
+          )}
         </div>
-        <div style={{ width: "400px", height: "16px", background: "#222", margin: "8px auto 0", borderRadius: "10px", border: "2px solid #fff", overflow: "hidden" }}>
-          <div style={{ width: `${playerHp}%`, height: "100%", background: "linear-gradient(90deg, #00b3ff, #00ffd5)", transition: "width 0.4s" }} />
-        </div>
-        {gameMsg && <h1 style={{ fontSize: "80px", fontWeight: "900", textShadow: "4px 4px 10px #000", margin: "10px 0" }}>{gameMsg}</h1>}
-        <div style={{ width: "500px", height: "20px", background: "rgba(0,0,0,0.5)", border: "2px solid #555", margin: "10px auto", borderRadius: "10px", overflow: "hidden" }}>
-          <div style={{ width: `${attackGauge}%`, height: "100%", background: "cyan", boxShadow: "0 0 15px cyan", transition: "width 0.2s" }} />
-        </div>
+        <Canvas>
+          <Suspense fallback={null}>
+            <PerspectiveCamera makeDefault position={[0, 1.5, 4.5]} />
+            <Environment preset="city" />
+            <BoxerScene
+              activeKey={activeKey}
+              headX={motion.x}
+              onReturnToBase={() => setActiveKey("base")}
+            />
+            <Preload all />
+          </Suspense>
+        </Canvas>
       </div>
-      <Canvas>
-        <Suspense fallback={null}>
-          <PerspectiveCamera makeDefault position={[0, 1.5, 4.5]} />
-          <Environment preset="city" />
-          <BoxerScene
-            activeKey={activeKey}
-            headX={motion.x}
-            onReturnToBase={() => setActiveKey("base")}
-          />
-          <Preload all />
-        </Suspense>
-      </Canvas>
-    </div>
-  );
-}
+    );
+  }
