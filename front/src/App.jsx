@@ -7,6 +7,7 @@ import Rush3DPage from "./pages/Rush3DPage";
 import PairingQrModal from "./components/PairingQrModal";
 import TrainingLab from "./pages/TrainingLab";
 import { THEME } from "./theme/themeTokens";
+import { apiFetch } from "./api/http";
 
 const VALID_THEMES = new Set(["dark", "light", "neon", "rose", "devil"]);
 
@@ -42,7 +43,7 @@ export default function App() {
 
         if (!code) return;
 
-        const res = await fetch("/api/auth/bridge/consume", {
+        const res = await apiFetch("/api/auth/bridge/consume", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -75,7 +76,7 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem("osHudOn", osHudOn ? "1" : "0");
-    fetch(`/api/hud/show?enabled=${osHudOn ? "true" : "false"}`, {
+    apiFetch(`/api/hud/show?enabled=${osHudOn ? "true" : "false"}`, {
       method: "POST",
     }).catch(() => {});
   }, [osHudOn]);
@@ -98,7 +99,7 @@ export default function App() {
   const refreshPairing = () => {
     let cancelled = false;
 
-    fetch("/api/pairing")
+    apiFetch("/api/pairing")
       .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
       .then((data) => {
         if (cancelled || !data) return;
@@ -114,7 +115,7 @@ export default function App() {
   const savePairingName = async (nextName) => {
     const name = String(nextName || "").trim() || "PC";
     try {
-      await fetch("/api/pairing", {
+      await apiFetch("/api/pairing", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
@@ -128,7 +129,7 @@ export default function App() {
     if (!pc) return;
 
     try {
-      await fetch("/api/pairing", {
+      await apiFetch("/api/pairing", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pc }),

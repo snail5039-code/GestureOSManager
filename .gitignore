@@ -8,6 +8,7 @@ Desktop.ini
 .vscode/
 .idea/
 *.iml
+*.swp
 
 # =========================
 # Front (React / Vite)
@@ -15,12 +16,23 @@ Desktop.ini
 node_modules/
 dist/
 .vite/
+dist-ssr/
 *.tsbuildinfo
 .eslintcache
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+
+# Electron / Builder output
+release/
+out/
+**/win-unpacked/
+*.blockmap
+
+# Electron caches / local user data (선택: 필요시만)
+# **/AppData/Roaming/gestureosmanager/
+# **/AppData/Local/gestureosmanager/
 
 # 환경변수 (프론트/백 공통)
 .env
@@ -57,6 +69,13 @@ __pycache__/
 
 .venv/
 venv/
+ENV/
+env/
+
+# python build artifacts (broad but safe)
+py/**/build/
+py/**/dist/
+py/**/*.spec
 
 # =========================
 # Packaging / Build outputs (PyInstaller 등)
@@ -66,21 +85,57 @@ dist/
 *.spec
 *.exe
 *.msi
+*.appx
+*.dmg
 
 # =========================
-# Logs / Temp
+# GestureOS runtime artifacts / logs / temp
 # =========================
 logs/
 *.log
 *.tmp
 *.temp
 .cache/
+tmp/
+temp/
 
+GestureOS_*.log
+**/GestureOS_HUD.log
+**/GestureOSAgent.log
+**/GestureOSManager.log
+
+# training / profiles / learned model artifacts (프로젝트에서 자주 생성되는 데이터)
+**/GestureOS_learner_profiles/
+**/learner_profiles/
+**/profiles/
+**/models/
+**/runs/
+
+# =========================
+# Java / Eclipse / IntelliJ extras
+# =========================
 .metadata/
 .project
 .classpath
 .settings/
 
+# =========================
 # OpenAI 설정 파일 제외
+# =========================
 openai.yml
 **/src/main/resources/openai.yml
+
+# =========================
+# GestureOS (electron-builder / agent packaging)
+# =========================
+front/release/
+front/out/
+front/**/win-unpacked/
+
+# PyInstaller onefile internal extracted tree (huge)
+front/extra/agent/_internal/
+front/resources/agent/_internal/
+
+# (선택) agent 빌드 산출물 폴더 자체도 빌드에서 생성된다면 무시
+# front/extra/agent/
+# front/resources/agent/

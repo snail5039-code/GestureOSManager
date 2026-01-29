@@ -3,6 +3,9 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
+  // ✅ Electron(file://)에서도 /assets 경로 깨지지 않게
+  base: "./",
+
   plugins: [react(), tailwindcss()],
 
   resolve: { dedupe: ["react", "react-dom"] },

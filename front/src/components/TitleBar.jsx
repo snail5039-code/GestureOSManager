@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import GestureSettingsPanel from "./GestureSettingsPanel";
 // ✅ PNG 대신 SVG 로고 컴포넌트로 교체 (여백/테두리 문제 해결)
 // import gaLogo from "../assets/ga-logo.png";
+import { trainApi } from "../api/trainClient";
 
 function cn(...xs) {
   return xs.filter(Boolean).join(" ");

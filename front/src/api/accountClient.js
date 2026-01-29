@@ -1,8 +1,27 @@
+// src/api/accountClient.js
 import axios from "axios";
 
-// ✅ 중요: 브라우저에서 직접 8082로 치지 말고, Vite proxy(/api)를 통해 동일 오리진처럼 사용
-// 그러면 refreshToken 쿠키도 안정적으로 붙는다.
-const baseURL = "/api";
+// ✅ baseURL 결정 규칙
+// - DEV( vite dev server ): "/api" (proxy 사용)
+// - PROD( 설치본/빌드 ): "http://127.0.0.1:8082/api" (직결)
+// - file:// 로 열려도 PROD면 직결이 우선
+const DEV_BASE = "/api";
+const PROD_BASE = "http://127.0.0.1:8082/api";
+
+function getBaseURL() {
+  // Vite build-time flags
+  const isDev = (() => {
+    try { return import.meta.env.DEV; } catch { return false; }
+  })();
+
+  if (isDev) return DEV_BASE;
+
+  // packaged/prod에서는 무조건 로컬 스프링으로 직결
+  // (proxy가 없으니까)
+  return PROD_BASE;
+}
+
+const baseURL = getBaseURL();
 
 export const accountApi = axios.create({
   baseURL,
@@ -39,7 +58,7 @@ export function attachAccountInterceptors({ getAccessToken, setAccessToken, onLo
       try {
         if (!refreshPromise) {
           refreshPromise = refreshApi
-            .post("/auth/token", null)
+            .post("/auth/token", null) // baseURL이 .../api 이므로 "/auth/token"이면 최종 .../api/auth/token
             .then((r) => r?.data?.accessToken || null)
             .finally(() => {
               refreshPromise = null;
@@ -61,16 +80,19 @@ export function attachAccountInterceptors({ getAccessToken, setAccessToken, onLo
 }
 
 export async function tryRefreshAccessToken() {
-  const r = await refreshApi.post("/auth/token", null);
-  return r?.data?.accessToken || null;
+  try {
+    const r = await refreshApi.post("/auth/token", null);
+    return r?.data?.accessToken || null;
+  } catch (e) {
+    if (e?.response?.status === 401) return null;
+    throw e;
+  }
 }
 
 /* ===============================
    Bridge (Manager -> Web SSO)
    =============================== */
 
-// accessToken을 직접 넘기고 싶으면 인자로 전달.
-// (이미 interceptor로 Authorization이 붙는다면 인자 없이도 동작)
 export async function bridgeStart(accessToken) {
   const headers = {};
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
@@ -78,8 +100,6 @@ export async function bridgeStart(accessToken) {
   return r?.data;
 }
 
-// 프론트(5174)에서 /bridge?code= 로 들어가면 App.jsx가 consume 하도록 구성 권장.
-// 그래도 필요하면 이걸로 탭을 열 수 있음.
 export function openWebWithBridge({ code, webOrigin = "http://localhost:5174" } = {}) {
   const url = `${webOrigin}/bridge?code=${encodeURIComponent(code)}`;
   window.open(url, "_blank", "noreferrer");

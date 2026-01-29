@@ -137,7 +137,7 @@ def _pick_first_str(st: dict, keys):
 def _common_state_label(st: dict, locked: bool):
     enabled = bool(st.get("enabled", True))
     if not enabled:
-        return "비활성활성"
+        return "비활성"
     if locked:
         return "잠김"
     return None

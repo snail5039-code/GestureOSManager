@@ -1,45 +1,77 @@
 {
-  "name": "front",
+  "name": "gestureosmanager",
+  "version": "1.0.0",
   "private": true,
-  "version": "0.0.0",
-  "type": "module",
+  "description": "GestureOS Manager",
+  "author": "GestureOS",
   "main": "electron/main.cjs",
+  "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "lint": "eslint .",
     "preview": "vite preview",
-    "manager:electron": "concurrently -k \"npm run dev\" \"wait-on http://localhost:5173 && electron .\""
+    "manager:electron": "concurrently -k \"npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
+    "dist": "npm run build && electron-builder --win nsis"
   },
   "dependencies": {
-    "@react-three/drei": "^10.7.7",
-    "@react-three/fiber": "^9.5.0",
-    "@tailwindcss/vite": "^4.1.18",
-    "axios": "^1.13.2",
-    "qrcode.react": "^4.2.0",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "three": "^0.182.0"
+    "@react-three/drei": "^9.114.3",
+    "@react-three/fiber": "^8.17.10",
+    "axios": "^1.7.9",
+    "qrcode.react": "^4.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three": "^0.160.0"
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.1",
-    "@types/react": "^19.2.5",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^5.1.1",
-    "autoprefixer": "^10.4.23",
-    "concurrently": "^9.2.1",
+    "@tailwindcss/vite": "^4.1.18",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
     "daisyui": "^5.5.14",
-    "electron": "^39.2.7",
-    "eslint": "^9.39.1",
-    "eslint-plugin-react-hooks": "^7.0.1",
-    "eslint-plugin-react-refresh": "^0.4.24",
-    "globals": "^16.5.0",
-    "postcss": "^8.5.6",
+    "electron": "^39.3.0",
+    "electron-builder": "^26.4.0",
     "tailwindcss": "^4.1.18",
-    "vite": "npm:rolldown-vite@7.2.5",
-    "wait-on": "^9.0.3"
+    "vite": "^7.2.5",
+    "wait-on": "^8.0.1"
   },
-  "overrides": {
-    "vite": "npm:rolldown-vite@7.2.5"
+  "build": {
+    "appId": "com.gestureos.manager",
+    "productName": "GestureOSManager",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "electron/**",
+      "extra/**"
+    ],
+    "extraResources": [
+      {
+        "from": "extra/agent",
+        "to": "agent"
+      },
+      {
+        "from": "extra/backend",
+        "to": "backend"
+      },
+      {
+        "from": "extra/webbackend",
+        "to": "webbackend"
+      }
+    ],
+    "asar": true,
+    "win": {
+      "target": "nsis",
+      "icon": "electron/assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "GestureOSManager",
+      "installerIcon": "electron/assets/icon.ico",
+      "uninstallerIcon": "electron/assets/icon.ico"
+    }
   }
 }

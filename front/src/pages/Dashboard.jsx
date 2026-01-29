@@ -6,6 +6,7 @@ import { THEME } from "../theme/themeTokens";
 import ProfileCard from "../components/ProfileCard";
 import { useAuth } from "../auth/AuthProvider";
 import DebugChat from "../components/DebugChat";
+import { trainApi } from "../api/trainClient";
 
 // ✅ WS import 추가
 import { connectAgentWs, addAgentWsListener, closeAgentWs } from "../api/agentWs";
@@ -24,8 +25,10 @@ const MODE_LABEL = {
   VKEY: "가상키보드",
 };
 
+const API_BASE = window.location.protocol === "file:" ? "http://127.0.0.1:8080/api" : "/api";
+
 const api = axios.create({
-  baseURL: "/api",
+  baseURL: API_BASE,
   timeout: 5000,
   headers: { Accept: "application/json" },
 });
@@ -75,13 +78,7 @@ function IconStop() {
 
 function IconRefresh({ spinning }) {
   return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      className={cn("opacity-90", spinning && "animate-spin")}
-    >
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className={cn("opacity-90", spinning && "animate-spin")}>
       <path
         d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6"
         stroke="currentColor"
@@ -110,12 +107,7 @@ function IconEye() {
 function IconLock() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="opacity-90">
-      <path
-        d="M8 11V8a4 4 0 0 1 8 0v3"
-        stroke="currentColor"
-        strokeWidth="1.7"
-        strokeLinecap="round"
-      />
+      <path d="M8 11V8a4 4 0 0 1 8 0v3" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
       <path d="M7 11h10v10H7V11Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
     </svg>
   );
@@ -146,11 +138,7 @@ function Badge({ t, children, tone = "slate" }) {
     yellow: cn("bg-amber-500/14 ring-amber-400/25", t.text2, "ring-1"),
     red: cn("bg-rose-500/12 ring-rose-400/25", t.text2, "ring-1"),
   };
-  return (
-    <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[11px]", map[tone] || map.slate)}>
-      {children}
-    </span>
-  );
+  return <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[11px]", map[tone] || map.slate)}>{children}</span>;
 }
 
 function Card({ t, title, right, children, accent = "slate", className, bodyClassName }) {
@@ -163,9 +151,7 @@ function Card({ t, title, right, children, accent = "slate", className, bodyClas
   };
 
   const isBright = t._isBright ?? false;
-  const shadow = isBright
-    ? "shadow-[0_10px_26px_rgba(15,23,42,0.08)]"
-    : "shadow-[0_10px_34px_rgba(0,0,0,0.25)]";
+  const shadow = isBright ? "shadow-[0_10px_26px_rgba(15,23,42,0.08)]" : "shadow-[0_10px_34px_rgba(0,0,0,0.25)]";
 
   return (
     <div
@@ -178,12 +164,7 @@ function Card({ t, title, right, children, accent = "slate", className, bodyClas
       )}
     >
       <div className={cn("h-px w-full bg-gradient-to-r", topLine[accent] || topLine.slate)} />
-      <div
-        className={cn(
-          "flex items-center justify-between px-3 py-2 border-b",
-          isBright ? "border-slate-200" : "border-white/10",
-        )}
-      >
+      <div className={cn("flex items-center justify-between px-3 py-2 border-b", isBright ? "border-slate-200" : "border-white/10")}>
         <div className={cn("text-[13px] font-semibold", t.text)}>{title}</div>
         {right}
       </div>
@@ -259,18 +240,12 @@ function Switch({ t, checked, onChange, disabled }) {
       onClick={() => onChange?.(!checked)}
       className={cn(
         "relative inline-flex h-5 w-9 items-center rounded-full ring-1 transition disabled:opacity-50 disabled:cursor-not-allowed",
-        checked
-          ? "bg-sky-500/25 ring-sky-300/70"
-          : isBright
-            ? "bg-slate-200 ring-slate-300"
-            : "bg-slate-800/70 ring-white/12",
+        checked ? "bg-sky-500/25 ring-sky-300/70" : isBright ? "bg-slate-200 ring-slate-300" : "bg-slate-800/70 ring-white/12",
       )}
       aria-checked={checked}
       role="switch"
     >
-      <span
-        className={cn("inline-block h-4 w-4 transform rounded-full bg-white transition", checked ? "translate-x-4" : "translate-x-1")}
-      />
+      <span className={cn("inline-block h-4 w-4 transform rounded-full bg-white transition", checked ? "translate-x-4" : "translate-x-1")} />
     </button>
   );
 }
@@ -329,11 +304,7 @@ function PointerMiniMap({ t, theme, x, y }) {
       <div
         className={cn(
           "mt-2.5 relative h-16 rounded-md ring-1 overflow-hidden",
-          forceWhiteMap
-            ? "bg-white ring-violet-200"
-            : isBright
-              ? "bg-white ring-slate-200"
-              : "bg-slate-900/35 ring-white/12",
+          forceWhiteMap ? "bg-white ring-violet-200" : isBright ? "bg-white ring-slate-200" : "bg-slate-900/35 ring-white/12",
         )}
       >
         <div className="absolute inset-0 opacity-[0.18]">
@@ -352,7 +323,6 @@ function PointerMiniMap({ t, theme, x, y }) {
 export default function Dashboard({ onHudState, onHudActions, theme = "dark", onChangeScreen } = {}) {
   const { user, isAuthed } = useAuth();
 
-  // ✅ Manager(5173)에서 Web(5174)을 "로그인 상태로" 열기
   const openWebAuthed = useCallback(async () => {
     try {
       const accessToken =
@@ -401,19 +371,12 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
   const [cameraPresent, setCameraPresent] = useState(null);
   const [modal, setModal] = useState({ open: false, title: "", message: "" });
 
-  const closeModal = useCallback(() => {
-    setModal((m) => ({ ...m, open: false }));
-  }, []);
-
-  const openModal = useCallback((title, message) => {
-    setModal({ open: true, title, message });
-  }, []);
+  const closeModal = useCallback(() => setModal((m) => ({ ...m, open: false })), []);
+  const openModal = useCallback((title, message) => setModal({ open: true, title, message }), []);
 
   useEffect(() => {
     if (!modal.open) return;
-    const onKey = (e) => {
-      if (e.key === "Escape") closeModal();
-    };
+    const onKey = (e) => e.key === "Escape" && closeModal();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [modal.open, closeModal]);
@@ -437,6 +400,13 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
     if (!/^\d+$/.test(s)) return null;
     return s;
   }, [user]);
+
+  // ✅ train 전용 headers
+  const userHeaders = useMemo(() => {
+    if (!isAuthed || !memberId) return {};
+    return { "X-User-Id": String(memberId) };
+  }, [isAuthed, memberId]);
+
   const autoProfileDoneRef = useRef(false);
 
   useEffect(() => {
@@ -456,8 +426,9 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
 
     (async () => {
       try {
-        await api.post(`/train/profile/set?name=${encodeURIComponent(target)}`, null, {
-          headers: { "X-User-Id": String(memberId) },
+        await trainApi.post("/train/profile/set", null, {
+          params: { name: target },
+          headers: userHeaders,
         });
       } catch {
         // ignore
@@ -465,7 +436,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
         autoProfileDoneRef.current = true;
       }
     })();
-  }, [status?.connected, status?.learnProfile, isAuthed, memberId, status]);
+  }, [status?.connected, status?.learnProfile, isAuthed, memberId, userHeaders, status]);
 
   useEffect(() => {
     previewRef.current = preview;
@@ -494,6 +465,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
             ? s.isTracking
             : null,
       controlGain: typeof s.controlGain === "number" ? s.controlGain : null,
+      // ✅ Dashboard는 여기 값이 /train/stats로부터 들어와야 동기화됨
       learnProfile: s.learnProfile ?? "default",
     };
   }, [status, mode]);
@@ -511,20 +483,45 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
     };
   }, [derived]);
 
+  // ✅ 핵심: control/status + train/stats 둘 다 가져와서 status에 합친다
   const fetchStatus = useCallback(async () => {
     if (abortRef.current) abortRef.current.abort();
     const controller = new AbortController();
     abortRef.current = controller;
 
     try {
-      const { data } = await api.get("/control/status", { signal: controller.signal });
+      const [ctrlRes, trainRes] = await Promise.all([
+        api.get("/control/status", { signal: controller.signal }),
+        isAuthed && memberId
+          ? trainApi.get("/train/stats", { signal: controller.signal, headers: userHeaders })
+          : Promise.resolve({ data: null }),
+      ]);
 
-      setStatus(data);
-      setMode((prev) => data?.mode ?? prev);
+      const ctrl = ctrlRes?.data ?? null;
+      const tr = trainRes?.data ?? null;
 
-      if (typeof data?.preview === "boolean") {
-        setPreview(data.preview);
-        previewRef.current = data.preview;
+      setStatus((prev) => {
+        const base = ctrl || prev || {};
+        if (!tr) return base;
+
+        return {
+          ...base,
+          // learner 영역은 train/stats가 정답
+          learnProfile: tr.learnProfile ?? base.learnProfile,
+          learnEnabled: tr.learnEnabled ?? base.learnEnabled,
+          learnCounts: tr.learnCounts ?? base.learnCounts,
+          learnCapture: tr.learnCapture ?? base.learnCapture,
+          learnLastTrainTs: tr.learnLastTrainTs ?? base.learnLastTrainTs,
+          learnHasBackup: tr.learnHasBackup ?? base.learnHasBackup,
+          learnProfiles: tr.learnProfiles ?? base.learnProfiles,
+        };
+      });
+
+      setMode((prev) => ctrl?.mode ?? prev);
+
+      if (typeof ctrl?.preview === "boolean") {
+        setPreview(ctrl.preview);
+        previewRef.current = ctrl.preview;
         if (previewBusyRef.current) previewBusyRef.current = false;
       }
 
@@ -539,7 +536,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isAuthed, memberId, userHeaders]);
 
   const scheduleNextPoll = useCallback(() => {
     if (unmountedRef.current) return;
@@ -799,12 +796,10 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
         const name = String(msg.name || "");
 
         if (name === "APP_START") {
-          // 정지 상태에서만 Start
           if (!enabledRef.current && !busyRef.current) {
             startRef.current?.({ source: "gesture" });
           }
         } else if (name === "APP_STOP") {
-          // 실행 중에서만 Stop
           if (enabledRef.current && !busyRef.current) {
             stopRef.current?.();
           }
@@ -834,9 +829,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
           <div
             className={cn(
               "rounded-lg ring-1 px-4 py-3 text-[13px]",
-              isBright
-                ? "bg-rose-50 ring-rose-200 text-slate-900"
-                : "bg-rose-950/30 ring-rose-900/60 text-rose-100",
+              isBright ? "bg-rose-50 ring-rose-200 text-slate-900" : "bg-rose-950/30 ring-rose-900/60 text-rose-100",
             )}
           >
             {error}
@@ -891,24 +884,8 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
               }
             >
               <div className="grid grid-cols-2 gap-2.5">
-                <ActionTile
-                  t={t}
-                  tone="green"
-                  icon={<IconPlay />}
-                  title="시작"
-                  desc="Start"
-                  onClick={() => start({ source: "ui" })}
-                  disabled={!canStart}
-                />
-                <ActionTile
-                  t={t}
-                  tone="red"
-                  icon={<IconStop />}
-                  title="정지"
-                  desc="Stop"
-                  onClick={stop}
-                  disabled={!canStop}
-                />
+                <ActionTile t={t} tone="green" icon={<IconPlay />} title="시작" desc="Start" onClick={() => start({ source: "ui" })} disabled={!canStart} />
+                <ActionTile t={t} tone="red" icon={<IconStop />} title="정지" desc="Stop" onClick={stop} disabled={!canStop} />
               </div>
 
               <div className={cn("mt-2.5 rounded-lg ring-1 p-2.5 space-y-2.5", t.panelSoft)}>
@@ -983,18 +960,8 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
                 <StatTile t={t} label="스크롤" value={view.scrollText} tone={derived.scrollActive ? "blue" : "slate"} />
 
                 <StatTile t={t} label="트래킹" value={view.trackingText} tone={derived.tracking ? "green" : "slate"} />
-                <StatTile
-                  t={t}
-                  label="포인터 X"
-                  value={derived.pointerX === null ? "-" : formatNum(derived.pointerX, 3)}
-                  tone="slate"
-                />
-                <StatTile
-                  t={t}
-                  label="포인터 Y"
-                  value={derived.pointerY === null ? "-" : formatNum(derived.pointerY, 3)}
-                  tone="slate"
-                />
+                <StatTile t={t} label="포인터 X" value={derived.pointerX === null ? "-" : formatNum(derived.pointerX, 3)} tone="slate" />
+                <StatTile t={t} label="포인터 Y" value={derived.pointerY === null ? "-" : formatNum(derived.pointerY, 3)} tone="slate" />
               </div>
 
               <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2.5">
@@ -1019,13 +986,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
             <Card t={t} title="명령 채팅창" accent="slate">
               <div className="h-[min(38vh,280px)] flex flex-col">
                 {showRaw ? (
-                  <pre
-                    className={cn(
-                      "text-[11px] leading-relaxed overflow-auto flex-1 rounded-lg ring-1 p-3",
-                      t.panelSolid || t.panel2 || t.panel,
-                      t.input,
-                    )}
-                  >
+                  <pre className={cn("text-[11px] leading-relaxed overflow-auto flex-1 rounded-lg ring-1 p-3", t.panelSolid || t.panel2 || t.panel, t.input)}>
                     {status ? JSON.stringify(status, null, 2) : loading ? "Loading..." : "No data"}
                   </pre>
                 ) : (
@@ -1057,34 +1018,30 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
 
       {modal.open
         ? createPortal(
-          <div
-            className="fixed inset-0 z-[100000] flex items-center justify-center"
-            style={{ WebkitAppRegion: "no-drag" }}
-            onMouseDown={(e) => {
-              if (e.target === e.currentTarget) closeModal();
-            }}
-          >
-            <div className="absolute inset-0 bg-black/45 backdrop-blur-[2px]" />
+            <div
+              className="fixed inset-0 z-[100000] flex items-center justify-center"
+              style={{ WebkitAppRegion: "no-drag" }}
+              onMouseDown={(e) => {
+                if (e.target === e.currentTarget) closeModal();
+              }}
+            >
+              <div className="absolute inset-0 bg-black/45 backdrop-blur-[2px]" />
 
-            <div className={cn("relative w-[min(500px,92vw)] rounded-lg ring-1 p-4 shadow-2xl", t.panel)}>
-              <div className="min-w-0">
-                <div className={cn("text-[15px] font-semibold", t.text)}>{modal.title}</div>
-                <div className={cn("mt-2 text-[13px]", t.muted)}>{modal.message}</div>
-              </div>
+              <div className={cn("relative w-[min(500px,92vw)] rounded-lg ring-1 p-4 shadow-2xl", t.panel)}>
+                <div className="min-w-0">
+                  <div className={cn("text-[15px] font-semibold", t.text)}>{modal.title}</div>
+                  <div className={cn("mt-2 text-[13px]", t.muted)}>{modal.message}</div>
+                </div>
 
-              <div className="mt-4 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={closeModal}
-                  className={cn("px-4 py-2 rounded-lg text-[13px] font-semibold ring-1 transition", t.btn)}
-                >
-                  확인
-                </button>
+                <div className="mt-4 flex justify-end gap-2">
+                  <button type="button" onClick={closeModal} className={cn("px-4 py-2 rounded-lg text-[13px] font-semibold ring-1 transition", t.btn)}>
+                    확인
+                  </button>
+                </div>
               </div>
-            </div>
-          </div>,
-          document.body,
-        )
+            </div>,
+            document.body,
+          )
         : null}
     </div>
   );

@@ -1,6 +1,7 @@
 import axios from "axios";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "../auth/AuthProvider";
+import { trainApi } from "../api/trainClient";
 
 function cn(...xs) {
   return xs.filter(Boolean).join(" ");
@@ -31,7 +32,7 @@ function IconRefresh({ spinning }) {
 }
 
 const api = axios.create({
-  baseURL: "/api",
+  baseURL: window.location.protocol === "file:" ? "http://127.0.0.1:8082/api" : "/api",
   timeout: 5000,
   headers: { Accept: "application/json" },
 });
@@ -97,7 +98,7 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
     setProfileError("");
     setProfileBusy(true);
     try {
-      const { data } = await api.get("/train/stats", { headers: userHeaders });
+      const { data } = await trainApi.get("/train/stats", { headers: userHeaders });
       const p = data?.learnProfile || "default";
       const ps = Array.isArray(data?.learnProfiles) ? data.learnProfiles : [];
       setLearnProfile(p);
@@ -106,7 +107,7 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
 
       if (!isGuest) {
         try {
-          const r = await api.get("/train/profile/db/list", { headers: userHeaders });
+          const r = await trainApi.get("/train/profile/db/list", { headers: userHeaders });
           setDbProfiles(Array.isArray(r?.data?.profiles) ? r.data.profiles : []);
         } catch {
           setDbProfiles([]);
@@ -176,7 +177,7 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
       setProfileError("");
 
       try {
-        const { data } = await api.post("/train/profile/set", null, {
+        const { data } = await trainApi.post("/train/profile/set", null, {
           params: { name: target },
           headers: userHeaders,
         });
@@ -194,7 +195,7 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
         const deadline = Date.now() + 1500; // 1.5초만
         while (Date.now() < deadline) {
           try {
-            const r = await api.get("/train/stats", { headers: userHeaders });
+            const r = await trainApi.get("/train/stats", { headers: userHeaders });
             const p = r?.data?.learnProfile || "default";
             setLearnProfile(p);
 

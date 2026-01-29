@@ -21,7 +21,7 @@ _IS_WIN = (os.name == "nt")
 
 
 # =============================================================================
-# Win32 SendInput mouse move (ABS + VIRTUALDESK) for smooth drawing on Win11
+# Win32 mouse move: SendInput(ABS+VIRTUALDESK) + fallback(SetCursorPos)
 # =============================================================================
 if _IS_WIN:
     from ctypes import wintypes
@@ -39,6 +39,13 @@ if _IS_WIN:
     MOUSEEVENTF_MOVE = 0x0001
     MOUSEEVENTF_ABSOLUTE = 0x8000
     MOUSEEVENTF_VIRTUALDESK = 0x4000
+
+    # fallback mouse_event flags (optional; click/scroll에 쓰고 싶으면 확장)
+    MOUSEEVENTF_LEFTDOWN = 0x0002
+    MOUSEEVENTF_LEFTUP = 0x0004
+    MOUSEEVENTF_RIGHTDOWN = 0x0008
+    MOUSEEVENTF_RIGHTUP = 0x0010
+    MOUSEEVENTF_WHEEL = 0x0800
 
     class _MOUSEINPUT(ctypes.Structure):
         _fields_ = [
@@ -58,6 +65,19 @@ if _IS_WIN:
 
     class _POINT(ctypes.Structure):
         _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+    # prototypes (안 해도 보통 되지만, 안정성↑)
+    user32.SetCursorPos.argtypes = (ctypes.c_int, ctypes.c_int)
+    user32.SetCursorPos.restype = wintypes.BOOL
+
+    user32.GetCursorPos.argtypes = (ctypes.POINTER(_POINT),)
+    user32.GetCursorPos.restype = wintypes.BOOL
+
+    user32.GetSystemMetrics.argtypes = (ctypes.c_int,)
+    user32.GetSystemMetrics.restype = ctypes.c_int
+
+    user32.SendInput.argtypes = (wintypes.UINT, ctypes.c_void_p, ctypes.c_int)
+    user32.SendInput.restype = wintypes.UINT
 
     def _get_cursor_xy() -> Tuple[int, int]:
         pt = _POINT()
@@ -80,7 +100,17 @@ if _IS_WIN:
         vh = max(1, vh)
         return (vx, vy, vw, vh)
 
-    def _sendinput_move_abs_virtual(x: int, y: int):
+    def _setcursorpos_move(x: int, y: int) -> bool:
+        # clamp to virtual screen first
+        vx, vy, vw, vh = _virtual_screen_rect()
+        x = max(vx, min(vx + vw - 1, int(x)))
+        y = max(vy, min(vy + vh - 1, int(y)))
+        return bool(user32.SetCursorPos(int(x), int(y)))
+
+    def _sendinput_move_abs_virtual(x: int, y: int) -> bool:
+        """
+        returns True if SendInput actually injected 1 event, else False.
+        """
         vx, vy, vw, vh = _virtual_screen_rect()
 
         # clamp to virtual screen
@@ -88,7 +118,6 @@ if _IS_WIN:
         y = max(vy, min(vy + vh - 1, int(y)))
 
         # Convert to [0..65535] absolute coordinates across virtual desktop
-        # When using MOUSEEVENTF_VIRTUALDESK, mapping is across the entire virtual screen.
         denom_x = max(1, vw - 1)
         denom_y = max(1, vh - 1)
         ax = int((x - vx) * 65535 / denom_x)
@@ -103,7 +132,18 @@ if _IS_WIN:
             dwExtraInfo=0,
         )
         inp = _INPUT(type=INPUT_MOUSE, u=_INPUT_UNION(mi=mi))
-        user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(_INPUT))
+
+        try:
+            n = int(user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(_INPUT)))
+            return (n == 1)
+        except Exception:
+            return False
+
+
+# env: windows move mode (default: fallback safe)
+# - "sendinput": try sendinput then fallback
+# - "setcursorpos": use setcursorpos only
+_WIN_MOVE_MODE = os.getenv("GESTUREOS_WIN_MOVE", "sendinput").strip().lower()
 
 
 @dataclass
@@ -154,8 +194,10 @@ class ControlMapper:
         if _IS_WIN:
             # virtual screen coord
             vx, vy, vw, vh = _virtual_screen_rect()
-            x = int(vx + clamp01(norm_x) * max(1, vw))
-            y = int(vy + clamp01(norm_y) * max(1, vh))
+
+            # NOTE: vw/vh는 "폭/높이"라서 마지막 픽셀까지 맞추려면 (vw-1)/(vh-1) 기준이 더 안전
+            x = int(vx + clamp01(norm_x) * max(1, (vw - 1)))
+            y = int(vy + clamp01(norm_y) * max(1, (vh - 1)))
             x = max(vx, min(vx + vw - 1, x))
             y = max(vy, min(vy + vh - 1, y))
 
@@ -164,8 +206,14 @@ class ControlMapper:
             if abs(x - cx) < int(self.deadzone_px) and abs(y - cy) < int(self.deadzone_px):
                 return
 
-            # ✅ Win11 smooth: SendInput absolute move
-            _sendinput_move_abs_virtual(x, y)
+            # ✅ 핵심: SendInput 실패하면 SetCursorPos로 fallback
+            if _WIN_MOVE_MODE == "setcursorpos":
+                _setcursorpos_move(x, y)
+                return
+
+            ok = _sendinput_move_abs_virtual(x, y)
+            if not ok:
+                _setcursorpos_move(x, y)
             return
 
         # non-windows fallback

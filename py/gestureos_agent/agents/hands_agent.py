@@ -12,6 +12,36 @@ os.environ.setdefault("GLOG_minloglevel", "2")
 import cv2
 import mediapipe as mp
 
+# =============================================================================
+# Windows subprocess helpers
+# - Prevents transient console windows when launching/killing helper processes
+#   (taskkill/tasklist/cmd/explorer) from a --windowed PyInstaller build.
+# =============================================================================
+
+_IS_WIN = (os.name == "nt")
+_CREATE_NO_WINDOW = 0x08000000  # subprocess.CREATE_NO_WINDOW (not always defined)
+
+
+def _popen_hidden(args, **kw):
+    """subprocess.Popen without flashing a console window on Windows."""
+    if _IS_WIN:
+        kw.setdefault("creationflags", _CREATE_NO_WINDOW)
+        kw.setdefault("shell", False)
+    kw.setdefault("stdout", subprocess.DEVNULL)
+    kw.setdefault("stderr", subprocess.DEVNULL)
+    return subprocess.Popen(args, **kw)
+
+
+def _run_hidden(args, **kw):
+    """subprocess.run without flashing a console window on Windows."""
+    if _IS_WIN:
+        kw.setdefault("creationflags", _CREATE_NO_WINDOW)
+        kw.setdefault("shell", False)
+    kw.setdefault("stdout", subprocess.DEVNULL)
+    kw.setdefault("stderr", subprocess.DEVNULL)
+    kw.setdefault("check", False)
+    return subprocess.run(args, **kw)
+
 from ..config import AgentConfig
 from ..timeutil import now
 from ..gestures import palm_center, classify_gesture
@@ -248,12 +278,10 @@ def _tasklist_has(exe_name: str) -> bool:
         return False
     try:
         exe = str(exe_name)
-        r = subprocess.run(
+        r = _run_hidden(
             ["tasklist", "/FI", f"IMAGENAME eq {exe}"],
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
             text=True,
-            check=False,
         )
         out = (r.stdout or "").lower()
         return exe.lower() in out
@@ -529,11 +557,9 @@ class HandsAgent:
         # 1) Win11 터치키보드 URI
         if not launched:
             try:
-                subprocess.Popen(
-                    ["cmd", "/c", "start", "", "ms-inputapp:"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
+                # Avoid cmd.exe to prevent console flash.
+                # explorer.exe can open URI schemes on Windows.
+                _popen_hidden(["explorer.exe", "ms-inputapp:"])
                 time.sleep(0.12)
                 if _tasklist_has("TabTip.exe"):
                     launched = True
@@ -546,11 +572,7 @@ class HandsAgent:
             tabtip = r"C:\Program Files\Common Files\Microsoft Shared\ink\TabTip.exe"
             try:
                 if os.path.exists(tabtip):
-                    subprocess.Popen(
-                        ["cmd", "/c", "start", "", tabtip],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
+                    _popen_hidden([tabtip])
                     time.sleep(0.12)
                     if _tasklist_has("TabTip.exe"):
                         launched = True
@@ -561,12 +583,7 @@ class HandsAgent:
         # 3) osk.exe 직접
         if not launched:
             try:
-                p = subprocess.Popen(
-                    ["osk.exe"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    shell=False,
-                )
+                p = _popen_hidden(["osk.exe"])
                 self._osk_proc = p
                 time.sleep(0.12)
                 if _tasklist_has("osk.exe"):
@@ -596,23 +613,13 @@ class HandsAgent:
 
         if pid:
             try:
-                subprocess.run(
-                    ["taskkill", "/PID", str(pid), "/T", "/F"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
-                )
+                _run_hidden(["taskkill", "/PID", str(pid), "/T", "/F"])
             except Exception:
                 pass
 
         for exe in ("osk.exe", "TabTip.exe"):
             try:
-                subprocess.run(
-                    ["taskkill", "/IM", exe, "/F"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
-                )
+                _run_hidden(["taskkill", "/IM", exe, "/F"])
             except Exception:
                 pass
 
@@ -673,9 +680,14 @@ class HandsAgent:
         ):
             print("[PY] cmd:", data, flush=True)
 
+        # NOTE: The print above must NOT swallow command handling.
+        # Keep command handling in a separate if/elif chain (not 'elif' attached to the print).
         if typ == "ENABLE":
             self.enabled = True
+            # ENABLE == resume. If we paused via UI/gesture lock, clear locks here
+            # so inputs immediately start working again.
             self.locked = False
+            self.ui_locked = False
 
         elif typ == "DISABLE":
             # ✅ KEYBOARD 모드에서 SET_MODE 직후 들어오는 DISABLE(동기화 레이스)로
@@ -693,6 +705,9 @@ class HandsAgent:
                     return
 
             self.enabled = False
+            # ✅ When stopping from UI, also clear locks so a later ENABLE actually works.
+            self.locked = False
+            self.ui_locked = False
             self._reset_side_effects()
             self._osk_close()
             self._force_hide_menu()

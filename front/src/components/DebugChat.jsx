@@ -1,5 +1,6 @@
 // src/components/DebugChat.jsx
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { apiFetch } from "../api/http";
 
 function cn(...xs) {
   return xs.filter(Boolean).join(" ");
@@ -69,7 +70,7 @@ const HELP_TEXT = [
 ].join("\n");
 
 async function callAi(message) {
-  const r = await fetch("/api/ai/chat", {
+  const r = await apiFetch("/api/ai/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json; charset=utf-8" },
     body: JSON.stringify({ message }),

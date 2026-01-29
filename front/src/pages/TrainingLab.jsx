@@ -1,7 +1,7 @@
 // src/pages/TrainingLab.jsx
-import axios from "axios";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../auth/AuthProvider";
+import { trainApi } from "../api/trainClient";
 
 const POLL_MS = 120;
 
@@ -21,12 +21,6 @@ const HANDS = [
   { id: "cursor", label: "주 손(커서)" },
   { id: "other", label: "보조 손" },
 ];
-
-const api = axios.create({
-  baseURL: "/api",
-  timeout: 8000,
-  headers: { Accept: "application/json" },
-});
 
 function cn(...xs) {
   return xs.filter(Boolean).join(" ");
@@ -211,7 +205,7 @@ function StepDot({ done, label, hint }) {
 
 function sanitizeProfileName(s) {
   const raw = String(s || "").trim();
-  // 한글/영문/숫자/공백/_/- 허용 (서버에서 더 제한하면 여기 맞추면 됨)
+  // 한글/영문/숫자/공백/_/- 허용
   const cleaned = raw.replace(/[^\p{Script=Hangul}a-zA-Z0-9 _-]/gu, "");
   return cleaned.slice(0, 32).trim();
 }
@@ -254,15 +248,21 @@ export default function TrainingLab({ theme = "dark" }) {
   // =========================
   // ✅ Auth / session scoping
   // =========================
-  const memberIdRaw =
-    user?.id ?? user?.memberId ?? user?.member_id ?? user?.email ?? null;
+  // 서버에서 Long 파싱한다고 했으니 숫자만 허용
+  const memberId = useMemo(() => {
+    const raw = user?.id ?? user?.memberId ?? user?.member_id ?? null;
+    if (raw === null || raw === undefined) return null;
+    const s = String(raw).trim();
+    if (!/^\d+$/.test(s)) return null;
+    return s;
+  }, [user]);
 
-  const isGuest = !isAuthed || !memberIdRaw;
+  const isGuest = !isAuthed || !memberId;
 
   const userHeaders = useMemo(() => {
     if (isGuest) return {};
-    return { "X-User-Id": String(memberIdRaw) };
-  }, [isGuest, memberIdRaw]);
+    return { "X-User-Id": String(memberId) };
+  }, [isGuest, memberId]);
 
   const displayProfile = useCallback((p) => {
     const s = String(p || "");
@@ -283,8 +283,11 @@ export default function TrainingLab({ theme = "dark" }) {
   // ✅ local dataset: user-scoped
   // =========================
   const datasetKey = useMemo(
-    () => `trainingLab.dataset.v1.${isGuest ? "guest" : String(memberIdRaw).replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase()}`,
-    [isGuest, memberIdRaw]
+    () =>
+      `trainingLab.dataset.v1.${
+        isGuest ? "guest" : `u${String(memberId)}`
+      }`,
+    [isGuest, memberId]
   );
 
   const datasetRef = useRef({
@@ -436,7 +439,7 @@ export default function TrainingLab({ theme = "dark" }) {
     let alive = true;
     (async () => {
       try {
-        const { data } = await api.get("/train/profile/db/list", {
+        const { data } = await trainApi.get("/train/profile/db/list", {
           headers: userHeaders,
         });
         const list = Array.isArray(data?.profiles) ? data.profiles : [];
@@ -471,7 +474,7 @@ export default function TrainingLab({ theme = "dark" }) {
     abortRef.current = controller;
 
     try {
-      const { data } = await api.get("/train/stats", {
+      const { data } = await trainApi.get("/train/stats", {
         signal: controller.signal,
         headers: userHeaders,
       });
@@ -554,8 +557,6 @@ export default function TrainingLab({ theme = "dark" }) {
       // ✅ UI 즉시 갱신
       setCapturedCountState(st.collected);
       setLocalSampleCount(datasetRef.current.samples.length);
-
-      // 너무 잦은 렌더 싫으면 2~3장마다만 올려도 됨.
       setDatasetVersion((v) => v + 1);
     }
 
@@ -652,7 +653,7 @@ export default function TrainingLab({ theme = "dark" }) {
 
     setServerBusy(true);
     try {
-      const { data } = await api.post("/train/capture", null, {
+      const { data } = await trainApi.post("/train/capture", null, {
         params: { hand, label: lab, seconds, hz },
         headers: userHeaders,
       });
@@ -721,7 +722,7 @@ export default function TrainingLab({ theme = "dark" }) {
 
     setServerBusy(true);
     try {
-      const { data } = await api.post("/train/train", null, {
+      const { data } = await trainApi.post("/train/train", null, {
         headers: userHeaders,
       });
       setInfo(data?.ok ? "학습 완료" : "학습 실패");
@@ -744,8 +745,9 @@ export default function TrainingLab({ theme = "dark" }) {
     setServerBusy(true);
     try {
       const next = !learnEnabled;
-      const { data } = await api.post("/train/enable", null, {
-        params: { 적용: next },
+      // 백엔드 파라미터명이 enabled/apply/적용 중 무엇이든 받아도 동작하게 다 넣음
+      const { data } = await trainApi.post("/train/enable", null, {
+        params: { enabled: next, apply: next, 적용: next },
         headers: userHeaders,
       });
       setInfo(data?.ok ? (next ? "학습 적용: 켜짐" : "학습 적용: 꺼짐") : "적용 전환 실패");
@@ -773,7 +775,7 @@ export default function TrainingLab({ theme = "dark" }) {
 
     setServerBusy(true);
     try {
-      const { data } = await api.post("/train/reset", null, { headers: userHeaders });
+      const { data } = await trainApi.post("/train/reset", null, { headers: userHeaders });
       setInfo(data?.ok ? "초기화 완료" : "초기화 실패");
       await fetchStatus();
     } catch (e) {
@@ -799,7 +801,7 @@ export default function TrainingLab({ theme = "dark" }) {
 
     setServerBusy(true);
     try {
-      const { data } = await api.post("/train/rollback", null, { headers: userHeaders });
+      const { data } = await trainApi.post("/train/rollback", null, { headers: userHeaders });
       setInfo(data?.ok ? "되돌리기 완료" : "되돌리기 실패");
       await fetchStatus();
     } catch (e) {
@@ -827,7 +829,7 @@ export default function TrainingLab({ theme = "dark" }) {
     setInfo("");
     setServerBusy(true);
     try {
-      const { data } = await api.post("/train/profile/set", null, {
+      const { data } = await trainApi.post("/train/profile/set", null, {
         params: { name: target },
         headers: userHeaders,
       });
@@ -856,7 +858,7 @@ export default function TrainingLab({ theme = "dark" }) {
     setInfo("");
     setServerBusy(true);
     try {
-      const { data } = await api.post("/train/profile/create", null, {
+      const { data } = await trainApi.post("/train/profile/create", null, {
         params: { name, copy: true },
         headers: userHeaders,
       });
@@ -874,7 +876,7 @@ export default function TrainingLab({ theme = "dark" }) {
 
       // DB list 갱신
       try {
-        const r = await api.get("/train/profile/db/list", { headers: userHeaders });
+        const r = await trainApi.get("/train/profile/db/list", { headers: userHeaders });
         setDbProfiles(Array.isArray(r?.data?.profiles) ? r.data.profiles : []);
       } catch {}
     } catch (e) {
@@ -898,7 +900,7 @@ export default function TrainingLab({ theme = "dark" }) {
     setInfo("");
     setServerBusy(true);
     try {
-      const { data } = await api.post("/train/profile/delete", null, {
+      const { data } = await trainApi.post("/train/profile/delete", null, {
         params: { name: learnProfile },
         headers: userHeaders,
       });
@@ -906,7 +908,7 @@ export default function TrainingLab({ theme = "dark" }) {
       await fetchStatus();
 
       try {
-        const r = await api.get("/train/profile/db/list", { headers: userHeaders });
+        const r = await trainApi.get("/train/profile/db/list", { headers: userHeaders });
         setDbProfiles(Array.isArray(r?.data?.profiles) ? r.data.profiles : []);
       } catch {}
     } catch (e) {
@@ -936,7 +938,7 @@ export default function TrainingLab({ theme = "dark" }) {
     setInfo("");
     setServerBusy(true);
     try {
-      const { data } = await api.post("/train/profile/rename", null, {
+      const { data } = await trainApi.post("/train/profile/rename", null, {
         params: { from: learnProfile, to },
         headers: userHeaders,
       });
@@ -946,7 +948,7 @@ export default function TrainingLab({ theme = "dark" }) {
       await fetchStatus();
 
       try {
-        const r = await api.get("/train/profile/db/list", { headers: userHeaders });
+        const r = await trainApi.get("/train/profile/db/list", { headers: userHeaders });
         setDbProfiles(Array.isArray(r?.data?.profiles) ? r.data.profiles : []);
       } catch {}
     } catch (e) {
@@ -960,7 +962,7 @@ export default function TrainingLab({ theme = "dark" }) {
   };
 
   // =========================
-  // ✅ 로그인 유저: main 자동 생성/선택 (실패 시 에러 토스트 표시)
+  // ✅ 로그인 유저: 유저별 main 자동 생성/선택 (Dashboard와 네이밍 통일)
   // =========================
   const initMainProfileRef = useRef(false);
   useEffect(() => {
@@ -973,12 +975,12 @@ export default function TrainingLab({ theme = "dark" }) {
 
     (async () => {
       try {
-        const desired = "main";
+        const desired = `u${String(memberId)}__main`;
 
         // create if missing
         const combined = new Set([...(learnProfiles || []), ...(dbProfiles || []), learnProfile]);
         if (!combined.has(desired)) {
-          const r = await api.post("/train/profile/create", null, {
+          const r = await trainApi.post("/train/profile/create", null, {
             params: { name: desired, copy: true },
             headers: userHeaders,
           });
@@ -988,9 +990,11 @@ export default function TrainingLab({ theme = "dark" }) {
           }
         }
 
-        // set to main if currently default
-        if (learnProfile === "default") {
-          const s = await api.post("/train/profile/set", null, {
+        // set to desired if currently system/default 계열
+        const cur = String(learnProfile || "default").toLowerCase();
+        const system = new Set(["default", "mouse", "keyboard", "ppt", "draw", "vkey", "rush"]);
+        if (system.has(cur)) {
+          const s = await trainApi.post("/train/profile/set", null, {
             params: { name: desired },
             headers: userHeaders,
           });
@@ -1009,7 +1013,7 @@ export default function TrainingLab({ theme = "dark" }) {
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isGuest, derived.connected]);
+  }, [isGuest, derived.connected, memberId]);
 
   const serverCaptureText = useMemo(() => {
     if (!learnCapture) return null;
@@ -1290,7 +1294,7 @@ export default function TrainingLab({ theme = "dark" }) {
                     className="input input-sm w-full rounded-xl"
                     value={newProfile}
                     onChange={(e) => setNewProfile(e.target.value)}
-                    placeholder="예: main, office, myhand"
+                    placeholder="예: office, myhand"
                     disabled={serverBusy || isGuest}
                   />
                 </div>

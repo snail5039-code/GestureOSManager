@@ -15,7 +15,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import { THEME } from "../theme/themeTokens";
-
+import { apiFetch } from "../api/http";
 /* =============================================================================
    유틸
 ============================================================================= */
@@ -1715,7 +1715,7 @@ export default function Rush3DPage({ status, connected = true }) {
       ctrl = new AbortController();
 
       try {
-        const r = await fetch("/api/control/status", {
+        const r = await apiFetch("/api/control/status", {
           cache: "no-store",
           signal: ctrl.signal,
         });
@@ -1829,7 +1829,7 @@ export default function Rush3DPage({ status, connected = true }) {
     if (sfxRef.current.ctx.state !== "running")
       await sfxRef.current.ctx.resume();
 
-    const res = await fetch("/sfx/slice.wav", { cache: "force-cache" });
+    const res = await apiFetch("/sfx/slice.wav", { cache: "force-cache" });
     const arr = await res.arrayBuffer();
     const buf = await sfxRef.current.ctx.decodeAudioData(arr);
     sfxRef.current.buf = buf;
@@ -1927,7 +1927,7 @@ export default function Rush3DPage({ status, connected = true }) {
         throw new Error(`mode failed (${r1.status}) ${txt}`);
       }
 
-      const r2 = await fetch("/api/control/start", { method: "POST" });
+      const r2 = await apiFetch("/api/control/start", { method: "POST" });
       if (!r2.ok) {
         const txt = await r2.text().catch(() => "");
         throw new Error(`start failed (${r2.status}) ${txt}`);
