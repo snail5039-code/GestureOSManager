@@ -37,7 +37,7 @@ THRESHOLD_X = 0.015      # X 이동 기준값 (Normalized)
 MIN_CONSECUTIVE = 3      # 연속 프레임 기준
 MAX_DELAY = 1.0          # 판정 후 최대 지연 시간 (초)
 
-MIN_HAND_MOVE = 0.06        # 손 최소 총 이동량
+MIN_HAND_MOVE = 0.035        # 손 최소 총 이동량 (Relaxed)
 MIN_HAND_SPEED = 0.012     # 손 최소 순간 속도
 MIN_FORWARD_SPEED = 0.012
 MIN_FORWARD_DZ = 0.06
@@ -77,17 +77,22 @@ def update_jab(current_x_move, current_time):
 
     return jab_detected
 
-def reset_chance_fsm():
+def reset_chance_fsm(hard=True):
     global chance_active, chance_requested, chance_phase
     global chance_consumed, attack_attempted, intent_counter
-    global box_state
+    global box_state, ready_to_active_counter, active_ambiguous_counter, static_active_counter
 
-    chance_active = False
-    # chance_requested = False  <-- REMOVED to prevent FSM prison
-    chance_phase = "idle"
+    if hard:
+        chance_active = False
+        chance_requested = False
+        chance_phase = "idle"
+    
     chance_consumed = False
     attack_attempted = False
     intent_counter = 0
+    ready_to_active_counter = 0
+    active_ambiguous_counter = 0
+    static_active_counter = 0
 
     box_state = {
         "active": False,
@@ -98,6 +103,8 @@ def reset_chance_fsm():
         "max_dx": 0, "max_dy": 0, "max_dz": 0,
         "min_y": 0.0,
     }
+    # 🔒 Clear Neutral Pose
+    neutral_hand["init"] = False
 
 chance_requested = False
 force_attack_mode = False
@@ -106,8 +113,14 @@ chance_consumed = False
 chance_start_time = 0.0
 attack_attempted = False
 intent_counter = 0
+ready_to_active_counter = 0  # 🔥 Consecutive frames for ACTIVE entry
 INTENT_SPEED = 0.012
-INTENT_FRAMES = 3
+REQUIRED_INTENT_FRAMES = 3  # 🔥 Unified intent frames
+just_failed = False  # 🔥 Prevent duplicate emits in same frame
+active_ambiguous_counter = 0
+active_enter_time = 0.0
+last_active_exit_time = 0.0
+static_active_counter = 0
 
 prev_hand = {
     "left": {"x": 0.0, "y": 0.0, "z": 0.0, "t": 0.0, "init": False},
@@ -116,6 +129,11 @@ prev_hand = {
 prev_shoulder = {
     "left": {"z": 0.0, "init": False},
     "right": {"z": 0.0, "init": False},
+}
+# 🔒 Neutral Pose for Chance Time
+neutral_hand = {
+    "x": 0.0, "y": 0.0, "z": 0.0,
+    "init": False
 }
 
 def elbow_angle(shoulder, elbow, wrist):
@@ -139,16 +157,23 @@ def handle_chance(data):
         chance_consumed = False
         attack_attempted = False
         intent_counter = 0
+        ready_to_active_counter = 0
+        active_ambiguous_counter = 0
+        static_active_counter = 0
         chance_start_time = time.time()
         return
     chance_requested = bool(data.get("active")) 
     chance_active = chance_requested
     if chance_requested:
-        chance_phase = "ready"
+        chance_phase = "ready"  # 🔒 Start in READY phase
         chance_consumed = False
         attack_attempted = False
         intent_counter = 0
+        ready_to_active_counter = 0
+        active_ambiguous_counter = 0
+        static_active_counter = 0
         chance_start_time = time.time()
+        neutral_hand["init"] = False  # 🔒 Force re-capture
     else:
         chance_phase = "idle"
         chance_consumed = False
@@ -156,9 +181,10 @@ def handle_chance(data):
         box_state["path_x"] = []
         box_state["path_y"] = []
         box_state["path_z"] = []
+        reset_chance_fsm() # 🔥 Reset when front signal ends
 
 def run_vision():
-    global box_state, chance_active, chance_requested, prev_hand, prev_shoulder, last_jab_valid_ts, chance_phase, chance_consumed, chance_start_time, attack_attempted, intent_counter
+    global box_state, chance_active, chance_requested, prev_hand, prev_shoulder, last_jab_valid_ts, chance_phase, chance_consumed, chance_start_time, attack_attempted, intent_counter, ready_to_active_counter, just_failed, active_ambiguous_counter, active_enter_time, last_active_exit_time, static_active_counter
     cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
     last_send_time = 0
     last_defense = "none"
@@ -178,6 +204,9 @@ def run_vision():
     uppercut_elbow_max = 165
 
     while cap.isOpened():
+        now_t = time.time()
+        final_attack = "none"
+        just_failed = False  # 🔥 Reset each frame
         success, frame = cap.read()
         if not success:
             continue
@@ -185,17 +214,8 @@ def run_vision():
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = pose.process(rgb)
 
-        head_x, guard_val, final_attack = 0.0, 0.0, "none"
-        now_t = time.time()
-
-        # FSM Auto-Recovery
-        if chance_requested and chance_phase == "idle":
-            chance_phase = "ready"
-
-        if chance_requested and chance_phase == "ready" and not attack_attempted and not chance_consumed:
-            if now_t - chance_start_time > 1.2:
-                final_attack = "fail"
-                reset_chance_fsm()
+        # FSM Auto-Recovery removed for strict FSM discipline
+        head_x, guard_val = 0.0, 0.0
 
         if results.pose_landmarks:
             lm = results.pose_landmarks.landmark
@@ -249,175 +269,168 @@ def run_vision():
                 is_guarding = left_guard and right_guard and abs(head_x) < 0.25
                 guard_val = 1.0 if is_guarding else 0.0
 
-            # Update Jab Optimization
-            jab_signal = -dz if dz < 0 else 0
-            if update_jab(jab_signal, now_t):
-                last_jab_valid_ts = now_t
+            # Update Jab Optimization (Disabled during Chance)
+            if not chance_requested:
+                jab_signal = -dz if dz < 0 else 0
+                if update_jab(jab_signal, now_t):
+                    last_jab_valid_ts = now_t
 
-            # 공격 감지 (찬스타임일 때만)
-            if chance_requested and not is_guarding and not chance_consumed:
-                # ❗ 위빙 중이면 공격 시작 금지
-                if abs(head_x) > 0.18:
-                    intent_counter = 0
-                elif not box_state["active"]:
-                    # Check body forward movement (weaving/leaning)
-                    prev_z = prev_shoulder["left" if is_left else "right"]["z"]
-                    body_forward = abs(active_shldr.z - prev_z) > 0.015
+            # 🔒 Chance Time Logic (Guard does NOT block chance)
+            # 🔒 Chance Time Logic (Guard does NOT block chance)
+            # ===============================
+            # 🔹 Chance ACTIVE 통합판 (AntiGravity 최적화)
+            # ===============================
+            if chance_requested and not chance_consumed:
+                if chance_phase == "ready":
+                    # Neutral capture
+                    if not neutral_hand["init"]:
+                        neutral_hand["x"] = curr_x
+                        neutral_hand["y"] = curr_y
+                        neutral_hand["z"] = curr_z
+                        neutral_hand["init"] = True
+                        print(f"[FSM] READY: Neutral Captured ({curr_x:.2f}, {curr_y:.2f}, {curr_z:.2f})")
 
-                    if body_forward:
-                        intent_counter = 0
-                    else:
-                        # 손의 독립적 움직임만 공격 의도로 인정
-                        hand_forward = dz < -0.02
-                        hand_swing = abs(dx) > 0.025
-                        hand_lift = dy < -0.025
-                        hand_motion_energy = abs(dx) + abs(dy) + abs(dz)
-                        
-                        # Hand must be in front of shoulder (relative check)
-                        hand_forward_relative = (curr_z - active_shldr.z) < -0.03
+                    dz_n = curr_z - neutral_hand["z"]
+                    dy_n = curr_y - neutral_hand["y"]
+                    z_enter_thresh = 0.09
+                    uppercut_y_thresh = -0.12
+                    ready_cooldown = 0.45
 
-                        if (
-                            (hand_forward or hand_swing or hand_lift)
-                            and hand_motion_energy > 0.045   # 🔒 몸 이동 컷
-                            and speed > INTENT_SPEED
-                            and hand_forward_relative      # 🔒 Added relative check
-                        ):
-                            intent_counter += 1
-                        else:
+                    if ((dz_n < -z_enter_thresh or dy_n < uppercut_y_thresh)
+                        and (now_t - last_active_exit_time > ready_cooldown)):
+                        ready_to_active_counter += 1
+                        if ready_to_active_counter >= 2:  # 연속 2프레임
+                            chance_phase = "active"
                             intent_counter = 0
+                            attack_attempted = False
+                            active_enter_time = now_t
+                            active_ambiguous_counter = 0
+                            static_active_counter = 0
+                            print("[FSM] READY -> ACTIVE (Z/Y ENTER)")
+                    else:
+                        ready_to_active_counter = 0
 
-                    if intent_counter >= INTENT_FRAMES:
-                        attack_attempted = True
+                elif chance_phase == "active":
+                    dx = curr_x - neutral_hand["x"]
+                    dy = curr_y - neutral_hand["y"]
+                    dz = curr_z - neutral_hand["z"]
+                    total_move = (dx**2 + dy**2 + dz**2) ** 0.5
+
+                    # 🔒 거의 정지 상태 차단
+                    if total_move < 0.065 and speed < 0.018:
                         intent_counter = 0
-                        box_state = {
-                            "active": True,
-                            "hand": "left" if is_left else "right",
-                            "path_x": [curr_x],
-                            "path_y": [curr_y],
-                            "path_z": [curr_z],
-                            "start_x": curr_x, "start_y": curr_y, "start_z": curr_z,
-                            "start_time": now_t,
-                            "max_dx": abs(dx), "max_dy": abs(dy), "max_dz": abs(dz),
-                            "min_y": curr_y,
-                        }
-                        chance_phase = "analyzing"
-                elif box_state["active"]:
-                    if box_state["hand"] != ("left" if is_left else "right"):
-                        active_hand = lw if box_state["hand"] == "left" else rw
-                        active_elbow = le if box_state["hand"] == "left" else re
-                        active_shldr = ls if box_state["hand"] == "left" else rs
-                        curr_x, curr_y, curr_z = active_hand.x, active_hand.y, active_hand.z
-                        if box_state["hand"] == "left":
-                            dx, dy, dz, speed, elbow_ang = l_dx, l_dy, l_dz, l_speed, l_angle
+
+                    # 🔒 미세 움직임/유령 제거
+                    if speed < 0.008 and total_move < 0.03:
+                        intent_counter = 0
+                    if abs(head_x) > 0.25 and total_move < 0.05:
+                        intent_counter = max(0, intent_counter - 1)
+                    if total_move < 0.025 and speed < 0.012:
+                        intent_counter = max(0, intent_counter - 1)
+
+                    # Hand leads body
+                    shoulder_move = abs(active_shldr.z - prev_shoulder["left" if is_left else "right"]["z"])
+                    hand_leads = (abs(dz) > shoulder_move * 0.8 or abs(dx) > 0.10 or abs(dy) > 0.08)
+
+                    base_intent = total_move > 0.065 and speed > 0.018 and hand_leads
+                    uppercut_intent = base_intent and dy < -0.09
+                    lateral_intent = base_intent and abs(dx) > 0.10 and abs(dx) > abs(dz) * 0.7
+                    forward_intent = base_intent and dz < -0.06 and abs(dx) < 0.18 and abs(dy) < 0.12
+
+                    is_attack_intent = uppercut_intent or lateral_intent or forward_intent
+                    if is_attack_intent:
+                        if abs(head_x) > 0.35:  # Weaving block
+                            intent_counter = max(0, intent_counter - 1)
                         else:
-                            dx, dy, dz, speed, elbow_ang = r_dx, r_dy, r_dz, r_speed, r_angle
+                            intent_counter += 1
+                    else:
+                        intent_counter = max(0, intent_counter - 1)
 
-                    box_state["path_x"].append(curr_x)
-                    box_state["path_y"].append(curr_y)
-                    box_state["path_z"].append(curr_z)
-                    box_state["max_dx"] = max(box_state["max_dx"], abs(dx))
-                    box_state["max_dy"] = max(box_state["max_dy"], abs(dy))
-                    box_state["max_dz"] = max(box_state["max_dz"], abs(dz))
-                    box_state["min_y"] = min(box_state["min_y"], curr_y)
+                    # 🔥 최소 3프레임 누적 필요
+                    if intent_counter >= REQUIRED_INTENT_FRAMES:
+                        attack_type = "none"
 
-                    elapsed = now_t - box_state["start_time"]
-                    dx_total = curr_x - box_state["start_x"]
-                    dy_total = curr_y - box_state["start_y"]
-                    dz_total = curr_z - box_state["start_z"]
-                    x_move, y_move, z_move = abs(dx_total), abs(dy_total), abs(dz_total)
+                        # =========================
+                        # 🔥 STRICT PRIORITY ATTACK CLASSIFIER (HOTFIX)
+                        # Uppercut > Hook > Straight > Jab
+                        # =========================
 
-                    distance_trigger = (z_move > 0.09) or (x_move > 0.12) or (y_move > 0.12)
-                    should_judge = (elapsed >= max_punch_time) or \
-                                   (elapsed >= min_punch_time and (speed < speed_end * 2.0 or distance_trigger))
-                    
-                    if should_judge:
-                        # ===== 공통 손 이동 필터 =====
-                        total_move = (x_move**2 + y_move**2 + z_move**2) ** 0.5
+                        attack_type = "none"
 
-                        hand_moved_enough = (
-                            total_move >= MIN_HAND_MOVE and
-                            speed >= MIN_HAND_SPEED
-                        )
-
-                        if not hand_moved_enough:
-                            final_attack = "none"
+                        # 공통 하드 게이트
+                        if total_move < 0.08 or speed < 0.02:
+                            attack_type = "none"
                         else:
-                            # 판정 우선순위
-                            hand_started_low = box_state["start_y"] > (active_shldr.y + 0.05)
+                            # 1️⃣ UPPERCUT (dy 최우선 + dx/dz 강제 억제)
+                            if (
+                                dy < -0.14 and              # 🔥 더 강한 상향
+                                abs(dx) < 0.14 and          # 🔥 좌우 억제
+                                abs(dz) < 0.10 and          # 🔥 전진 억제
+                                speed > 0.022 and
+                                total_move > 0.09
+                            ):
+                                attack_type = "uppercut"
 
-                            uppercut_like = (
-                                dy_total < -0.06
-                                and y_move >= x_move * 1.4
-                                and y_move >= z_move * 1.3
-                                and elbow_ang < uppercut_elbow_max
-                                and y_move > 0.07
-                                and speed > 0.015
-                                and hand_started_low
-                                and hand_moved_enough
-                            )
+                            # 2️⃣ HOOK (dx 최우선 + dy 상향 배제)
+                            elif (
+                                abs(dx) > 0.20 and
+                                abs(dy) < 0.07 and          # 🔥 uppercut 완전 배제
+                                abs(dz) < 0.08 and
+                                speed > 0.022 and
+                                total_move > 0.11
+                            ):
+                                attack_type = "hook"
 
-                            hook_like = (
-                                x_move > 0.09
-                                and x_move >= y_move * 1.5
-                                and x_move >= z_move * 1.4
-                                and speed > 0.015
-                                and hand_moved_enough
-                            )
+                            # 3️⃣ STRAIGHT (dz 최우선 + dx/dy 억제)
+                            elif (
+                                dz < -0.14 and
+                                abs(dx) < 0.14 and
+                                abs(dy) < 0.08 and
+                                speed > 0.022 and
+                                total_move > 0.11
+                            ):
+                                attack_type = "straight"
 
-                            forward_push = dz < -0.01   # 프레임 기준 전진
-                            forward_speed = abs(dz) / max(elapsed, 0.001)
-                            
-                            # Hand must be in front of shoulder (relative check)
-                            hand_forward_relative = (curr_z - active_shldr.z) < -0.03
+                            # 4️⃣ JAB (약한 straight 전용)
+                            elif (
+                                -0.11 < dz < -0.07 and
+                                abs(dx) < 0.16 and
+                                abs(dy) < 0.06 and
+                                speed > 0.028 and
+                                total_move < 0.11
+                            ):
+                                attack_type = "jab"
 
-                            straight_like = (
-                                dz_total < -MIN_FORWARD_DZ
-                                and z_move >= x_move * 1.3
-                                and z_move >= y_move * 1.3
-                                and z_move > MIN_FORWARD_DZ
-                                and forward_push                 # 🔒 실제 팔 전진
-                                and forward_speed > MIN_FORWARD_SPEED
-                                and elbow_ang > 155          # 🔒 Straight requires arm extension
-                                and hand_forward_relative    # 🔒 Hand must be ahead of shoulder
-                                and hand_moved_enough
-                            )
-
-                            jab_like = (
-                                dz_total < -0.04
-                                and z_move > 0.06
-                                and elapsed < 0.28
-                                and forward_push                 # 🔒
-                                and forward_speed > 0.015        # 🔒 더 빠르게
-                                and hand_forward_relative        # 🔒 Added relative check
-                                and hand_moved_enough
-                            )
-
-                            if uppercut_like:
-                                final_attack = "uppercut"
-                            elif hook_like:
-                                final_attack = "hook"
-                            elif straight_like:
-                                final_attack = "straight"
-                            elif jab_like:
-                                final_attack = "jab"
-
-                        # ❗ 공격이 성립 안 되면 FAIL은 '이벤트'만, 공격 아님
-                        if final_attack == "none":
-                            final_attack = "none"
-
-                        # 공격 시도조차 없었으면 데미지 금지 (안전 장치)
-                        if not attack_attempted:
-                            final_attack = "none"
-
-                        # ❗ 실제 공격일 때만 chance 소모
-                        if final_attack in ("jab", "straight", "hook", "uppercut"):
+                        if attack_type != "none":
+                            final_attack = attack_type
+                            attack_attempted = True
+                            chance_phase = "consumed"
                             chance_consumed = True
-
-                        # 실제 공격 or 타임아웃에서만 종료
-                        if final_attack in ("jab", "straight", "hook", "uppercut", "fail"):
+                            print(f"[FSM] ACTIVE -> CONSUMED: {final_attack}")
+                            socketio.emit("motion", {"dir": final_attack, "t": time.time()})
                             reset_chance_fsm()
+                        else:
+                            # ambiguous 처리
+                            intent_counter = max(0, intent_counter - 1)
+                            active_ambiguous_counter += 1
+                            if active_ambiguous_counter > 8:
+                                print("[FSM] AMBIGUOUS -> FAIL -> EXIT CHANCE")
+                                socketio.emit("motion", {"dir": "fail", "t": time.time()})
+                                reset_chance_fsm()
 
-            # 일반 모드 가드/위빙
+                    # ACTIVE TIMEOUT 0.9s
+                    if now_t - active_enter_time > 0.9:
+                        print("[FSM] ACTIVE TIMEOUT -> READY")
+                        chance_phase = "ready"
+                        intent_counter = 0
+                        active_ambiguous_counter = 0
+                        static_active_counter = 0
+                        last_active_exit_time = now_t
+
+                elif chance_phase == "consumed":
+                    pass
+
+            # 일반 모드 가드/위빙 (chance 아닐 때만)
             if not chance_requested and final_attack == "none":
                 is_punch_like = speed > speed_threshold and elbow_ang > extended_angle
                 if abs(head_x) > 0.18 and not is_punch_like:
@@ -440,6 +453,21 @@ def run_vision():
             prev_shoulder["left"] = {"z": ls.z, "init": True}
             prev_shoulder["right"] = {"z": rs.z, "init": True}
 
+        # 🔒 Strict Timeout Handling
+        if chance_requested and not chance_consumed:
+            if now_t - chance_start_time > 1.2:
+                safe_total_move = total_move if 'total_move' in locals() else 0.0
+                if intent_counter > 0 and safe_total_move > 0.04:
+                    print("[FSM] ATTEMPTED BUT WEAK -> FAIL -> EXIT CHANCE")
+                    socketio.emit("motion", {"dir": "fail", "t": time.time()})
+                else:
+                    print("[FSM] TRUE TIMEOUT -> EXIT CHANCE TIME")
+                    socketio.emit("motion", {"dir": "timeout", "t": time.time()})
+
+                reset_chance_fsm()
+                final_attack = "fail"
+                just_failed = True
+
         # 화면 디버깅
         status_msg = "ANALYZING..." if chance_phase == "analyzing" else ("READY" if chance_phase == "ready" else "")
         if status_msg:
@@ -456,12 +484,15 @@ def run_vision():
         cv2.imshow("Motion Debug", frame)
         if cv2.waitKey(1) & 0xFF == 27: break
 
-        if final_attack in ("jab", "straight", "hook", "uppercut"):
-            socketio.emit("motion", {"x": round(head_x,3), "z": round(guard_val,3), "dir": final_attack, "t": time.time()})
-            last_send_time = time.time()
-        elif time.time() - last_send_time > 0.05:
-            socketio.emit("motion", {"x": round(head_x,3), "z": round(guard_val,3), "dir": final_attack, "t": time.time()})
-            last_send_time = time.time()
+        if not just_failed: # 🔥 Skip if already failed/timeout this frame
+            if final_attack in ("jab", "straight", "hook", "uppercut"):
+                # 🔒 Chance FSM 중복 전송 차단
+                if not (chance_requested and chance_consumed):
+                    socketio.emit("motion", {"x": round(head_x,3), "z": round(guard_val,3), "dir": final_attack, "t": time.time()})
+                last_send_time = time.time()
+            elif time.time() - last_send_time > 0.05:
+                socketio.emit("motion", {"x": round(head_x,3), "z": round(guard_val,3), "dir": final_attack, "t": time.time()})
+                last_send_time = time.time()
 
     cap.release()
     cv2.destroyAllWindows()
