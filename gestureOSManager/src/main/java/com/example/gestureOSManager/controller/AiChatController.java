@@ -18,7 +18,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 @RestController
 @RequestMapping("/api/ai")
-@CrossOrigin(origins = "http://localhost:5173")
+@CrossOrigin(originPatterns = "*", allowCredentials = "true")
 public class AiChatController {
 
 	private final OpenAiService openAiService;

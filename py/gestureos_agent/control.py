@@ -13,11 +13,23 @@ from .mathutil import clamp01
 
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0
-# ✅ pyautogui 내부 딜레이 최소화(비-Windows fallback에서도 도움)
 pyautogui.MINIMUM_DURATION = 0
 pyautogui.MINIMUM_SLEEP = 0
 
 _IS_WIN = (os.name == "nt")
+
+
+# =============================================================================
+# ✅ DRAW pen-hold shared state (no new files)
+# =============================================================================
+_PEN_DOWN = False
+
+def set_pen_down(v: bool) -> None:
+    global _PEN_DOWN
+    _PEN_DOWN = bool(v)
+
+def is_pen_down() -> bool:
+    return bool(_PEN_DOWN)
 
 
 # =============================================================================
@@ -28,7 +40,6 @@ if _IS_WIN:
 
     user32 = ctypes.windll.user32
 
-    # wintypes.ULONG_PTR 없는 파이썬도 있어서 직접 정의
     try:
         ULONG_PTR = wintypes.ULONG_PTR
     except AttributeError:
@@ -39,13 +50,6 @@ if _IS_WIN:
     MOUSEEVENTF_MOVE = 0x0001
     MOUSEEVENTF_ABSOLUTE = 0x8000
     MOUSEEVENTF_VIRTUALDESK = 0x4000
-
-    # fallback mouse_event flags (optional; click/scroll에 쓰고 싶으면 확장)
-    MOUSEEVENTF_LEFTDOWN = 0x0002
-    MOUSEEVENTF_LEFTUP = 0x0004
-    MOUSEEVENTF_RIGHTDOWN = 0x0008
-    MOUSEEVENTF_RIGHTUP = 0x0010
-    MOUSEEVENTF_WHEEL = 0x0800
 
     class _MOUSEINPUT(ctypes.Structure):
         _fields_ = [
@@ -66,7 +70,6 @@ if _IS_WIN:
     class _POINT(ctypes.Structure):
         _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
-    # prototypes (안 해도 보통 되지만, 안정성↑)
     user32.SetCursorPos.argtypes = (ctypes.c_int, ctypes.c_int)
     user32.SetCursorPos.restype = wintypes.BOOL
 
@@ -87,7 +90,6 @@ if _IS_WIN:
         return (int(pt.x), int(pt.y))
 
     def _virtual_screen_rect() -> Tuple[int, int, int, int]:
-        # virtual screen (multi-monitor)
         SM_XVIRTUALSCREEN = 76
         SM_YVIRTUALSCREEN = 77
         SM_CXVIRTUALSCREEN = 78
@@ -101,23 +103,16 @@ if _IS_WIN:
         return (vx, vy, vw, vh)
 
     def _setcursorpos_move(x: int, y: int) -> bool:
-        # clamp to virtual screen first
         vx, vy, vw, vh = _virtual_screen_rect()
         x = max(vx, min(vx + vw - 1, int(x)))
         y = max(vy, min(vy + vh - 1, int(y)))
         return bool(user32.SetCursorPos(int(x), int(y)))
 
     def _sendinput_move_abs_virtual(x: int, y: int) -> bool:
-        """
-        returns True if SendInput actually injected 1 event, else False.
-        """
         vx, vy, vw, vh = _virtual_screen_rect()
-
-        # clamp to virtual screen
         x = max(vx, min(vx + vw - 1, int(x)))
         y = max(vy, min(vy + vh - 1, int(y)))
 
-        # Convert to [0..65535] absolute coordinates across virtual desktop
         denom_x = max(1, vw - 1)
         denom_y = max(1, vh - 1)
         ax = int((x - vx) * 65535 / denom_x)
@@ -140,10 +135,12 @@ if _IS_WIN:
             return False
 
 
-# env: windows move mode (default: fallback safe)
-# - "sendinput": try sendinput then fallback
-# - "setcursorpos": use setcursorpos only
+# env: windows move mode (default: sendinput then fallback)
 _WIN_MOVE_MODE = os.getenv("GESTUREOS_WIN_MOVE", "sendinput").strip().lower()
+
+# ✅ DRAW 중엔 "스킵" 최대한 줄이기 위한 튜닝(환경변수로 조절 가능)
+_DRAW_MOVE_INTERVAL_SEC = float(os.getenv("GESTUREOS_DRAW_MOVE_INTERVAL", "0.004"))  # 4ms
+_DRAW_DEADZONE_PX = float(os.getenv("GESTUREOS_DRAW_DEADZONE_PX", "0.0"))            # 0px
 
 
 @dataclass
@@ -186,27 +183,35 @@ class ControlMapper:
         return self.ema_x, self.ema_y
 
     def move_cursor(self, norm_x: float, norm_y: float, now_ts: float):
-        # throttle
-        if (now_ts - self.last_move_ts) < self.move_interval_sec:
+        # ✅ DRAW(펜 홀드) 중에는 throttle/deadzone을 강제로 낮추고, SendInput 우선
+        interval = float(self.move_interval_sec)
+        dz = float(self.deadzone_px)
+        pen = is_pen_down()
+        if pen:
+            interval = _DRAW_MOVE_INTERVAL_SEC
+            dz = _DRAW_DEADZONE_PX
+
+        if (now_ts - self.last_move_ts) < interval:
             return
         self.last_move_ts = now_ts
 
         if _IS_WIN:
-            # virtual screen coord
             vx, vy, vw, vh = _virtual_screen_rect()
-
-            # NOTE: vw/vh는 "폭/높이"라서 마지막 픽셀까지 맞추려면 (vw-1)/(vh-1) 기준이 더 안전
             x = int(vx + clamp01(norm_x) * max(1, (vw - 1)))
             y = int(vy + clamp01(norm_y) * max(1, (vh - 1)))
             x = max(vx, min(vx + vw - 1, x))
             y = max(vy, min(vy + vh - 1, y))
 
-            # deadzone vs current cursor
+            # deadzone (DRAW 중엔 0이라 거의 안 걸림)
             cx, cy = _get_cursor_xy()
-            if abs(x - cx) < int(self.deadzone_px) and abs(y - cy) < int(self.deadzone_px):
+            if abs(x - cx) < dz and abs(y - cy) < dz:
                 return
 
-            # ✅ 핵심: SendInput 실패하면 SetCursorPos로 fallback
+            # DRAW 중에는 SendInput을 최대한 유지(드래그 캔버스에서 SetCursorPos로 튀는 케이스 방지)
+            if pen:
+                _sendinput_move_abs_virtual(x, y)
+                return
+
             if _WIN_MOVE_MODE == "setcursorpos":
                 _setcursorpos_move(x, y)
                 return

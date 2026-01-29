@@ -14,6 +14,20 @@ public class AgentSessionRegistry {
 
   private final AtomicReference<WebSocketSession> sessionRef = new AtomicReference<>();
 
+  /**
+   * Returns the currently registered *agent* WebSocket session (may be null).
+   */
+  public WebSocketSession get() {
+    return sessionRef.get();
+  }
+
+  /**
+   * Convenience: whether the provided session is the currently registered agent.
+   */
+  public boolean isSame(WebSocketSession session) {
+    return sessionRef.get() == session;
+  }
+
   public void set(WebSocketSession session) {
     sessionRef.set(session);
     log.info("[REG] set session id={} open={} ref={}",

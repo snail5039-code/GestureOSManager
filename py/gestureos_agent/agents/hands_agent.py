@@ -381,6 +381,19 @@ class HandsAgent:
             move_interval_sec=(1.0 / max(1e-6, float(getattr(cfg, "move_hz", 60.0)))),
         )
 
+        # ---- DRAW tuning (Win11 smooth stroke) ----
+        # DRAW는 연속 스트로크라서 mouse용 throttle/deadzone 값이 크면 선이 끊겨 보일 수 있음.
+        self._ctl_default_ema_alpha = float(self.control.ema_alpha)
+        self._ctl_default_deadzone_px = float(self.control.deadzone_px)
+        self._ctl_default_move_interval_sec = float(self.control.move_interval_sec)
+        self._draw_tune_applied = False
+
+        # 환경변수로 튜닝 가능
+        self._draw_ema_alpha = float(os.getenv("GESTUREOS_DRAW_EMA_ALPHA", str(self._ctl_default_ema_alpha)))
+        self._draw_deadzone_px = float(os.getenv("GESTUREOS_DRAW_DEADZONE_PX", "0.5"))
+        self._draw_move_hz = float(os.getenv("GESTUREOS_DRAW_MOVE_HZ", "125.0"))
+        self._draw_move_interval_sec = 1.0 / max(1e-6, self._draw_move_hz)
+
         # mode handlers (None guard)
         self.mouse_click = MouseClickDrag() if MouseClickDrag else None
         self.mouse_right = MouseRightClick() if MouseRightClick else None
@@ -1388,6 +1401,26 @@ class HandsAgent:
 
             mode_u = str(self.mode).upper()
             effective_locked = bool(self.ui_locked) or bool(self.locked)
+
+            # ---- apply DRAW-specific pointer tuning ----
+            # (throttle/deadzone를 낮춰 스트로크 끊김 완화)
+            if mode_u == "DRAW":
+                if not self._draw_tune_applied:
+                    self._draw_tune_applied = True
+                self.control.ema_alpha = self._draw_ema_alpha
+                self.control.deadzone_px = self._draw_deadzone_px
+                self.control.move_interval_sec = self._draw_move_interval_sec
+            else:
+                if self._draw_tune_applied:
+                    self._draw_tune_applied = False
+                    self.control.ema_alpha = self._ctl_default_ema_alpha
+                    self.control.deadzone_px = self._ctl_default_deadzone_px
+                    self.control.move_interval_sec = self._ctl_default_move_interval_sec
+                    # 모드 변경 시 EMA 누적값이 튀는 것 방지
+                    try:
+                        self.control.reset_ema()
+                    except Exception:
+                        pass
 
             # Palette modal (최우선)
             block_by_palette = False

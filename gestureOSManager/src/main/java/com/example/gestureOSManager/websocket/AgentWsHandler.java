@@ -54,14 +54,11 @@ public class AgentWsHandler extends TextWebSocketHandler {
 
   @Override
   public void afterConnectionEstablished(WebSocketSession session) {
-    sessions.set(session);
-    log.info("[WS] Agent connected: {} open={}", session.getId(), session.isOpen());
-
-    // Push latest saved settings to agent on connect (best-effort)
-    try {
-      controlService.updateSettings(settingsService.getSettings());
-    } catch (Exception ignore) {
-    }
+    // IMPORTANT:
+    // /ws/agent can be used by multiple clients (Python agent, dashboard, etc.).
+    // DO NOT blindly treat "any connection" as the agent session.
+    // The agent is identified by sending periodic {"type":"STATUS", ...}.
+    log.info("[WS] /ws/agent connected: {} open={}", session.getId(), session.isOpen());
   }
 
   @Override
@@ -74,6 +71,20 @@ public class AgentWsHandler extends TextWebSocketHandler {
       String type = node.get("type").asText();
 
       if ("STATUS".equals(type)) {
+        // Register this session as the *agent* only when we receive STATUS.
+        // This prevents the dashboard (which may also connect to /ws/agent for read-only updates)
+        // from hijacking the agent session in AgentSessionRegistry.
+        if (!sessions.isSame(session)) {
+          sessions.set(session);
+          log.info("[WS] Registered agent session via STATUS: {}", session.getId());
+
+          // Push latest saved settings to agent on first STATUS (best-effort)
+          try {
+            controlService.updateSettings(settingsService.getSettings());
+          } catch (Exception ignore) {
+          }
+        }
+
         AgentStatus st = om.treeToValue(node, AgentStatus.class);
         statusService.update(st);
         return;
@@ -122,6 +133,6 @@ public class AgentWsHandler extends TextWebSocketHandler {
   @Override
   public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
     sessions.clearIfSame(session);
-    log.info("[WS] Agent disconnected: {} {}", session.getId(), status);
+    log.info("[WS] /ws/agent disconnected: {} {}", session.getId(), status);
   }
 }

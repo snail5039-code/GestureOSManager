@@ -1,5 +1,6 @@
 package com.example.gestureOSManager.controller;
 
+import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -12,6 +13,7 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 @RestController
 @RequestMapping("/api/hud")
+@CrossOrigin(originPatterns = "*", allowCredentials = "true")
 public class HudController {
 
   private final HudWsHandler hudWsHandler;

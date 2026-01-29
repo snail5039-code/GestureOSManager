@@ -3,10 +3,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
-import time
 import ctypes
 
 import pyautogui
+
+from ..control import set_pen_down  # ✅ no new files, share pen-hold state via control.py
 
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0
@@ -63,13 +64,21 @@ if _IS_WIN:
 @dataclass
 class DrawHandler:
     # pinch->down debounce
-    down_debounce_sec: float = 0.03
+    down_debounce_sec: float = float(os.getenv("GESTUREOS_DRAW_DOWN_DEBOUNCE", "0.03"))
+    # ✅ Win11에서 PINCH 분류가 잠깐 흔들려도 선이 안 끊기게 "release latch"
+    up_debounce_sec: float = float(os.getenv("GESTUREOS_DRAW_UP_DEBOUNCE", "0.12"))
+
+    # ✅ 일부 앱(특히 Win11+Ink/리치 캔버스)에서 DOWN 상태가 가끔 씹히는 케이스 방지:
+    #    드로잉 중에는 일정 주기로 LEFTDOWN을 재주입(keepalive)해서 "안그려짐" 현상 완화
+    down_keepalive_sec: float = float(os.getenv("GESTUREOS_DRAW_DOWN_KEEPALIVE", "0.18"))
 
     sel_hold_sec: float = 0.28
     sel_cooldown_sec: float = 0.60
 
     pinch_start_ts: float | None = None
+    unpinch_start_ts: float | None = None
     down: bool = False
+    last_keepalive_ts: float = 0.0
 
     copy_hold: float | None = None
     last_copy_ts: float = 0.0
@@ -81,6 +90,8 @@ class DrawHandler:
 
     def reset(self):
         self.pinch_start_ts = None
+        self.unpinch_start_ts = None
+        self.last_keepalive_ts = 0.0
         if self.down:
             try:
                 if _IS_WIN:
@@ -90,6 +101,7 @@ class DrawHandler:
             except Exception:
                 pass
         self.down = False
+        set_pen_down(False)
 
         self.copy_hold = None
         self.copy_fired = False
@@ -102,9 +114,11 @@ class DrawHandler:
             return
 
         if cursor_gesture == "PINCH_INDEX":
+            self.unpinch_start_ts = None
             if self.pinch_start_ts is None:
                 self.pinch_start_ts = t
 
+            # press
             if (not self.down) and ((t - self.pinch_start_ts) >= self.down_debounce_sec):
                 try:
                     if _IS_WIN:
@@ -112,11 +126,30 @@ class DrawHandler:
                     else:
                         pyautogui.mouseDown(_pause=False)
                     self.down = True
+                    set_pen_down(True)
+                    self.last_keepalive_ts = t
                 except Exception:
                     pass
+
+            # keepalive (only while down)
+            if self.down and self.down_keepalive_sec > 0.0:
+                if (t - self.last_keepalive_ts) >= self.down_keepalive_sec:
+                    try:
+                        if _IS_WIN:
+                            _send_left_down()
+                        else:
+                            pyautogui.mouseDown(_pause=False)
+                    except Exception:
+                        pass
+                    self.last_keepalive_ts = t
+
         else:
             self.pinch_start_ts = None
-            if self.down:
+            if self.unpinch_start_ts is None:
+                self.unpinch_start_ts = t
+
+            # release only if non-pinch held long enough
+            if self.down and ((t - self.unpinch_start_ts) >= self.up_debounce_sec):
                 try:
                     if _IS_WIN:
                         _send_left_up()
@@ -125,6 +158,8 @@ class DrawHandler:
                 except Exception:
                     pass
                 self.down = False
+                set_pen_down(False)
+                self.last_keepalive_ts = 0.0
 
     def update_selection_shortcuts(
         self,

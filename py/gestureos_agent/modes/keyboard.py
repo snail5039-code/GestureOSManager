@@ -1,30 +1,39 @@
 # file: py/gestureos_agent/modes/keyboard.py
 from __future__ import annotations
 
+"""KEYBOARD mode.
+
+증상(Win11에서 자주 발생):
+  - 커서는 움직이는데 키 입력/특수키/방향키가 전혀 안 먹음
+
+원인(대표):
+  - SendInput에 전달하는 INPUT struct 크기/union 정의가 Windows 헤더와 다르면
+    ERROR_INVALID_PARAMETER(87)로 입력이 전부 무시됨.
+
+해결:
+  - 키 주입은 공용 win_inject(정상 크기/스캔코드/EXTENDED 처리 포함)만 사용.
+"""
+
 from dataclasses import dataclass, field
 from typing import Dict, Optional
-
 import os
-import time
-import ctypes
-from ctypes import wintypes
 
-# -----------------------------------------------------------------------------
-# KEYBOARD MODE (Windows): robust key injection
-#
-# Why keys were "not working":
-# - SendInput was returning ERROR_INVALID_PARAMETER (87) because our ctypes INPUT
-#   struct was smaller than Windows' expected INPUT size (we defined only KEYBDINPUT
-#   in the union). Windows validates cbSize strictly.
-#
-# Fix:
-# - Define full INPUT union (MOUSEINPUT/KEYBDINPUT/HARDWAREINPUT) to match the
-#   real WinAPI struct size.
-# - Use WinDLL(use_last_error=True) + ctypes.get_last_error() for debugging.
-# - Prefer SCANCODE injection; arrows must include EXTENDED flag.
-# -----------------------------------------------------------------------------
+from .. import win_inject
 
+try:
+    import pyautogui  # non-Windows fallback only
+
+    pyautogui.FAILSAFE = False
+    pyautogui.PAUSE = 0
+    pyautogui.MINIMUM_DURATION = 0
+    pyautogui.MINIMUM_SLEEP = 0
+except Exception:  # pragma: no cover
+    pyautogui = None
+
+
+_IS_WIN = (os.name == "nt")
 KEYBOARD_DEBUG = os.getenv("KEYBOARD_DEBUG", "0").strip() in ("1", "true", "True", "YES", "yes")
+
 
 def _dlog(*a):
     if KEYBOARD_DEBUG:
@@ -33,132 +42,21 @@ def _dlog(*a):
         except Exception:
             pass
 
-# Load user32 with last-error support
-user32 = ctypes.WinDLL("user32", use_last_error=True)
 
-# Types
-INPUT_MOUSE = 0
-INPUT_KEYBOARD = 1
-INPUT_HARDWARE = 2
+def _press_name(name: str) -> bool:
+    name_l = str(name).lower()
+    if _IS_WIN:
+        ok = win_inject.key_press_name(name_l)
+        _dlog("press", name_l, "ok=", ok)
+        return bool(ok)
+    if pyautogui:
+        try:
+            pyautogui.press(name_l)
+            return True
+        except Exception:
+            return False
+    return False
 
-KEYEVENTF_EXTENDEDKEY = 0x0001
-KEYEVENTF_KEYUP       = 0x0002
-KEYEVENTF_SCANCODE    = 0x0008
-
-MAPVK_VK_TO_VSC = 0
-
-# wintypes.ULONG_PTR isn't always present
-try:
-    ULONG_PTR = wintypes.ULONG_PTR
-except AttributeError:
-    ULONG_PTR = ctypes.c_uint64 if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_uint32
-
-# -----------------------------------------------------------------------------
-# WinAPI structs (must match Windows headers)
-# -----------------------------------------------------------------------------
-class MOUSEINPUT(ctypes.Structure):
-    _fields_ = [
-        ("dx",          wintypes.LONG),
-        ("dy",          wintypes.LONG),
-        ("mouseData",   wintypes.DWORD),
-        ("dwFlags",     wintypes.DWORD),
-        ("time",        wintypes.DWORD),
-        ("dwExtraInfo", ULONG_PTR),
-    ]
-
-class KEYBDINPUT(ctypes.Structure):
-    _fields_ = [
-        ("wVk",         wintypes.WORD),
-        ("wScan",       wintypes.WORD),
-        ("dwFlags",     wintypes.DWORD),
-        ("time",        wintypes.DWORD),
-        ("dwExtraInfo", ULONG_PTR),
-    ]
-
-class HARDWAREINPUT(ctypes.Structure):
-    _fields_ = [
-        ("uMsg",    wintypes.DWORD),
-        ("wParamL", wintypes.WORD),
-        ("wParamH", wintypes.WORD),
-    ]
-
-class INPUT_UNION(ctypes.Union):
-    _fields_ = [
-        ("mi", MOUSEINPUT),
-        ("ki", KEYBDINPUT),
-        ("hi", HARDWAREINPUT),
-    ]
-
-class INPUT(ctypes.Structure):
-    _fields_ = [
-        ("type", wintypes.DWORD),
-        ("u",    INPUT_UNION),
-    ]
-
-LPINPUT = ctypes.POINTER(INPUT)
-
-# Functions
-user32.SendInput.argtypes = (wintypes.UINT, LPINPUT, ctypes.c_int)
-user32.SendInput.restype  = wintypes.UINT
-
-user32.MapVirtualKeyW.argtypes = (wintypes.UINT, wintypes.UINT)
-user32.MapVirtualKeyW.restype  = wintypes.UINT
-
-# Virtual-Key Codes
-VK = {
-    "left": 0x25,
-    "up": 0x26,
-    "right": 0x27,
-    "down": 0x28,
-    "backspace": 0x08,
-    "space": 0x20,
-    "enter": 0x0D,
-    "esc": 0x1B,
-}
-
-def _send_inputs(inputs) -> int:
-    """Call SendInput and return sent count."""
-    sent = int(user32.SendInput(len(inputs), inputs, ctypes.sizeof(INPUT)))
-    if sent != len(inputs):
-        err = ctypes.get_last_error()
-        _dlog(f"SendInput partial/failed sent={sent} need={len(inputs)} last_error={err}")
-    return sent
-
-def _send_vk(vk_code: int):
-    """Send a key press using a scancode-first strategy (more reliable on Win11)."""
-    vk_code = int(vk_code)
-
-    # Extended keys that often need KEYEVENTF_EXTENDEDKEY
-    is_extended = vk_code in (0x25, 0x26, 0x27, 0x28)  # LEFT/UP/RIGHT/DOWN
-
-    # 1) Preferred: scancode injection
-    scan = int(user32.MapVirtualKeyW(vk_code, MAPVK_VK_TO_VSC)) & 0xFFFF
-    if scan:
-        flags_down = KEYEVENTF_SCANCODE | (KEYEVENTF_EXTENDEDKEY if is_extended else 0)
-        flags_up   = flags_down | KEYEVENTF_KEYUP
-
-        inp_down = INPUT(type=INPUT_KEYBOARD)
-        inp_down.u.ki = KEYBDINPUT(0, scan, flags_down, 0, 0)
-
-        inp_up = INPUT(type=INPUT_KEYBOARD)
-        inp_up.u.ki = KEYBDINPUT(0, scan, flags_up, 0, 0)
-
-        arr = (INPUT * 2)(inp_down, inp_up)
-        _send_inputs(arr)
-        return
-
-    # 2) Fallback: wVk injection
-    flags_down = (KEYEVENTF_EXTENDEDKEY if is_extended else 0)
-    flags_up   = flags_down | KEYEVENTF_KEYUP
-
-    inp_down = INPUT(type=INPUT_KEYBOARD)
-    inp_down.u.ki = KEYBDINPUT(vk_code, 0, flags_down, 0, 0)
-
-    inp_up = INPUT(type=INPUT_KEYBOARD)
-    inp_up.u.ki = KEYBDINPUT(vk_code, 0, flags_up, 0, 0)
-
-    arr = (INPUT * 2)(inp_down, inp_up)
-    _send_inputs(arr)
 
 def _pick_token(gesture: str, mapping: Dict[str, str], order: list[str]) -> Optional[str]:
     g = str(gesture or "").upper()
@@ -166,6 +64,7 @@ def _pick_token(gesture: str, mapping: Dict[str, str], order: list[str]) -> Opti
         if g == str(mapping.get(tok, "")).upper():
             return tok
     return None
+
 
 DEFAULT_BASE: Dict[str, str] = {
     "LEFT": "FIST",
@@ -183,13 +82,14 @@ DEFAULT_FN: Dict[str, str] = {
 
 DEFAULT_FN_HOLD = "PINCH_INDEX"
 
+
 @dataclass
 class KeyboardHandler:
-    stable_frames: int = 3
-    repeat_start_sec: float = 0.55
-    repeat_sec: float = 0.22
-    mod_grace_sec: float = 0.20
+    """Gesture -> keyboard input state machine."""
 
+    stable_frames: int = 3
+
+    # Hold before firing
     hold_sec: dict = field(
         default_factory=lambda: {
             "LEFT": 0.12,
@@ -203,6 +103,7 @@ class KeyboardHandler:
         }
     )
 
+    # Cooldown per token
     cooldown_sec: dict = field(
         default_factory=lambda: {
             "LEFT": 0.22,
@@ -216,11 +117,14 @@ class KeyboardHandler:
         }
     )
 
+    # Repeat (hold) behaviour
+    repeat_start_sec: float = 0.55
+    repeat_sec: float = 0.22
+
     last_token: str | None = None
     streak: int = 0
     token_start_ts: float = 0.0
 
-    armed: bool = True
     pressed_once: bool = False
     repeat_start_ts: float = 0.0
     last_repeat_ts: float = 0.0
@@ -238,42 +142,18 @@ class KeyboardHandler:
         }
     )
 
-    mod_until: float = 0.0
-
     def reset(self):
         self.last_token = None
         self.streak = 0
         self.token_start_ts = 0.0
-        self.armed = True
         self.pressed_once = False
         self.repeat_start_ts = 0.0
         self.last_repeat_ts = 0.0
-        self.mod_until = 0.0
-        for k in list(self.last_fire_map.keys()):
-            self.last_fire_map[k] = 0.0
 
-    def _press_token(self, token: str):
-        keymap = {
-            "LEFT": "left",
-            "RIGHT": "right",
-            "UP": "up",
-            "DOWN": "down",
-            "BACKSPACE": "backspace",
-            "SPACE": "space",
-            "ENTER": "enter",
-            "ESC": "esc",
-        }
-        k = keymap.get(token)
-        if not k:
-            return
-        vk = VK.get(k)
-        if vk is None:
-            return
-        _dlog(f"press {token} vk={hex(vk)} extended={vk in (0x25,0x26,0x27,0x28)}")
-        try:
-            _send_vk(int(vk))
-        except Exception as e:
-            _dlog("send_vk exception:", repr(e))
+    def _fire(self, token: str) -> bool:
+        key_name = token.lower()
+        # token names already match win_inject names
+        return _press_name(key_name)
 
     def update(
         self,
@@ -285,93 +165,77 @@ class KeyboardHandler:
         other_gesture: str,
         bindings: dict | None = None,
     ):
-        if not can_inject:
+        if (not can_inject) or (not got_cursor):
             self.reset()
             return
 
         bindings = bindings or {}
-
-        base_map_in = dict(bindings.get("BASE") or {})
-        fn_map_in = dict(bindings.get("FN") or {})
+        base: Dict[str, str] = dict(bindings.get("BASE") or DEFAULT_BASE)
+        fn: Dict[str, str] = dict(bindings.get("FN") or DEFAULT_FN)
         fn_hold = str(bindings.get("FN_HOLD") or DEFAULT_FN_HOLD).upper()
 
-        base_map: Dict[str, str] = dict(DEFAULT_BASE)
-        fn_map: Dict[str, str] = dict(DEFAULT_FN)
+        fn_active = bool(got_other and (str(other_gesture).upper() == fn_hold))
+        mapping = fn if fn_active else base
+        order = ["BACKSPACE", "SPACE", "ENTER", "ESC"] if fn_active else ["LEFT", "RIGHT", "UP", "DOWN"]
 
-        for k, v in base_map_in.items():
-            base_map[str(k).upper()] = str(v).upper()
-        for k, v in fn_map_in.items():
-            fn_map[str(k).upper()] = str(v).upper()
-
-        if got_other and str(other_gesture).upper() == fn_hold:
-            self.mod_until = t + self.mod_grace_sec
-        mod_active = t < self.mod_until
-
-        token = None
-        if got_cursor:
-            if mod_active:
-                token = _pick_token(cursor_gesture, fn_map, ["BACKSPACE", "SPACE", "ENTER", "ESC"])
-            if token is None:
-                token = _pick_token(cursor_gesture, base_map, ["LEFT", "RIGHT", "UP", "DOWN"])
+        token = _pick_token(cursor_gesture, mapping, order)
 
         if token is None:
+            # clear token tracking but keep cooldown state
             self.last_token = None
             self.streak = 0
             self.token_start_ts = 0.0
-            self.armed = True
             self.pressed_once = False
-            self.repeat_start_ts = 0.0
             return
 
+        # stable frame filter
         if token == self.last_token:
             self.streak += 1
         else:
             self.last_token = token
             self.streak = 1
-            self.armed = True
-            self.pressed_once = False
-            self.repeat_start_ts = 0.0
             self.token_start_ts = t
+            self.pressed_once = False
+            self.repeat_start_ts = t
+            self.last_repeat_ts = 0.0
 
-        if self.streak < self.stable_frames:
+        if self.streak < int(self.stable_frames):
             return
 
-        need_hold = self.hold_sec.get(token, 0.12)
+        # hold time before first fire
+        need_hold = float(self.hold_sec.get(token, 0.12))
         if (t - self.token_start_ts) < need_hold:
             return
 
-        repeat_tokens = {"LEFT", "RIGHT", "UP", "DOWN", "BACKSPACE"}
-        one_shot_tokens = {"SPACE", "ENTER", "ESC"}
+        # per-token cooldown
+        cd = float(self.cooldown_sec.get(token, 0.22))
+        last_fire = float(self.last_fire_map.get(token, 0.0))
 
-        cd = self.cooldown_sec.get(token, 0.25)
-        last_fire = self.last_fire_map.get(token, 0.0)
-        if t < last_fire + cd:
+        # 1) first press
+        if not self.pressed_once:
+            if t < last_fire + cd:
+                return
+            if self._fire(token):
+                self.last_fire_map[token] = t
+            self.pressed_once = True
+            self.repeat_start_ts = t
+            self.last_repeat_ts = t
             return
 
-        if token in repeat_tokens:
-            if not self.pressed_once:
-                _dlog("fired token=", token, "cursor=", cursor_gesture, "other=", other_gesture, "mod=", mod_active)
-                self._press_token(token)
-                self.last_fire_map[token] = t
-                self.pressed_once = True
-                self.repeat_start_ts = t
-                self.last_repeat_ts = t
-                return
-
-            if (t - self.repeat_start_ts) < self.repeat_start_sec:
-                return
-            if t >= self.last_repeat_ts + self.repeat_sec:
-                _dlog("repeat token=", token)
-                self._press_token(token)
-                self.last_fire_map[token] = t
-                self.last_repeat_ts = t
+        # 2) repeat while holding same gesture
+        if (t - self.repeat_start_ts) < float(self.repeat_start_sec):
             return
 
-        if token in one_shot_tokens:
-            if not self.armed:
-                return
-            _dlog("fired token=", token, "cursor=", cursor_gesture, "other=", other_gesture, "mod=", mod_active)
-            self._press_token(token)
+        # repeat interval (respect cooldown too)
+        interval = max(float(self.repeat_sec), cd)
+        if t < (self.last_repeat_ts + interval):
+            return
+        if t < (last_fire + cd):
+            return
+
+        if self._fire(token):
             self.last_fire_map[token] = t
-            self.armed = False
-            return
+        self.last_repeat_ts = t
+
+
+__all__ = ["KeyboardHandler"]

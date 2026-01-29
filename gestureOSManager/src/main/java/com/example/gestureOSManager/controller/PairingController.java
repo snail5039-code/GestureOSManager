@@ -25,7 +25,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController // 이 클래스가 REST API를 처리하는 컨트롤러임을 선언합니다.
 @RequestMapping("/api") // 이 컨트롤러의 모든 주소는 /api로 시작합니다. (예: /api/pairing)
-@CrossOrigin(origins = "http://localhost:5173") // 프론트엔드(Vite 등)와의 통신을 위해 CORS 설정을 허용합니다.
+@CrossOrigin(originPatterns = "*", allowCredentials = "true")
 public class PairingController {
 
 	// application.yml 파일에서 설정값을 읽어옵니다. 값이 없으면 콜론(:) 뒤의 기본값을 사용합니다.
