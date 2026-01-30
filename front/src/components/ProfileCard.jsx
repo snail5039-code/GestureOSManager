@@ -31,7 +31,11 @@ function IconRefresh({ spinning }) {
 }
 
 const api = axios.create({
-  baseURL: "/api",
+  // ✅ dev(vite)에서는 proxy(/api), 설치본(file://)에서는 Web(Spring:8082)
+  baseURL:
+    typeof window !== "undefined" && window.location.protocol === "file:"
+      ? "http://127.0.0.1:8082/api"
+      : "/api",
   timeout: 5000,
   headers: { Accept: "application/json" },
 });

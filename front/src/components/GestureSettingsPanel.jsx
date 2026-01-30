@@ -4,7 +4,11 @@ import { createPortal } from "react-dom";
 import { THEME } from "../theme/themeTokens";
 
 const api = axios.create({
-  baseURL: "/api",
+  // ✅ dev(vite)에서는 proxy(/api), 설치본(file://)에서는 Manager(JAR:8080)
+  baseURL:
+    typeof window !== "undefined" && window.location.protocol === "file:"
+      ? "http://127.0.0.1:8080/api"
+      : "/api",
   timeout: 7000,
   headers: { Accept: "application/json" },
 });
