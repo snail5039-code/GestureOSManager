@@ -98,7 +98,7 @@ export default function GamePage() {
   const chanceStartTimeRef = useRef(0);
   const timerReqRef = useRef(null);
 
-  const attackTypes = new Set(["jab", "straight", "hook", "uppercut", "fail"]);
+  const attackTypes = new Set(["jab", "straight", "hook", "uppercut", "fail", "timeout"]);
   const enemyHitDelayMs = {
     jab_l: 250,
     jab_r: 250,
@@ -118,11 +118,24 @@ export default function GamePage() {
       motionRef.current = { ...data, t: ts };
       setMotion(data);
     });
-    return () => socketRef.current.disconnect();
+    // Chance Time lifecycle: backend is the single source of truth
+    const handleChanceEnd = () => {
+      setGameState("DEFENSE");
+      setActiveKey("base");
+    };
+    socketRef.current.on("chance_end", handleChanceEnd);
+
+    return () => {
+      socketRef.current.off("chance_end", handleChanceEnd);
+      socketRef.current.disconnect();
+    };
   }, []);
 
   useEffect(() => {
-    if (socketRef.current) socketRef.current.emit("chance", { active: gameState === "ATTACK_CHANCE" });
+    // New contract: one-shot trigger, no front-driven deactivate
+    if (socketRef.current && gameState === "ATTACK_CHANCE") {
+      socketRef.current.emit("chance", { chance_trigger: true });
+    }
   }, [gameState]);
 
   // 찬스타임 공격
@@ -171,21 +184,14 @@ export default function GamePage() {
   };
 
   const handlePlayerAttack = (type) => {
-    if (type === "fail") {
+    if (type === "fail" || type === "timeout") {
       setAttackGauge(0);
-      setGameState("DEFENSE");
-      setActiveKey("base");
-      setAttackGauge(0);
-      setGameState("DEFENSE");
-      setActiveKey("base");
       showMessage("FAIL", 200);
       return;
     }
     const damages = { jab: 15, straight: 25, hook: 70, uppercut: 100 };
     setEnemyHp((prev) => Math.max(0, prev - (damages[type] || 20)));
     setAttackGauge(0);
-    setGameState("DEFENSE");
-    setActiveKey("base");
     showMessage(`${type.toUpperCase()}!!`, 400);
   };
 
