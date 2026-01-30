@@ -1,0 +1,69 @@
+﻿diff --git a/py/gestureos_agent/agents/hands_agent.py b/py/gestureos_agent/agents/hands_agent.py
+index 1111111..2222222 100644
+--- a/py/gestureos_agent/agents/hands_agent.py
++++ b/py/gestureos_agent/agents/hands_agent.py
+@@ -1,3 +1,5 @@
++# -*- coding: utf-8 -*-
++
+ # py/gestureos_agent/agents/hands_agent.py
+ import os
+ import time
+@@ -27,7 +29,7 @@ NO_CAMERA_POLL_SEC = float(os.environ.get("GESTUREOS_NO_CAMERA_POLL_SEC", "0.20")
+ NO_CAMERA_STATUS_SEC = float(os.environ.get("GESTUREOS_NO_CAMERA_STATUS_SEC", "0.25"))
+ 
+ # =============================================================================
+-# SAFE imports for modes (import ?ㅽ뙣?대룄 NameError濡?二쎌? ?딄쾶)
++# SAFE imports for modes (import 실패해도 NameError 나지 않게)
+ # =============================================================================
+ _MODE_IMPORT_ERRS = []
+ 
+@@ -116,9 +118,9 @@ def _get_os_cursor_xy():
+         return (None, None)
+ 
+ 
+ # -----------------------------------------------------------------------------
+-# ??Win11 ?덉젙??醫뚰겢由?二쇱엯 (VKEY/KEYBOARD?먯꽌 PINCH濡?OSK 踰꾪듉 ?꾨Ⅴ湲?
++# Win11 안정적 좌클릭 주입 (VKEY/KEYBOARD에서 PINCH로 OSK 버튼 클릭용)
+ # -----------------------------------------------------------------------------
+ _IS_WIN = (os.name == "nt")
+ if _IS_WIN:
+@@ -565,7 +567,7 @@ class HandsAgent:
+             return False
+ 
+     def _send_status_no_camera(self, fps: float = 0.0):
+-        self.cursor_bubble = f"NO CAMERA ??retry {CAM_RETRY_SEC:.1f}s"
++        self.cursor_bubble = f"NO CAMERA / retry {CAM_RETRY_SEC:.1f}s"
+         self._send_status(
+             fps=float(fps),
+             cursor_gesture="NONE",
+@@ -697,7 +699,7 @@ class HandsAgent:
+ 
+         hover = hud.get_menu_hover()
+-        self.cursor_bubble = f"MENU ??{hover or '...'} (PINCH=?뺤젙, FIST=痍⑥냼)"
++        self.cursor_bubble = f"MENU / {hover or '...'} (PINCH=확인, FIST=취소)"
+ 
+         no_inject = bool(getattr(self.cfg, "no_inject", False))
+         if (not no_inject) and (t >= self.reacquire_until) and got_cursor and (cursor_gesture == "OPEN_PALM"):
+@@ -1037,11 +1039,11 @@ class HandsAgent:
+                     if self.ui_locked:
+                         self._apply_ui_locked_side_effects()
+-                        self.cursor_bubble = "UI ?좉툑!"
++                        self.cursor_bubble = "UI 잠금!"
+                     else:
+-                        self.cursor_bubble = "UI ?댁젣!"
++                        self.cursor_bubble = "UI 해제!"
+ 
+                     try:
+                         self.send_event("UI_LOCK", {"locked": bool(self.ui_locked)})
+                     except Exception:
+                         pass
+@@ -1076,7 +1078,7 @@ class HandsAgent:
+                         self._osk_toggle()
+                         self.last_osk_toggle_ts = t
+                         self.osk_toggle_hold_start = None
+-                        self.cursor_bubble = "OSK ?좉?!"
++                        self.cursor_bubble = "OSK 토글!"
+                 else:
+                     self.osk_toggle_hold_start = None
+             else:
+                 self.osk_toggle_hold_start = None

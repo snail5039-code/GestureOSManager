@@ -61,7 +61,8 @@ class PhoneAutoRunner:
         self.enable = enable
         self.mjpeg_port = mjpeg_port
         self.udp_port = udp_port
-        self.procs = []
+        # name -> subprocess.Popen
+        self.procs = {}
 
         temp = os.getenv("TEMP") or os.getenv("TMP") or "."
         self.log_dir = os.path.join(temp, "GestureOS_phone")
@@ -132,7 +133,7 @@ class PhoneAutoRunner:
         if not self.procs:
             return
 
-        for name, p, log_fp in self.procs:
+        for name, p in list(self.procs.items()):
             try:
                 if p.poll() is not None:
                     continue
@@ -160,14 +161,6 @@ class PhoneAutoRunner:
                 print(f"[PHONE] stopped {name}", flush=True)
             except Exception:
                 pass
-            finally:
-                try:
-                    if log_fp:
-                        log_fp.flush()
-                        log_fp.close()
-                except Exception:
-                    pass
-
         self.procs.clear()
 
 

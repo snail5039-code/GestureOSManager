@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const net = require("net");
-const { spawn, spawnSync } = require("child_process");
+const { spawn } = require("child_process");
 
 const ICON_PATH = path.join(__dirname, "assets", "icon.png");
 
@@ -12,6 +12,35 @@ const PROTOCOL = "gestureos";
 
 let managerProc = null;
 let agentProc = null;
+
+// ------------------------------
+// Agent PID tracking (no tasklist/taskkill)
+// ------------------------------
+function agentPidFile() {
+  // startAgentExe is only called after app is ready.
+  return path.join(app.getPath("userData"), "GestureOSAgent.pid");
+}
+
+function readAgentPid() {
+  try {
+    const p = parseInt(String(fs.readFileSync(agentPidFile(), "utf8")).trim(), 10);
+    return Number.isFinite(p) ? p : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeAgentPid(pid) {
+  try {
+    fs.writeFileSync(agentPidFile(), String(pid), "utf8");
+  } catch {}
+}
+
+function clearAgentPid() {
+  try {
+    fs.unlinkSync(agentPidFile());
+  } catch {}
+}
 
 // ------------------------------
 // Deep link
@@ -141,15 +170,12 @@ async function waitForPort(host, port, totalWaitMs = 15000) {
   return false;
 }
 
-function isProcessRunningWin(imageName) {
+function isPidAlive(pid) {
+  if (!pid) return false;
   try {
-    const r = spawnSync("tasklist", ["/FI", `IMAGENAME eq ${imageName}`], {
-      windowsHide: true,
-      shell: false,
-      encoding: "utf8",
-    });
-    const out = String(r.stdout || "");
-    return out.toLowerCase().includes(String(imageName).toLowerCase());
+    // On Windows this does not spawn cmd.exe; it uses native process APIs.
+    process.kill(pid, 0);
+    return true;
   } catch {
     return false;
   }
@@ -189,10 +215,16 @@ function startAgentExe() {
     return;
   }
 
-  // 이미 떠 있으면 또 띄우지 마
-  if (process.platform === "win32" && isProcessRunningWin("GestureOSAgent.exe")) {
-    console.warn("[BOOT] agent already running -> skip spawn");
-    return;
+  // Avoid double-spawn without calling tasklist (prevents cmd/conhost flashes)
+  if (process.platform === "win32") {
+    const prevPid = readAgentPid();
+    if (prevPid && isPidAlive(prevPid)) {
+      console.warn("[BOOT] agent already running (pidfile) -> skip spawn");
+      return;
+    }
+    if (prevPid && !isPidAlive(prevPid)) {
+      clearAgentPid();
+    }
   }
 
   agentProc = spawn(exePath, [], {
@@ -201,7 +233,14 @@ function startAgentExe() {
     stdio: "ignore",
   });
 
-  agentProc.on("exit", () => { agentProc = null; });
+  if (process.platform === "win32") {
+    writeAgentPid(agentProc.pid);
+  }
+
+  agentProc.on("exit", () => {
+    agentProc = null;
+    if (process.platform === "win32") clearAgentPid();
+  });
 }
 
 function stopChildren() {
@@ -213,13 +252,23 @@ function stopChildren() {
     return;
   }
 
-  const killPid = (pid) => {
-    if (!pid) return;
-    try { spawn("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }); } catch {}
+  // Don't call taskkill (it can spawn cmd/conhost). Kill directly.
+  const killProc = (p) => {
+    if (!p) return;
+    try { p.kill(); } catch {}
   };
 
-  killPid(agentProc?.pid);
-  killPid(managerProc?.pid);
+  const killPid = (pid) => {
+    if (!pid) return;
+    try { process.kill(pid); } catch {}
+  };
+
+  killProc(agentProc);
+  killProc(managerProc);
+
+  // If we don't have a handle (e.g. app restarted), fall back to PID file.
+  killPid(readAgentPid());
+  clearAgentPid();
 
   agentProc = null;
   managerProc = null;

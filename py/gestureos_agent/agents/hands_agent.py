@@ -1,3 +1,4 @@
+﻿# -*- coding: utf-8 -*-
 # py/gestureos_agent/agents/hands_agent.py
 import os
 import time
@@ -32,9 +33,6 @@ CAM_RETRY_SEC = float(os.environ.get("GESTUREOS_CAM_RETRY_SEC", "2.0"))
 NO_CAMERA_POLL_SEC = float(os.environ.get("GESTUREOS_NO_CAMERA_POLL_SEC", "0.20"))
 NO_CAMERA_STATUS_SEC = float(os.environ.get("GESTUREOS_NO_CAMERA_STATUS_SEC", "0.25"))
 
-# =============================================================================
-# SAFE imports for modes (import 실패해도 NameError로 죽지 않게)
-# =============================================================================
 _MODE_IMPORT_ERRS = []
 
 
@@ -119,14 +117,11 @@ def _get_os_cursor_xy():
         return (None, None)
 
 
-# -----------------------------------------------------------------------------
-# ✅ Win11 안정형 좌클릭 주입 (VKEY/KEYBOARD에서 PINCH로 OSK 버튼 누르기)
-# -----------------------------------------------------------------------------
+
 _IS_WIN = (os.name == "nt")
 if _IS_WIN:
     from ctypes import wintypes
 
-    # ✅ 일부 Python에서 wintypes.ULONG_PTR 없음 → 직접 정의
     try:
         ULONG_PTR = wintypes.ULONG_PTR
     except AttributeError:
@@ -152,6 +147,7 @@ if _IS_WIN:
         _fields_ = [("type", wintypes.DWORD), ("u", _INPUT_UNION)]
 
     def _win_left_click():
+        """Win11 안정적 좌클릭 주입 (VKEY/KEYBOARD에서 PINCH로 OSK 버튼 클릭용)"""
         user32 = ctypes.windll.user32
         down = _INPUT(type=INPUT_MOUSE, u=_INPUT_UNION(mi=_MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTDOWN, 0, 0)))
         up = _INPUT(type=INPUT_MOUSE, u=_INPUT_UNION(mi=_MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTUP, 0, 0)))
@@ -198,12 +194,7 @@ OSK_TOGGLE_COOLDOWN_SEC = 0.6
 UI_LOCK_HOLD_SEC = 8.0
 UI_LOCK_COOLDOWN_SEC = 1.0
 
-# =============================================================================
-# ✅ APP START/STOP gesture (global)
-# - OPEN_PALM은 이동이랑 충돌 -> 사용 금지
-# - 정지 상태 Start: 양손 V_SIGN 홀드
-# - 실행 상태 Stop: 양손 FIST 홀드
-# =============================================================================
+
 APP_START_HOLD_SEC = 0.9
 APP_STOP_HOLD_SEC = 0.9
 APP_CMD_COOLDOWN_SEC = 1.5
@@ -241,64 +232,89 @@ def _pack_xy(p: Optional[dict]):
 
 
 # =============================================================================
-# OSK robust helpers (Win+Ctrl+O + tasklist verification)
+# OSK robust helpers (no tasklist/taskkill - prevents console flashes)
 # =============================================================================
-def _tasklist_has(exe_name: str) -> bool:
-    # Check if process exists without flashing a console window on Windows.
-    if os.name != "nt":
+_CREATE_NO_WINDOW = 0x08000000
+_PROCESS_TERMINATE = 0x0001
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_TH32CS_SNAPPROCESS = 0x00000002
+_MAX_PATH = 260
+
+if os.name == "nt":
+    from ctypes import wintypes
+
+    _kernel32 = ctypes.windll.kernel32
+
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ULONG_PTR),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", wintypes.LONG),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", wintypes.WCHAR * _MAX_PATH),
+        ]
+
+    def _pids_by_exe(exe_name: str) -> List[int]:
+        exe_l = str(exe_name).lower()
+        pids: List[int] = []
+        snap = _kernel32.CreateToolhelp32Snapshot(_TH32CS_SNAPPROCESS, 0)
+        if snap == ctypes.c_void_p(-1).value or snap == 0:
+            return pids
+        try:
+            entry = PROCESSENTRY32W()
+            entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+            ok = _kernel32.Process32FirstW(snap, ctypes.byref(entry))
+            while ok:
+                try:
+                    name = entry.szExeFile
+                    if name and str(name).lower() == exe_l:
+                        pids.append(int(entry.th32ProcessID))
+                except Exception:
+                    pass
+                ok = _kernel32.Process32NextW(snap, ctypes.byref(entry))
+        finally:
+            _kernel32.CloseHandle(snap)
+        return pids
+
+    def _proc_has(exe_name: str) -> bool:
+        return len(_pids_by_exe(exe_name)) > 0
+
+    def _terminate_pid(pid: int) -> bool:
+        try:
+            pid_i = int(pid)
+        except Exception:
+            return False
+        h = _kernel32.OpenProcess(_PROCESS_TERMINATE | _PROCESS_QUERY_LIMITED_INFORMATION, False, pid_i)
+        if not h:
+            return False
+        try:
+            return bool(_kernel32.TerminateProcess(h, 1))
+        finally:
+            _kernel32.CloseHandle(h)
+
+    def _terminate_by_exe(exe_name: str) -> int:
+        n = 0
+        for pid in _pids_by_exe(exe_name):
+            if _terminate_pid(pid):
+                n += 1
+        return n
+else:
+    def _pids_by_exe(exe_name: str) -> List[int]:
+        return []
+
+    def _proc_has(exe_name: str) -> bool:
         return False
-    try:
-        exe = str(exe_name)
 
-        # ✅ No console flash in frozen/GUI apps
-        kwargs = dict(
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            check=False,
-        )
-        if _IS_WIN:
-            kwargs["creationflags"] = _CREATE_NO_WINDOW
-
-        r = subprocess.run(
-            ["tasklist", "/FI", f"IMAGENAME eq {exe}"],
-            **kwargs,
-        )
-        out = (r.stdout or "").lower()
-        return exe.lower() in out
-    except Exception:
+    def _terminate_pid(pid: int) -> bool:
         return False
 
-
-def _send_win_ctrl_o():
-    """
-    Win + Ctrl + O : Windows 내장 'On-Screen Keyboard' 토글 단축키.
-    환경/권한 영향이 가장 적어서 OSK 안 뜨는 문제의 마지막 안전망.
-    """
-    if os.name != "nt":
-        return False
-
-    user32 = ctypes.windll.user32
-
-    VK_LWIN = 0x5B
-    VK_CONTROL = 0x11
-    VK_O = 0x4F
-
-    KEYEVENTF_KEYUP = 0x0002
-
-    try:
-        # down
-        user32.keybd_event(VK_LWIN, 0, 0, 0)
-        user32.keybd_event(VK_CONTROL, 0, 0, 0)
-        user32.keybd_event(VK_O, 0, 0, 0)
-        time.sleep(0.02)
-        # up
-        user32.keybd_event(VK_O, 0, KEYEVENTF_KEYUP, 0)
-        user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
-        user32.keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, 0)
-        return True
-    except Exception:
-        return False
+    def _terminate_by_exe(exe_name: str) -> int:
+        return 0
 
 
 class HandsAgent:
@@ -309,7 +325,7 @@ class HandsAgent:
     - RUSH_COLOR: HSV stick tracking left/right (ColorStickTracker)
 
     NOTE:
-    - VKEY 모드는 "윈도우 OSK/TabTip 띄우기"만 담당.
+    - VKEY 모드는 "입력" 대신 OSK/TabTip 띄우기만 담당.
       (커서 이동/클릭은 hands_agent에서 그대로 처리)
     """
 
@@ -317,7 +333,7 @@ class HandsAgent:
         self._request_close_preview = False
         self.cfg = cfg
 
-        # ✅ UI 잠금(프론트 토글) : enabled는 유지하되 제스처 inject만 막는다
+        # UI 잠금(프론트에서 enabled 켜도 제스처 inject 막는 용도)
         self.ui_locked = False
 
         if _MODE_IMPORT_ERRS:
@@ -344,7 +360,7 @@ class HandsAgent:
 
         self.preview = (not getattr(cfg, "headless", False))
 
-        # ✅ 기본: 오른손이 주손(커서손)
+        # 기본: 오른손이 주손(커서 손)
         self.cursor_hand_label = "Left" if getattr(cfg, "force_cursor_left", False) else "Right"
         print(
             "[CFG] force_cursor_left=",
@@ -414,13 +430,13 @@ class HandsAgent:
 
         # preview window
         self.window_open = False
-        # ✅ Win11: HUD 초기 표시가 안 뜨는 케이스 대비 (첫 STATUS 이후 1회 리프레시)
+        # Win11: HUD 초기 표시가 안 뜨는 케이스 대비(첫 STATUS 이후 1회 리프레시)
         self._hud_bootstrap_done = False
         self._hud_bootstrap_t0 = time.time()
 
         # ---- command timing guards ----
-        # 일부 UI/상태 동기화 타이밍에서 SET_MODE 직후 DISABLE이 연달아 오는 케이스가 있어
-        # KEYBOARD 모드 입력 파이프라인이 바로 꺼지는 문제를 디버깅/완화하기 위한 가드.
+        # 로컬 UI/상태 동기화에서 SET_MODE 직후 DISABLE이 들어오는 케이스가 있어
+        # KEYBOARD 입력 파이프라인이 바로 꺼지는 문제를 완화하기 위한 가드.
         self._last_set_mode_ts = 0.0
         self._disable_guard_sec = float(os.getenv("GESTUREOS_DISABLE_GUARD_SEC", "0.8"))
         self._disable_guard = os.getenv("GESTUREOS_DISABLE_GUARD", "1").strip() in ("1", "true", "True", "YES", "yes")
@@ -428,7 +444,7 @@ class HandsAgent:
 
         # ---- OSK state ----
         self.osk_open = False
-        self._osk_proc = None  # ✅ 내가 띄운 osk pid 추적(가능한 경우)
+        self._osk_proc = None  # 가능한 경우 osk pid 추적
         self.osk_toggle_hold_start = None
         self.last_osk_toggle_ts = 0.0
 
@@ -436,12 +452,12 @@ class HandsAgent:
         self.ui_lock_hold_start = None
         self.last_ui_lock_toggle_ts = 0.0
 
-        # ✅✅ APP start/stop state
+        # 앱 start/stop state
         self.app_start_hold_start = None
         self.app_stop_hold_start = None
         self.last_app_cmd_ts = 0.0
 
-        # 팔레트 열기 직전 OSK 상태 저장(“열려있었으면 닫고, 닫힐 때 복구”)
+        # 팔레트 직전 OSK 상태 저장
         self.palette_prev_osk_open = False
 
         # mediapipe hands
@@ -474,17 +490,17 @@ class HandsAgent:
             "other": deque(maxlen=5),
         }
 
-        # ✅✅ pinch debounce / hysteresis (cursor hand)
+        # pinch debounce / hysteresis (cursor hand)
         self._pinch_down = False
         self._pinch_t0 = 0.0  # pinch candidate start time
         self._pinch_hold_ms = 90  # tweakable: 70~140ms
         self._pinch_hys_on = 1.00  # ON threshold multiplier (tight)
         self._pinch_hys_off = 1.25  # OFF threshold multiplier (looser)
 
-        # ✅ VKEY/KEYBOARD 강제 클릭(핀치) 엣지 감지
+        # VKEY/KEYBOARD 강제 좌클릭(핀치) 주입 상태
         self._vkey_prev_pinch = False
         self._vkey_last_click_ts = 0.0
-        self._vkey_click_cd = 0.28  # 과다 클릭 방지
+        self._vkey_click_cd = 0.28  # 과도 클릭 방지
 
         # ws
         self.ws = WSClient(
@@ -505,17 +521,16 @@ class HandsAgent:
             self._enter_vkey_mode()
 
     # -------------------------------------------------------------------------
-    # OSK helpers
+    # OSK helpers (no tasklist/taskkill to avoid console flashes)
     # -------------------------------------------------------------------------
     def _osk_open(self):
         """
-        배포 안정형(강화):
+        배포 안정성 강화:
         - 우선순위:
-          0) Win+Ctrl+O 토글(권한/환경 영향 적음)
-          1) ms-inputapp: (Win11 터치 키보드)
+          0) Win+Ctrl+O 토글 (권한/환경 영향 적음)
+          1) ms-inputapp: (Win11 터치 키보드 URI)
           2) TabTip.exe start 실행
           3) osk.exe 직접 실행
-        - 실행 후 tasklist로 실제 떠있는지 확인해 self.osk_open을 더 정확히 세팅
         """
         if os.name != "nt":
             return
@@ -525,11 +540,19 @@ class HandsAgent:
         self._osk_proc = None
         launched = False
 
-        # 0) 단축키 토글
+        # 이미 떠있으면 스킵
+        try:
+            if _proc_has("osk.exe") or _proc_has("TabTip.exe"):
+                self.osk_open = True
+                return
+        except Exception:
+            pass
+
+        # 0) 핫키 토글
         try:
             if _send_win_ctrl_o():
                 time.sleep(0.12)
-                if _tasklist_has("osk.exe"):
+                if _proc_has("osk.exe"):
                     launched = True
                     print("[VKEY] toggled OSK via Win+Ctrl+O", flush=True)
         except Exception as e:
@@ -538,10 +561,9 @@ class HandsAgent:
         # 1) Win11 터치키보드 URI
         if not launched:
             try:
-                # os.startfile uses ShellExecute and does not spawn a console window
-                os.startfile('ms-inputapp:')
+                os.startfile("ms-inputapp:")
                 time.sleep(0.12)
-                if _tasklist_has("TabTip.exe"):
+                if _proc_has("TabTip.exe"):
                     launched = True
                 print("[VKEY] launched ms-inputapp:", flush=True)
             except Exception as e:
@@ -552,45 +574,50 @@ class HandsAgent:
             tabtip = r"C:\Program Files\Common Files\Microsoft Shared\ink\TabTip.exe"
             try:
                 if os.path.exists(tabtip):
-                    # Use os.startfile to avoid console flash
                     os.startfile(tabtip)
                     time.sleep(0.12)
-                    if _tasklist_has("TabTip.exe"):
+                    if _proc_has("TabTip.exe"):
                         launched = True
                     print("[VKEY] launched TabTip via start", flush=True)
             except Exception as e:
                 print("[VKEY] TabTip(start) failed:", repr(e), flush=True)
 
-        # 3) osk.exe 직접
+        # 3) osk.exe 직접 실행
         if not launched:
             try:
                 p = subprocess.Popen(
                     ["osk.exe"],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL,
+                    close_fds=True,
                     shell=False,
+                    creationflags=_CREATE_NO_WINDOW,
                 )
                 self._osk_proc = p
                 time.sleep(0.12)
-                if _tasklist_has("osk.exe"):
+                if _proc_has("osk.exe"):
                     launched = True
                 print("[VKEY] launched osk.exe (pid=%s)" % getattr(p, "pid", None), flush=True)
             except Exception as e:
                 print("[VKEY] osk.exe failed:", repr(e), flush=True)
 
-        self.osk_open = bool(launched)
+        # 마지막 확인
+        self.osk_open = bool(launched or _proc_has("osk.exe") or _proc_has("TabTip.exe"))
 
     def _osk_close(self):
         if os.name != "nt":
             return
 
+        # 핫키로 한번 끄기 시도(떠있을 때만)
         try:
-            if _tasklist_has("osk.exe"):
+            if _proc_has("osk.exe"):
                 _send_win_ctrl_o()
                 time.sleep(0.10)
         except Exception:
             pass
 
+        # 핸들로 들고 있던 PID 우선 종료
         pid = 0
         try:
             pid = int(getattr(self._osk_proc, "pid", 0) or 0) if self._osk_proc else 0
@@ -599,31 +626,25 @@ class HandsAgent:
 
         if pid:
             try:
-                subprocess.run(
-                    ["taskkill", "/PID", str(pid), "/T", "/F"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
-                )
+                _terminate_pid(pid)
             except Exception:
                 pass
 
-        for exe in ("osk.exe", "TabTip.exe"):
-            try:
-                subprocess.run(
-                    ["taskkill", "/IM", exe, "/F"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
-                )
-            except Exception:
-                pass
+        # 남은 프로세스 정리
+        try:
+            _terminate_by_exe("osk.exe")
+        except Exception:
+            pass
+        try:
+            _terminate_by_exe("TabTip.exe")
+        except Exception:
+            pass
 
         self._osk_proc = None
         self.osk_open = False
 
     def _osk_toggle(self):
-        if os.name == "nt" and _tasklist_has("osk.exe"):
+        if os.name == "nt" and (_proc_has("osk.exe") or _proc_has("TabTip.exe")):
             self.osk_open = True
         if self.osk_open:
             self._osk_close()
@@ -640,7 +661,7 @@ class HandsAgent:
         self.ws.send_dict(msg)
 
     def _force_hide_menu(self):
-        """모드 변경/disable 시 라디얼이 남는 문제 방지: 강제 hide + 상태 리셋"""
+        """모드 변경/disable 직후 HUD가 남는 문제 방지: 강제 hide + 상태 리셋"""
         hud = getattr(self.cfg, "hud", None)
         if hud:
             try:
@@ -681,8 +702,8 @@ class HandsAgent:
             self.locked = False
 
         elif typ == "DISABLE":
-            # ✅ KEYBOARD 모드에서 SET_MODE 직후 들어오는 DISABLE(동기화 레이스)로
-            # 입력 파이프라인이 바로 꺼지는 케이스가 있어 가드(기본 ON).
+            # KEYBOARD 모드에서 SET_MODE 직후 들어오는 DISABLE(동기화/레이스)로
+            # 입력 파이프라인이 바로 꺼지는 케이스 완화(기본 ON).
             if (
                 getattr(self, "_disable_guard", False)
                 and str(getattr(self, "mode", "")).upper() == "KEYBOARD"
@@ -842,10 +863,10 @@ class HandsAgent:
 
     def apply_set_mode(self, new_mode: str):
         """
-        ✅ 강제 정책:
-        - 모드 바뀌는 순간 라디얼(모드창) 무조건 숨김 (남는 현상 방지)
+        강제 핫픽스:
+        - 모드 바꾸는 순간 팔레트 모달 무조건 강제 hide
         - VKEY -> 다른 모드면 OSK 무조건 닫기
-        - 다른 모드 -> VKEY면 OSK 오픈
+        - 다른 모드 -> VKEY면 OSK 띄우기
         """
         prev_mode = str(self.mode).upper()
 
@@ -954,7 +975,7 @@ class HandsAgent:
             return False
 
     def _send_status_no_camera(self, fps: float = 0.0):
-        self.cursor_bubble = f"NO CAMERA • retry {CAM_RETRY_SEC:.1f}s"
+        self.cursor_bubble = f"NO CAMERA / retry {CAM_RETRY_SEC:.1f}s"
         self._send_status(
             fps=float(fps),
             cursor_gesture="NONE",
@@ -1051,7 +1072,7 @@ class HandsAgent:
             return False
 
         hover = hud.get_menu_hover()
-        self.cursor_bubble = f"MENU • {hover or '...'} (PINCH=확정, FIST=취소)"
+        self.cursor_bubble = f"MENU / {hover or '...'} (PINCH=확인, FIST=취소)"
 
         no_inject = bool(getattr(self.cfg, "no_inject", False))
         if (not no_inject) and (t >= self.reacquire_until) and got_cursor and (cursor_gesture == "OPEN_PALM"):
@@ -1248,9 +1269,7 @@ class HandsAgent:
                 except Exception as e:
                     print("[RUSH_COLOR] tracker error:", e, flush=True)
 
-            # ✅ Main hand policy: physical RIGHT hand is always the main/cursor hand.
-            # We prefer MediaPipe handedness (after MIRROR swap above). If handedness is missing
-            # (rare), we fall back to x-position with mirror awareness.
+            # Main hand policy: physical RIGHT hand is always the main/cursor hand.
             cursor_lm = None  # main (RIGHT)
             other_lm = None   # aux  (LEFT)
 
@@ -1269,17 +1288,13 @@ class HandsAgent:
                     if aux_h is not None:
                         other_lm = aux_h["lm"]
                     else:
-                        # If there is another hand but it wasn't labeled LEFT, keep it as aux
                         others = [h for h in hands_meta if h is not main_h]
                         if others:
                             other_lm = _best(others)["lm"]
                 else:
-                    # Strict main-hand policy: if RIGHT hand is not present, keep cursor_lm=None.
-                    # Still expose LEFT as aux so UI can show it.
                     if aux_h is not None:
                         other_lm = aux_h["lm"]
 
-                    # Fallback when handedness is missing/None for all hands:
                     if (main_h is None) and (aux_h is None) and hands_list:
                         hands_with_pos = []
                         for label, lm in hands_list:
@@ -1290,10 +1305,9 @@ class HandsAgent:
                             hands_with_pos.append((cx, lm))
                         hands_with_pos.sort(key=lambda x: x[0])  # left -> right in mirrored frame
 
-                        # In mirrored frame, physical RIGHT hand tends to appear on the LEFT side.
-                        # Use the remaining hand as aux only (strict main policy).
                         if len(hands_with_pos) >= 1:
                             other_lm = hands_with_pos[-1][1]
+
             self.learner.tick_capture(cursor_lm=cursor_lm, other_lm=other_lm)
 
             got_cursor = (cursor_lm is not None)
@@ -1325,7 +1339,7 @@ class HandsAgent:
 
                 mode_u = str(self.mode).upper()
 
-                # ✅ FIX: PINCH는 learner가 절대 덮어쓰지 못하게 rule 우선
+                # FIX: PINCH일 때 learner가 다른 값을 내도 rule 우선
                 if cursor_gesture_rule == "PINCH_INDEX":
                     cursor_gesture = "PINCH_INDEX"
                 else:
@@ -1392,12 +1406,6 @@ class HandsAgent:
             else:
                 self._force_hide_menu()
 
-            # -----------------------------------------------------------------
-            # ✅ APP START/STOP (gesture -> 즉시 로컬 적용 + WS EVENT는 알림용)
-            # - OPEN_PALM은 이동이랑 충돌 -> 사용 금지
-            # - 정지 상태 Start: 양손 V_SIGN 홀드
-            # - 실행 상태 Stop: 양손 FIST 홀드
-            # -----------------------------------------------------------------
             if (not block_by_palette) and got_cursor and got_other:
                 can_fire = (t >= (self.last_app_cmd_ts + APP_CMD_COOLDOWN_SEC))
 
@@ -1406,16 +1414,14 @@ class HandsAgent:
                     if self.app_start_hold_start is None:
                         self.app_start_hold_start = t
                     if can_fire and (t - self.app_start_hold_start) >= APP_START_HOLD_SEC:
-                        # ✅ 로컬에서 즉시 start 처리 (WS 의존 제거)
+                        # 로컬에서 즉시 start 처리 (WS 없이도)
                         self.enabled = True
                         self.locked = False
-                        # ui_locked는 유지(원하면 여기서 False로 풀어도 됨)
 
                         self.last_app_cmd_ts = t
                         self.app_start_hold_start = None
                         self.cursor_bubble = "START!"
 
-                        # 알림용 이벤트(옵션)
                         try:
                             self.send_event("APP_START", {"source": "gesture"})
                         except Exception:
@@ -1428,7 +1434,7 @@ class HandsAgent:
                     if self.app_stop_hold_start is None:
                         self.app_stop_hold_start = t
                     if can_fire and (t - self.app_stop_hold_start) >= APP_STOP_HOLD_SEC:
-                        # ✅ 로컬에서 즉시 stop 처리 (DISABLE과 동일한 처리)
+                        # 로컬에서 즉시 stop 처리 (DISABLE과 동일 처리)
                         self.enabled = False
                         self._reset_side_effects()
                         self._osk_close()
@@ -1438,7 +1444,6 @@ class HandsAgent:
                         self.app_stop_hold_start = None
                         self.cursor_bubble = "STOP!"
 
-                        # 알림용 이벤트(옵션)
                         try:
                             self.send_event("APP_STOP", {"source": "gesture"})
                         except Exception:
@@ -1449,8 +1454,7 @@ class HandsAgent:
                 self.app_start_hold_start = None
                 self.app_stop_hold_start = None
 
-
-            # UI 잠금 토글 (FIST 홀드)
+            # UI 잠금 토글(FIST 홀드)
             block_osk_toggle_by_ui_lock = False
 
             if self.enabled and got_cursor and (cursor_gesture == "FIST") and (mode_u != "VKEY"):
@@ -1491,7 +1495,7 @@ class HandsAgent:
                     send_event=lambda name, payload: self.send_event(name, payload),
                 )
 
-            # VKEY에서 OSK 토글 사인: FIST 홀드
+            # VKEY에서 OSK 토글: FIST 홀드
             if (
                 (not block_by_palette)
                 and (not self.ui_locked)
@@ -1587,11 +1591,10 @@ class HandsAgent:
             kb_mouse_mod_g = get_binding(self.settings, "KEYBOARD", "MOUSE_MOD", default="FIST")
             kb_mouse_gate = bool(got_other and (other_gesture == kb_mouse_mod_g))
 
-            # HUD/status에 게이트 상태도 노출(설정 바꿔도 말풍선/패널이 따라오게)
             self._kb_mouse_gate = bool(kb_mouse_gate)
             self._kb_mouse_mod_g = str(kb_mouse_mod_g)
 
-            # ✅ KEYBOARD에서 '두손 조합'일 때만 마우스 커서/클릭 허용
+            # KEYBOARD에서 "손 조합"일 때만 마우스 커서/클릭 허용
             can_mouse_inject_kb = (
                 self.enabled
                 and (mode_u == "KEYBOARD")
@@ -1601,13 +1604,11 @@ class HandsAgent:
                 and kb_mouse_gate
             )
 
-            # HUD/상태 표시용(말풍선에서 KEYBOARD 내 마우스 게이트 구분)
             try:
                 self._kb_mouse_gate = bool(can_mouse_inject_kb)
                 self._kb_mouse_mod_g = str(kb_mouse_mod_g)
             except Exception:
                 pass
-
 
             can_ppt_inject = (
                 self.enabled
@@ -1628,7 +1629,7 @@ class HandsAgent:
                 can_vkey_click = False
                 can_mouse_inject_kb = False
 
-            # VKEY: OSK는 띄우기만, 입력은 OS 커서 이동+클릭으로 처리
+            # VKEY: OSK 띄우기 + OS 커서 이동+클릭으로 처리
             if mode_u == "VKEY":
                 self.locked = False
                 can_mouse_inject = (
@@ -1653,7 +1654,7 @@ class HandsAgent:
                 can_vkey_click = False
                 can_mouse_inject_kb = False
 
-            # UI 잠금이면 최종적으로 전부 차단
+            # UI 잠금이면 최종적으로 모두 차단
             if self.ui_locked:
                 can_mouse_inject = False
                 can_draw_inject = False
@@ -1676,13 +1677,11 @@ class HandsAgent:
                 elif mode_u == "PRESENTATION":
                     do_move = (cursor_gesture == "OPEN_PALM")
                 elif mode_u == "KEYBOARD":
-                    # KEYBOARD: other-hand gate(MOUSE_MOD)일 때만 커서 이동
                     if can_mouse_inject_kb:
                         dragging = bool(getattr(self.mouse_click, "dragging", False)) if self.mouse_click else False
                         do_move = (cursor_gesture == mouse_move_g) or (dragging and cursor_gesture == mouse_click_g)
                     else:
                         do_move = False
-
 
                 if do_move:
                     ux, uy = self.control.map_control_to_screen(cursor_cx, cursor_cy)
@@ -1690,7 +1689,7 @@ class HandsAgent:
                     self.control.move_cursor(ex, ey, t)
 
             # -------------------------------------------------------------
-            # ✅ 핵심: VKEY/KEYBOARD에서 PINCH를 SendInput 좌클릭으로 강제 주입
+            # VKEY에서 PINCH를 SendInput 좌클릭으로 강제 주입
             # -------------------------------------------------------------
             if _IS_WIN and (mode_u == "VKEY") and self.enabled and (not self.ui_locked) and (not block_by_palette):
                 is_pinch = (str(cursor_gesture).upper() == "PINCH_INDEX")
@@ -1720,7 +1719,7 @@ class HandsAgent:
                         click_gesture=mouse_click_g,
                     )
 
-                # 우클릭: MOUSE, KEYBOARD(두손 조합 게이트일 때)
+                # 우클릭: MOUSE, KEYBOARD(손 조합 게이트일 때)
                 if self.mouse_right:
                     can_rc = (can_mouse_inject if mode_u == "MOUSE" else can_mouse_inject_kb) and (not block_by_palette)
                     self.mouse_right.update(
@@ -1731,12 +1730,11 @@ class HandsAgent:
                     )
 
             else:
-                # ✅ VKEY 포함: MouseClickDrag/RightClick 완전 OFF (VKEY는 _win_left_click()만 사용)
+                # VKEY 포함: MouseClickDrag/RightClick 완전 OFF (VKEY는 _win_left_click()만 사용)
                 if self.mouse_click:
                     self.mouse_click.update(t, cursor_gesture, False, click_gesture=mouse_click_g)
                 if self.mouse_right:
                     self.mouse_right.update(t, cursor_gesture, False, gesture=mouse_right_g)
-
 
             # draw
             if mode_u == "DRAW" and self.draw:
@@ -1785,21 +1783,15 @@ class HandsAgent:
                 if self.mouse_scroll:
                     self.mouse_scroll.update(t, False, 0.5, False)
 
-            # keyboard (KEYBOARD 모드에서도 키입력은 유지하되, 마우스 게이트 중 충돌 제스처는 무시)
             # keyboard
             if (not block_by_palette) and self.kb:
-                # ✅ 키보드 입력은 KEYBOARD 모드에서 항상 켠다
                 kb_can = can_kb_inject
 
-                # ✅ KEYBOARD에서 다른 손 FIST(MOUSE_MOD)로 마우스 게이트가 켜진 상태면
-                # OPEN_PALM/PINCH_INDEX는 "마우스 이동/클릭"로 쓰이므로
-                # 키보드 방향키(UP/DOWN)로도 같이 발사되는 걸 막는다.
                 cursor_g_for_kb = cursor_gesture
                 if can_mouse_inject_kb:
-                    if cursor_gesture in (mouse_move_g, mouse_click_g):  # 기본: OPEN_PALM, PINCH_INDEX
+                    if cursor_gesture in (mouse_move_g, mouse_click_g):
                         cursor_g_for_kb = "NONE"
 
-                # 디버그: 키보드 파이프라인 상태(왜 안 나가는지) 출력
                 if os.getenv("KEYBOARD_DEBUG", "0") in ("1", "true", "True", "YES", "yes"):
                     try:
                         if (t - float(getattr(self, "_kb_dbg_last_ts", 0.0))) >= 0.25:
@@ -1834,7 +1826,6 @@ class HandsAgent:
             else:
                 if self.kb:
                     self.kb.reset()
-
 
             self._send_status(
                 fps=fps,
@@ -1993,7 +1984,6 @@ class HandsAgent:
                 if fn_hold:
                     payload["kbFnHold"] = str(fn_hold)
 
-                # KEYBOARD에서 마우스 게이트(두손 조합) 상태
                 payload["kbMouseGate"] = bool(getattr(self, "_kb_mouse_gate", False))
                 payload["kbMouseMod"] = str(getattr(self, "_kb_mouse_mod_g", ""))
             except Exception:
@@ -2021,7 +2011,7 @@ class HandsAgent:
             except Exception:
                 pass
 
-        # --- common HUD/UI fields (모드와 무관하게 항상 나가야 함) ---
+        # --- common HUD/UI fields ---
         if getattr(self, "cursor_bubble", None):
             payload["cursorBubble"] = str(self.cursor_bubble)
 
@@ -2087,4 +2077,3 @@ class HandsAgent:
                     hud.force_refresh()
                 except Exception:
                     pass
-
