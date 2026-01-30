@@ -26,7 +26,7 @@ const api = axios.create({
   // ✅ dev(vite)에서는 proxy(/api), 설치본(file://)에서는 Web(Spring:8082)
   baseURL:
     typeof window !== "undefined" && window.location.protocol === "file:"
-      ? "http://127.0.0.1:8082/api"
+      ? "http://127.0.0.1:8080/api"
       : "/api",
   timeout: 8000,
   headers: { Accept: "application/json" },

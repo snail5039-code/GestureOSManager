@@ -1,6 +1,6 @@
 // src/components/DebugChat.jsx
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import { webUrl } from "../api/baseURL";
+import { apiUrl } from "../api/baseURL";
 
 function cn(...xs) {
   return xs.filter(Boolean).join(" ");
@@ -70,9 +70,15 @@ const HELP_TEXT = [
 ].join("\n");
 
 async function callAi(message) {
-  const r = await fetch(webUrl("/api/ai/chat"), {
+  const token = localStorage.getItem("gos.accountAccessToken") || localStorage.getItem("accessToken") || "";
+
+  const r = await fetch(apiUrl("/api/ai/chat"), {
     method: "POST",
-    headers: { "Content-Type": "application/json; charset=utf-8" },
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     body: JSON.stringify({ message }),
   });
 

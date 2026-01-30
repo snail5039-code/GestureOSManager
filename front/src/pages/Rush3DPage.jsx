@@ -16,6 +16,27 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import { THEME } from "../theme/themeTokens";
 
+// =============================================================================
+// Vite/Electron(file://) 호환용 URL 헬퍼
+// - API는 8080(러쉬/기본 기능)
+// - 정적 리소스(audio/sfx)는 Vite base(개발: "/", 빌드: "./")를 따라감
+// =============================================================================
+const __IS_FILE__ = typeof window !== "undefined" && window.location.protocol === "file:";
+const __API_ORIGIN__ = __IS_FILE__ ? "http://127.0.0.1:8080" : "";
+const __ASSET_BASE__ = (import.meta.env?.BASE_URL ?? "/");
+
+function apiUrl(path) {
+  if (!path) return path;
+  return __API_ORIGIN__ ? `${__API_ORIGIN__}${path}` : path;
+}
+
+function assetUrl(path) {
+  const base = __ASSET_BASE__.endsWith("/") ? __ASSET_BASE__ : `${__ASSET_BASE__}/`;
+  const p = String(path || "").replace(/^\//, "");
+  return `${base}${p}`;
+}
+
+
 /* =============================================================================
    유틸
 ============================================================================= */
@@ -1715,7 +1736,7 @@ export default function Rush3DPage({ status, connected = true }) {
       ctrl = new AbortController();
 
       try {
-        const r = await fetch(apiUrl("/api/control/status"), { signal: controller.signal });
+        const r = await fetch(apiUrl("/api/control/status"), { signal: ctrl.signal });
         const j = await r.json();
         j.__ts = performance.now();
         if (alive) statusRef.current = j;
@@ -1739,7 +1760,7 @@ export default function Rush3DPage({ status, connected = true }) {
       {
         id: "da",
         title: "다 멍청해",
-        src: encodeURI("/audio/다 멍청해.mp3"),
+        src: encodeURI(assetUrl("audio/다 멍청해.mp3")),
         bpm: 120,
         offsetSec: 0.65,
         seed: 11,
@@ -1747,7 +1768,7 @@ export default function Rush3DPage({ status, connected = true }) {
       {
         id: "lemon",
         title: "Lemon Tree",
-        src: encodeURI("/audio/lemon_tree.mp3"),
+        src: encodeURI(assetUrl("audio/lemon_tree.mp3")),
         bpm: 128,
         offsetSec: 0.8,
         seed: 22,
@@ -1755,7 +1776,7 @@ export default function Rush3DPage({ status, connected = true }) {
       {
         id: "rush",
         title: "Rush F",
-        src: encodeURI("/audio/rush_e.mp3"),
+        src: encodeURI(assetUrl("audio/rush_e.mp3")),
         bpm: 112,
         offsetSec: 0.7,
         seed: 33,
@@ -1826,7 +1847,7 @@ export default function Rush3DPage({ status, connected = true }) {
     if (sfxRef.current.ctx.state !== "running")
       await sfxRef.current.ctx.resume();
 
-    const res = await fetch("/sfx/slice.wav", { cache: "force-cache" });
+    const res = await fetch(assetUrl("sfx/slice.wav"), { cache: "force-cache" });
     const arr = await res.arrayBuffer();
     const buf = await sfxRef.current.ctx.decodeAudioData(arr);
     sfxRef.current.buf = buf;
@@ -1914,7 +1935,7 @@ export default function Rush3DPage({ status, connected = true }) {
       const modeParam = rushInput === "COLOR" ? "RUSH_COLOR" : "RUSH_HAND";
 
       const r1 = await fetch(
-        `/api/control/mode?mode=${encodeURIComponent(modeParam)}`,
+        apiUrl(`/api/control/mode?mode=${encodeURIComponent(modeParam)}`),
         {
           method: "POST",
         },

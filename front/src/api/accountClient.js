@@ -3,18 +3,19 @@ import axios from "axios";
 const isFile = typeof window !== "undefined" && window.location.protocol === "file:";
 
 // dev(vite)에서는 proxy(/api) 유지
-// 설치본(file://)에서는 직접 백엔드로 라우팅
-// - API(대부분): 8080
-// - AUTH(/auth/*): 8082
+// 설치본(file://)에서는 백엔드 포트가 2개라서 요청별로 분기
+// - 기본 기능 API: 8080
+// - 인증/회원/소셜(auth, members, oauth2 등): 8082
 const API_BASE = isFile ? "http://127.0.0.1:8080/api" : "/api";
 const AUTH_BASE = isFile ? "http://127.0.0.1:8082/api" : "/api";
 
-function isAuthPath(url) {
-  const u = String(url || "").replace(/^https?:\/\/[^/]+/i, ""); // full URL 제거
+function isAuthOrMemberPath(url) {
+  const u = String(url || "");
   return (
-    u.startsWith("/api/auth/") ||
     u.startsWith("/auth/") ||
     u.startsWith("auth/") ||
+    u.startsWith("/members/") ||
+    u.startsWith("members/") ||
     u.startsWith("/oauth2/") ||
     u.startsWith("oauth2/") ||
     u.startsWith("/login") ||
@@ -26,12 +27,13 @@ function isAuthPath(url) {
 
 function applyBaseRouting(config) {
   if (!isFile || !config) return config;
-  if (!config.url) return config;
-  config.baseURL = isAuthPath(config.url) ? AUTH_BASE : API_BASE;
+  // axios 요청 URL(/auth/..., /members/...) 기준으로 baseURL을 고정
+  config.baseURL = isAuthOrMemberPath(config.url) ? AUTH_BASE : API_BASE;
   return config;
 }
 
 export const accountApi = axios.create({
+  // 기본값은 8080으로 잡고, file:// 모드에서만 요청별로 8082로 분기
   baseURL: API_BASE,
   withCredentials: true,
   timeout: 8000,
@@ -40,7 +42,6 @@ export const accountApi = axios.create({
 
 const refreshApi = axios.create({
   baseURL: API_BASE,
-  baseURL: AUTH_BASE,
   withCredentials: true,
   timeout: 8000,
   headers: { Accept: "application/json" },

@@ -19,6 +19,11 @@ export const useAuth = () => useContext(AuthContext);
 
 const LS_KEY = "gos.accountAccessToken";
 
+// file://(Electron 패키징)에서는 http://127.0.0.1 로 요청이 나가면
+// 브라우저/Chromium 쿠키 SameSite 정책 때문에 refreshToken 쿠키가 안 붙는 경우가 흔함.
+// => 설치본에서는 "쿠키 기반 refresh"를 시도하지 않고, accessToken이 없으면 로그인 유도.
+const IS_FILE = typeof window !== "undefined" && window.location.protocol === "file:";
+
 // 필요하면 환경변수로 제어
 const DEFAULT_POLL_MS = 0; // 0이면 폴링 비활성 (예: 15000 넣으면 15초마다 me 동기화)
 
@@ -108,19 +113,24 @@ export default function AuthProvider({ children }) {
 
   // ✅ 부팅 시:
   // (1) localStorage 토큰 있으면 me
-  // (2) 없으면 refreshToken 쿠키로 token 발급 시도 후 me
+  // (2) (웹에서만) refreshToken 쿠키로 token 발급 시도 후 me
+  //     - file:// 패키징에선 쿠키가 안 붙는 경우가 많아서 refresh 시도 자체를 스킵
   useEffect(() => {
     (async () => {
       try {
         const t = getToken();
         if (t) {
           await refreshMe();
-        } else {
-          const newToken = await tryRefreshAccessToken().catch(() => null);
-          if (newToken) {
-            setToken(newToken);
-            await refreshMe();
-          }
+          return;
+        }
+
+        // ✅ Electron(file://) 설치본: 쿠키 기반 refresh 시도 X
+        if (IS_FILE) return;
+
+        const newToken = await tryRefreshAccessToken().catch(() => null);
+        if (newToken) {
+          setToken(newToken);
+          await refreshMe();
         }
       } catch {
         await logout();
