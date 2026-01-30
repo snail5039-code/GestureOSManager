@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const net = require("net");
-const { spawn, execSync } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 
 const ICON_PATH = path.join(__dirname, "assets", "icon.png");
 
@@ -143,8 +143,13 @@ async function waitForPort(host, port, totalWaitMs = 15000) {
 
 function isProcessRunningWin(imageName) {
   try {
-    const out = execSync(`tasklist /FI "IMAGENAME eq ${imageName}"`, { encoding: "utf8" });
-    return out.toLowerCase().includes(imageName.toLowerCase());
+    const r = spawnSync("tasklist", ["/FI", `IMAGENAME eq ${imageName}`], {
+      windowsHide: true,
+      shell: false,
+      encoding: "utf8",
+    });
+    const out = String(r.stdout || "");
+    return out.toLowerCase().includes(String(imageName).toLowerCase());
   } catch {
     return false;
   }

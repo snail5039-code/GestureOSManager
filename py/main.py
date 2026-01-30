@@ -93,34 +93,40 @@ class PhoneAutoRunner:
             print(f"[PHONE] missing script: {script_path} (skip {name})", flush=True)
             return
 
-        log_path = os.path.join(self.log_dir, f"{name}.log")
-        try:
-            log_fp = open(log_path, "a", encoding="utf-8")
-        except Exception:
-            log_fp = None
-
-        creationflags = 0
-        if os.name == "nt":
-            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
-
+        # python으로 실행 (기존 그대로)
         cmd = [sys.executable, script_path]
-        try:
-            p = subprocess.Popen(
-                cmd,
-                cwd=os.path.dirname(script_path),
-                creationflags=creationflags,
-                stdout=log_fp if log_fp else subprocess.DEVNULL,
-                stderr=log_fp if log_fp else subprocess.DEVNULL,
+        
+        # ✅ 콘솔/창 깜박임 방지: Windows 숨김 실행 세팅
+        popen_kwargs = dict(
+            cwd=os.path.dirname(script_path),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
+
+        if os.name == "nt":
+            CREATE_NO_WINDOW = 0x08000000
+            DETACHED_PROCESS = 0x00000008
+
+            si = subprocess.STARTUPINFO()
+            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            si.wShowWindow = subprocess.SW_HIDE
+
+            popen_kwargs.update(
+                startupinfo=si,
+                creationflags=CREATE_NO_WINDOW | DETACHED_PROCESS,
             )
-            self.procs.append((name, p, log_fp))
-            print(f"[PHONE] started {name} (pid={p.pid}) log={log_path}", flush=True)
+
+        try:
+            p = subprocess.Popen(cmd, **popen_kwargs)
+            self.procs[name] = p
+            print(f"[PHONE] spawned: {name} pid={p.pid}", flush=True)
+            return p
         except Exception as e:
-            print(f"[PHONE] failed to start {name}: {e}", flush=True)
-            try:
-                if log_fp:
-                    log_fp.close()
-            except Exception:
-                pass
+            print(f"[PHONE] spawn failed: {name} ({e})", flush=True)
+            return
+
 
     def stop(self):
         if not self.procs:

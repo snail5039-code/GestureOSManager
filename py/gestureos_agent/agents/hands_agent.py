@@ -244,16 +244,25 @@ def _pack_xy(p: Optional[dict]):
 # OSK robust helpers (Win+Ctrl+O + tasklist verification)
 # =============================================================================
 def _tasklist_has(exe_name: str) -> bool:
+    # Check if process exists without flashing a console window on Windows.
     if os.name != "nt":
         return False
     try:
         exe = str(exe_name)
-        r = subprocess.run(
-            ["tasklist", "/FI", f"IMAGENAME eq {exe}"],
+
+        # ✅ No console flash in frozen/GUI apps
+        kwargs = dict(
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
             check=False,
+        )
+        if _IS_WIN:
+            kwargs["creationflags"] = _CREATE_NO_WINDOW
+
+        r = subprocess.run(
+            ["tasklist", "/FI", f"IMAGENAME eq {exe}"],
+            **kwargs,
         )
         out = (r.stdout or "").lower()
         return exe.lower() in out
@@ -529,11 +538,8 @@ class HandsAgent:
         # 1) Win11 터치키보드 URI
         if not launched:
             try:
-                subprocess.Popen(
-                    ["cmd", "/c", "start", "", "ms-inputapp:"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
+                # os.startfile uses ShellExecute and does not spawn a console window
+                os.startfile('ms-inputapp:')
                 time.sleep(0.12)
                 if _tasklist_has("TabTip.exe"):
                     launched = True
@@ -546,11 +552,8 @@ class HandsAgent:
             tabtip = r"C:\Program Files\Common Files\Microsoft Shared\ink\TabTip.exe"
             try:
                 if os.path.exists(tabtip):
-                    subprocess.Popen(
-                        ["cmd", "/c", "start", "", tabtip],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
+                    # Use os.startfile to avoid console flash
+                    os.startfile(tabtip)
                     time.sleep(0.12)
                     if _tasklist_has("TabTip.exe"):
                         launched = True
