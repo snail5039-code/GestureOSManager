@@ -1,4 +1,3 @@
-// front/src/App.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import TitleBar from "./components/TitleBar";
 import Dashboard from "./pages/Dashboard";
@@ -9,7 +8,7 @@ import PairingQrModal from "./components/PairingQrModal";
 import TrainingLab from "./pages/TrainingLab";
 import { THEME } from "./theme/themeTokens";
 
-// ✅ axios 인스턴스 (baseURL이 file://일 때 127.0.0.1:8082/api 로 잡히는 애)
+// ✅ axios 인스턴스 (dev에서는 /api 프록시, 설치본(file://)에서는 포트별 자동 라우팅)
 import { api } from "./api/client";
 
 const VALID_THEMES = new Set(["dark", "light", "neon", "rose", "devil"]);
@@ -46,12 +45,11 @@ export default function App() {
 
         if (!code) return;
 
-        // ✅ fetch("/api/...") -> api.post("/...") 로 교체
+        // ✅ fetch("/api/...") -> api.post("/...") 로 교체 (file://에서도 동작)
         const { data } = await api.post(
           "/auth/bridge/consume",
           { code },
           {
-            // fetch credentials:"include" 대응
             withCredentials: true,
             headers: {
               "Content-Type": "application/json",
@@ -82,13 +80,9 @@ export default function App() {
 
     // ✅ fetch(`/api/hud/show?...`) -> api.post("/hud/show", params)
     api
-      .post(
-        "/hud/show",
-        null,
-        {
-          params: { enabled: osHudOn ? "true" : "false" },
-        }
-      )
+      .post("/hud/show", null, {
+        params: { enabled: osHudOn ? "true" : "false" },
+      })
       .catch(() => {});
   }, [osHudOn]);
 
@@ -110,7 +104,6 @@ export default function App() {
   const refreshPairing = () => {
     let cancelled = false;
 
-    // ✅ fetch("/api/pairing") -> api.get("/pairing")
     api
       .get("/pairing")
       .then((res) => res?.data)
@@ -128,12 +121,7 @@ export default function App() {
   const savePairingName = async (nextName) => {
     const name = String(nextName || "").trim() || "PC";
     try {
-      // ✅ fetch POST -> api.post
-      await api.post(
-        "/pairing",
-        { name },
-        { headers: { "Content-Type": "application/json" } }
-      );
+      await api.post("/pairing", { name }, { headers: { "Content-Type": "application/json" } });
     } catch {}
     refreshPairing();
   };
@@ -143,12 +131,7 @@ export default function App() {
     if (!pc) return;
 
     try {
-      // ✅ fetch POST -> api.post
-      await api.post(
-        "/pairing",
-        { pc },
-        { headers: { "Content-Type": "application/json" } }
-      );
+      await api.post("/pairing", { pc }, { headers: { "Content-Type": "application/json" } });
     } catch {}
     refreshPairing();
   };
@@ -189,25 +172,12 @@ export default function App() {
   return (
     <div
       data-theme={theme}
-      className={cn(
-        "w-[100dvw] h-[100dvh] flex flex-col overflow-hidden min-w-0 min-h-0 relative",
-        t.page
-      )}
+      className={cn("w-[100dvw] h-[100dvh] flex flex-col overflow-hidden min-w-0 min-h-0 relative", t.page)}
     >
       {/* background */}
       <div className="pointer-events-none fixed inset-0 z-0">
-        <div
-          className={cn(
-            "absolute -top-40 -left-40 h-[520px] w-[520px] rounded-full blur-3xl",
-            t.glow1
-          )}
-        />
-        <div
-          className={cn(
-            "absolute -bottom-52 -right-48 h-[560px] w-[560px] rounded-full blur-3xl",
-            t.glow2
-          )}
-        />
+        <div className={cn("absolute -top-40 -left-40 h-[520px] w-[520px] rounded-full blur-3xl", t.glow1)} />
+        <div className={cn("absolute -bottom-52 -right-48 h-[560px] w-[560px] rounded-full blur-3xl", t.glow2)} />
         <div className={cn("absolute inset-0 bg-[size:60px_60px]", t.grid)} />
       </div>
 
@@ -230,7 +200,7 @@ export default function App() {
         />
       </div>
 
-      {/* ✅ 핵심: HUD(오버레이)가 바닥을 덮어도 콘텐츠가 안 가려지게 main에 bottom padding */}
+      {/* ✅ HUD(오버레이)가 바닥을 덮어도 콘텐츠가 안 가려지게 main에 bottom padding */}
       <main
         className={cn(
           "relative z-10 flex-1 min-h-0 min-w-0 text-sm",
@@ -238,12 +208,7 @@ export default function App() {
           screen !== "rush" ? (hudOn ? "pb-28" : "pb-6") : ""
         )}
       >
-        <div
-          className={cn(
-            screen === "dashboard" ? "block" : "hidden",
-            "w-full min-w-0"
-          )}
-        >
+        <div className={cn(screen === "dashboard" ? "block" : "hidden", "w-full min-w-0")}>
           <Dashboard
             hudOn={hudOn}
             onToggleHud={toggleHud}
@@ -256,9 +221,7 @@ export default function App() {
           />
         </div>
 
-        {screen === "rush" && (
-          <Rush3DPage status={hudFeed?.status} connected={hudFeed?.connected ?? true} />
-        )}
+        {screen === "rush" && <Rush3DPage status={hudFeed?.status} connected={hudFeed?.connected ?? true} />}
         {screen === "settings" && <Settings theme={theme} />}
         {screen === "train" && <TrainingLab theme={theme} />}
       </main>
@@ -271,9 +234,7 @@ export default function App() {
             connected={hudFeed?.connected ?? true}
             modeOptions={hudFeed?.modeOptions}
             onSetMode={(m) => hudActionsRef.current.applyMode?.(m)}
-            onEnableToggle={(next) =>
-              next ? hudActionsRef.current.start?.() : hudActionsRef.current.stop?.()
-            }
+            onEnableToggle={(next) => (next ? hudActionsRef.current.start?.() : hudActionsRef.current.stop?.())}
             onPreviewToggle={() => hudActionsRef.current.togglePreview?.()}
             onLockToggle={(nextLocked) => {
               if (hudActionsRef.current.setLock) return hudActionsRef.current.setLock(nextLocked);

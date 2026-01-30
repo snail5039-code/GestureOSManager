@@ -1,4 +1,4 @@
-// src/api/client.js
+// front/src/api/client.js
 export { accountApi as api } from "./accountClient";
 export {
   attachAccountInterceptors,

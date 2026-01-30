@@ -3,22 +3,52 @@ import axios from "axios";
 const isFile = typeof window !== "undefined" && window.location.protocol === "file:";
 
 // dev(vite)에서는 proxy(/api) 유지
-// 설치본(file://)에서는 직접 백엔드로
-const baseURL = isFile ? "http://localhost:8082/api" : "/api";
+// 설치본(file://)에서는 직접 백엔드로 라우팅
+// - API(대부분): 8080
+// - AUTH(/auth/*): 8082
+const API_BASE = isFile ? "http://127.0.0.1:8080/api" : "/api";
+const AUTH_BASE = isFile ? "http://127.0.0.1:8082/api" : "/api";
+
+function isAuthPath(url) {
+  const u = String(url || "").replace(/^https?:\/\/[^/]+/i, ""); // full URL 제거
+  return (
+    u.startsWith("/api/auth/") ||
+    u.startsWith("/auth/") ||
+    u.startsWith("auth/") ||
+    u.startsWith("/oauth2/") ||
+    u.startsWith("oauth2/") ||
+    u.startsWith("/login") ||
+    u.startsWith("login") ||
+    u.startsWith("/logout") ||
+    u.startsWith("logout")
+  );
+}
+
+function applyBaseRouting(config) {
+  if (!isFile || !config) return config;
+  if (!config.url) return config;
+  config.baseURL = isAuthPath(config.url) ? AUTH_BASE : API_BASE;
+  return config;
+}
 
 export const accountApi = axios.create({
-  baseURL,
+  baseURL: API_BASE,
   withCredentials: true,
   timeout: 8000,
   headers: { Accept: "application/json" },
 });
 
 const refreshApi = axios.create({
-  baseURL,
+  baseURL: API_BASE,
+  baseURL: AUTH_BASE,
   withCredentials: true,
   timeout: 8000,
   headers: { Accept: "application/json" },
 });
+
+// file:// 모드 라우팅(요청별 baseURL 분기)
+accountApi.interceptors.request.use((config) => applyBaseRouting(config));
+refreshApi.interceptors.request.use((config) => applyBaseRouting(config));
 
 let refreshPromise = null;
 
