@@ -4,8 +4,7 @@ server:
 spring:
   main:
     headless: false
-  config:
-    import: optional:classpath:openai.yml
+
   jackson:
     serialization:
       indent_output: false
@@ -26,3 +25,9 @@ gestureos:
     udpPort: 39500
     name: ${COMPUTERNAME:PC}
     storagePath: ${user.home}/.gestureos/pairing.json
+
+openai:
+  apiKey: ${OPENAI_API_KEY:}
+  model: ${OPENAI_MODEL:gpt-5.1-mini}
+  baseUrl: ${OPENAI_BASE_URL:https://api.openai.com/v1}
+  timeoutMs: ${OPENAI_TIMEOUT_MS:8000}

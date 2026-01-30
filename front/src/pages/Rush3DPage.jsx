@@ -1715,10 +1715,7 @@ export default function Rush3DPage({ status, connected = true }) {
       ctrl = new AbortController();
 
       try {
-        const r = await fetch("/api/control/status", {
-          cache: "no-store",
-          signal: ctrl.signal,
-        });
+        const r = await fetch(apiUrl("/api/control/status"), { signal: controller.signal });
         const j = await r.json();
         j.__ts = performance.now();
         if (alive) statusRef.current = j;
@@ -1927,7 +1924,7 @@ export default function Rush3DPage({ status, connected = true }) {
         throw new Error(`mode failed (${r1.status}) ${txt}`);
       }
 
-      const r2 = await fetch("/api/control/start", { method: "POST" });
+      const r2 = await fetch(apiUrl("/api/control/start"), { method: "POST" });
       if (!r2.ok) {
         const txt = await r2.text().catch(() => "");
         throw new Error(`start failed (${r2.status}) ${txt}`);

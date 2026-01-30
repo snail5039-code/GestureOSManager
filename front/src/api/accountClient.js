@@ -1,12 +1,14 @@
 import axios from "axios";
 
-// ✅ 중요: 브라우저에서 직접 8082로 치지 말고, Vite proxy(/api)를 통해 동일 오리진처럼 사용
-// 그러면 refreshToken 쿠키도 안정적으로 붙는다.
-const baseURL = "/api";
+const isFile = typeof window !== "undefined" && window.location.protocol === "file:";
+
+// dev(vite)에서는 proxy(/api) 유지
+// 설치본(file://)에서는 직접 백엔드로
+const baseURL = isFile ? "http://localhost:8082/api" : "/api";
 
 export const accountApi = axios.create({
   baseURL,
-  withCredentials: true, // refreshToken 쿠키 사용
+  withCredentials: true,
   timeout: 8000,
   headers: { Accept: "application/json" },
 });
@@ -65,12 +67,6 @@ export async function tryRefreshAccessToken() {
   return r?.data?.accessToken || null;
 }
 
-/* ===============================
-   Bridge (Manager -> Web SSO)
-   =============================== */
-
-// accessToken을 직접 넘기고 싶으면 인자로 전달.
-// (이미 interceptor로 Authorization이 붙는다면 인자 없이도 동작)
 export async function bridgeStart(accessToken) {
   const headers = {};
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
@@ -78,8 +74,6 @@ export async function bridgeStart(accessToken) {
   return r?.data;
 }
 
-// 프론트(5174)에서 /bridge?code= 로 들어가면 App.jsx가 consume 하도록 구성 권장.
-// 그래도 필요하면 이걸로 탭을 열 수 있음.
 export function openWebWithBridge({ code, webOrigin = "http://localhost:5174" } = {}) {
   const url = `${webOrigin}/bridge?code=${encodeURIComponent(code)}`;
   window.open(url, "_blank", "noreferrer");

@@ -1,15 +1,14 @@
-import { StrictMode } from "react";
-import { createRoot } from "react-dom/client";
+// src/main.jsx
+import React from "react";
+import ReactDOM from "react-dom/client";
 import App from "./App.jsx";
-import "./index.css";
-import { applyTheme, getInitialTheme } from "./theme/applyTheme";
 import AuthProvider from "./auth/AuthProvider.jsx";
+import "./index.css";
 
-applyTheme(getInitialTheme());
-createRoot(document.getElementById("root")).render(
-  <StrictMode>
+ReactDOM.createRoot(document.getElementById("root")).render(
+  <React.StrictMode>
     <AuthProvider>
       <App />
     </AuthProvider>
-  </StrictMode>
+  </React.StrictMode>
 );

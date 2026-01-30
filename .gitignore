@@ -84,3 +84,73 @@ logs/
 # OpenAI 설정 파일 제외
 openai.yml
 **/src/main/resources/openai.yml
+
+# =========================
+# Secrets / Env
+# =========================
+.env
+.env.*
+*.env
+*.local
+
+**/src/main/resources/application-*.yml
+**/src/main/resources/application-*.yaml
+**/application-*.yml
+**/application-*.yaml
+
+*.keystore
+*.p12
+*.jks
+*.pem
+*.key
+*.crt
+
+# =========================
+# OS / IDE
+# =========================
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+# =========================
+# Node / Vite / Electron
+# =========================
+node_modules/
+dist/
+.vite/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+release/
+*.exe
+*.msi
+*.dmg
+*.AppImage
+builder-debug.yml
+builder-effective-config.yaml
+
+# =========================
+# Java (Maven/Gradle)
+# =========================
+target/
+build/
+*.jar
+*.war
+
+# =========================
+# Python
+# =========================
+.venv/
+venv/
+__pycache__/
+*.pyc
+py/**/dist/
+py/**/build/
+*.spec

@@ -9,7 +9,9 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "manager:electron": "concurrently -k \"npm run dev\" \"wait-on http://localhost:5173 && electron .\""
+    "manager:electron": "concurrently -k \"npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
+    "electron:pack": "vite build && electron-builder --dir",
+    "electron:dist": "vite build && electron-builder"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.7",
@@ -17,29 +19,58 @@
     "@tailwindcss/vite": "^4.1.18",
     "axios": "^1.13.2",
     "qrcode.react": "^4.2.0",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
     "three": "^0.182.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
-    "@types/react": "^19.2.5",
-    "@types/react-dom": "^19.2.3",
+    "@types/react": "19.2.5",
+    "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
     "autoprefixer": "^10.4.23",
     "concurrently": "^9.2.1",
     "daisyui": "^5.5.14",
     "electron": "^39.2.7",
+    "electron-builder": "^26.4.0",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",
     "globals": "^16.5.0",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.1.18",
-    "vite": "npm:rolldown-vite@7.2.5",
+    "vite": "^5.4.0",
     "wait-on": "^9.0.3"
   },
-  "overrides": {
-    "vite": "npm:rolldown-vite@7.2.5"
+  "build": {
+    "appId": "com.gestureos.manager",
+    "productName": "GestureOSManager",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "electron/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../gestureOSManager/target/gestureOSManager-0.0.1-SNAPSHOT.jar",
+        "to": "bin/gestureOSManager.jar"
+      },
+      {
+        "from": "../py/dist/GestureOSAgent",
+        "to": "bin/GestureOSAgent"
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   }
 }

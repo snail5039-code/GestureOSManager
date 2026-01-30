@@ -571,6 +571,7 @@ export default function TitleBar({
             WebkitAppRegion: "no-drag",
           }}
           className={cn(
+            "no-drag",  
             "rounded-xl shadow-2xl ring-1",
             "bg-base-200/95 text-base-content border border-base-300/60",
             "backdrop-blur-md",
@@ -619,6 +620,7 @@ export default function TitleBar({
             WebkitAppRegion: "no-drag",
           }}
           className={cn(
+            "no-drag", 
             "rounded-xl shadow-2xl ring-1",
             "bg-base-200/92 text-base-content border border-base-300/60",
             "backdrop-blur-md",
@@ -691,6 +693,7 @@ export default function TitleBar({
             WebkitAppRegion: "no-drag",
           }}
           className={cn(
+            "no-drag",
             "rounded-xl shadow-2xl ring-1",
             "bg-base-200/92 text-base-content border border-base-300/60",
             "backdrop-blur-md",
@@ -919,21 +922,21 @@ export default function TitleBar({
 
         <div className="flex items-center gap-2">
           <button
-            className="w-10 h-8 rounded-md hover:bg-base-300/30"
+            className="no-drag w-10 h-8 rounded-md hover:bg-base-300/30"
             onClick={onMin}
             title="Minimize"
           >
             —
           </button>
           <button
-            className="w-10 h-8 rounded-md hover:bg-base-300/30"
+            className="no-drag w-10 h-8 rounded-md hover:bg-base-300/30"
             onClick={onMax}
             title="Maximize"
           >
             □
           </button>
           <button
-            className="w-10 h-8 rounded-md hover:bg-error/20"
+            className="no-drag w-10 h-8 rounded-md hover:bg-error/20"
             onClick={onClose}
             title="Close"
           >

@@ -1,6 +1,7 @@
+// electron/preload.cjs
 const { contextBridge, ipcRenderer } = require("electron");
 
-contextBridge.exposeInMainWorld("managerWin", {
+contextBridge.exposeInMainWorld("electron", {
   minimize: () => ipcRenderer.send("win:minimize"),
   toggleMaximize: () => ipcRenderer.send("win:toggleMaximize"),
   close: () => ipcRenderer.send("win:close"),
@@ -8,7 +9,7 @@ contextBridge.exposeInMainWorld("managerWin", {
   openExternal: (url) => ipcRenderer.invoke("shell:openExternal", url),
 
   onDeepLink: (cb) => {
-    const handler = (_e, url) => cb?.(url);
+    const handler = (_e, url) => cb(url);
     ipcRenderer.on("auth:deepLink", handler);
     return () => ipcRenderer.removeListener("auth:deepLink", handler);
   },

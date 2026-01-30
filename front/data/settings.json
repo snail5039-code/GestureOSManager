@@ -1,0 +1,40 @@
+{
+  "version" : 1,
+  "bindings" : {
+    "MOUSE" : {
+      "MOVE" : "OPEN_PALM",
+      "CLICK_DRAG" : "PINCH_INDEX",
+      "RIGHT_CLICK" : "V_SIGN",
+      "LOCK_TOGGLE" : "FIST",
+      "SCROLL_HOLD" : "FIST"
+    },
+    "KEYBOARD" : {
+      "BASE" : {
+        "LEFT" : "FIST",
+        "RIGHT" : "V_SIGN",
+        "UP" : "PINCH_INDEX",
+        "DOWN" : "OPEN_PALM"
+      },
+      "FN" : {
+        "BACKSPACE" : "FIST",
+        "SPACE" : "OPEN_PALM",
+        "ENTER" : "PINCH_INDEX",
+        "ESC" : "V_SIGN"
+      },
+      "FN_HOLD" : "PINCH_INDEX"
+    },
+    "PRESENTATION" : {
+      "NAV" : {
+        "NEXT" : "FIST",
+        "PREV" : "V_SIGN"
+      },
+      "INTERACT" : {
+        "TAB" : "FIST",
+        "SHIFT_TAB" : "V_SIGN",
+        "ACTIVATE" : "PINCH_INDEX",
+        "PLAY_PAUSE" : "OPEN_PALM"
+      },
+      "INTERACT_HOLD" : "FIST"
+    }
+  }
+}

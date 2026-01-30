@@ -24,8 +24,14 @@ const MODE_LABEL = {
   VKEY: "가상키보드",
 };
 
+const IS_FILE = window.location.protocol === "file:";
+
+// manager 서버가 8080이면 이거
+const MANAGER_ORIGIN = IS_FILE ? "http://127.0.0.1:8080" : "";
+
 const api = axios.create({
-  baseURL: "/api",
+  // ✅ file://일 땐 절대경로, dev(vite)일 땐 프록시(/api)
+  baseURL: IS_FILE ? `${MANAGER_ORIGIN}/api` : "/api",
   timeout: 5000,
   headers: { Accept: "application/json" },
 });

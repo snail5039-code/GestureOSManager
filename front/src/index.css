@@ -12,6 +12,8 @@ body,
   height: 100%;
   margin: 0;
   padding: 0;
+
+  -webkit-app-region: no-drag;
 }
 
 #root {
@@ -129,4 +131,17 @@ html[data-theme="devil"] body * {
   html {
     font-size: 16px;
   }
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+.no-drag * {
+  -webkit-app-region: no-drag;
+}
+.titlebar-drag {
+  pointer-events: auto;
+}
+.titlebar-drag * {
+  pointer-events: auto;
 }
