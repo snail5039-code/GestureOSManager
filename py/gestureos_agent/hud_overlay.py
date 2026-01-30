@@ -1229,6 +1229,16 @@ class OverlayHUD:
         try:
             if self._proc:
                 self._proc.join(timeout=1.0)
+                # Fallback: if the HUD process is wedged, force-terminate.
+                if self._proc.is_alive():
+                    try:
+                        self._proc.terminate()
+                    except Exception:
+                        pass
+                    try:
+                        self._proc.join(timeout=0.5)
+                    except Exception:
+                        pass
         except Exception:
             pass
 

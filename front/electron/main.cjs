@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const net = require("net");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 
 const ICON_PATH = path.join(__dirname, "assets", "icon.png");
 
@@ -12,6 +12,65 @@ const PROTOCOL = "gestureos";
 
 let managerProc = null;
 let agentProc = null;
+
+// ------------------------------
+// Manager PID tracking (Windows)
+// ------------------------------
+function managerPidFile() {
+  // startManagerJar is only called after app is ready.
+  return path.join(app.getPath("userData"), "GestureOSManager.pid");
+}
+
+function readManagerPid() {
+  try {
+    const p = parseInt(String(fs.readFileSync(managerPidFile(), "utf8")).trim(), 10);
+    return Number.isFinite(p) ? p : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeManagerPid(pid) {
+  try {
+    fs.writeFileSync(managerPidFile(), String(pid), "utf8");
+  } catch {}
+}
+
+function clearManagerPid() {
+  try {
+    fs.unlinkSync(managerPidFile());
+  } catch {}
+}
+
+// ------------------------------
+// Windows process tree kill (no visible console)
+// ------------------------------
+function killTreeWinSync(pid) {
+  if (!pid) return false;
+
+  // Prefer PowerShell hidden window.
+  // taskkill is used internally to ensure child-process tree is terminated (/T).
+  const ps = "try { taskkill /PID " + String(pid) + " /T /F | Out-Null } catch { }";
+  try {
+    const r = spawnSync(
+      "powershell.exe",
+      ["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps],
+      { windowsHide: true, stdio: "ignore" }
+    );
+    if (!r.error) return true;
+  } catch {}
+
+  // Fallback: direct taskkill (still hidden).
+  try {
+    spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], {
+      windowsHide: true,
+      stdio: "ignore",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // ------------------------------
 // Agent PID tracking (no tasklist/taskkill)
@@ -193,6 +252,18 @@ function startManagerJar() {
     return;
   }
 
+  // Avoid double-spawn without calling tasklist (prevents cmd/conhost flashes)
+  if (process.platform === "win32") {
+    const prevPid = readManagerPid();
+    if (prevPid && isPidAlive(prevPid)) {
+      console.warn("[BOOT] manager already running (pidfile) -> skip spawn");
+      return;
+    }
+    if (prevPid && !isPidAlive(prevPid)) {
+      clearManagerPid();
+    }
+  }
+
   const javaExe = process.platform === "win32" ? "javaw" : "java";
   managerProc = spawn(javaExe, ["-jar", jarPath], {
     windowsHide: true,
@@ -200,7 +271,14 @@ function startManagerJar() {
     stdio: "ignore",
   });
 
-  managerProc.on("exit", () => { managerProc = null; });
+  if (process.platform === "win32") {
+    writeManagerPid(managerProc.pid);
+  }
+
+  managerProc.on("exit", () => {
+    managerProc = null;
+    if (process.platform === "win32") clearManagerPid();
+  });
 }
 
 function startAgentExe() {
@@ -252,23 +330,15 @@ function stopChildren() {
     return;
   }
 
-  // Don't call taskkill (it can spawn cmd/conhost). Kill directly.
-  const killProc = (p) => {
-    if (!p) return;
-    try { p.kill(); } catch {}
-  };
+  // ✅ Kill full process tree to ensure HUD overlay (child mp.Process) is terminated.
+  const agentPid = agentProc?.pid || readAgentPid();
+  const mgrPid = managerProc?.pid || readManagerPid();
 
-  const killPid = (pid) => {
-    if (!pid) return;
-    try { process.kill(pid); } catch {}
-  };
+  killTreeWinSync(agentPid);
+  killTreeWinSync(mgrPid);
 
-  killProc(agentProc);
-  killProc(managerProc);
-
-  // If we don't have a handle (e.g. app restarted), fall back to PID file.
-  killPid(readAgentPid());
   clearAgentPid();
+  clearManagerPid();
 
   agentProc = null;
   managerProc = null;
