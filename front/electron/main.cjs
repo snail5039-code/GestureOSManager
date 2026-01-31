@@ -4,7 +4,7 @@ const fs = require("fs");
 const net = require("net");
 const { spawn, spawnSync } = require("child_process");
 
-const ICON_PATH = path.join(__dirname, "assets", "icon.png");
+const ICON_PATH = path.join(__dirname, "assets", "icon.ico");
 
 let win;
 const DEV_URL = "http://localhost:5173";
@@ -396,3 +396,4 @@ app.on("window-all-closed", () => {
     app.quit();
   }
 });
+

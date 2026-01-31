@@ -18,7 +18,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 @RestController
 @RequestMapping("/api/ai")
-@CrossOrigin(origins = "http://localhost:5173")
+@CrossOrigin(origins = {
+		  "http://localhost:5173",
+		  "http://localhost:5174",
+		  "https://gestureos.hopto.org"
+		})
 public class AiChatController {
 
 	private final OpenAiService openAiService;

@@ -12,6 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 @RestController
 @RequestMapping("/api/hud")
+
 public class HudController {
 
   private final HudWsHandler hudWsHandler;

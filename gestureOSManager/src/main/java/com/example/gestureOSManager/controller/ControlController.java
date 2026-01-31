@@ -22,7 +22,11 @@ import com.example.gestureOSManager.websocket.AgentSessionRegistry;
 
 @RestController
 @RequestMapping("/api/control")
-@CrossOrigin(origins = "http://localhost:5173")
+@CrossOrigin(origins = {
+		  "http://localhost:5173",
+		  "http://localhost:5174",
+		  "https://gestureos.hopto.org"
+		})
 public class ControlController {
 
   private final ControlService controlService;

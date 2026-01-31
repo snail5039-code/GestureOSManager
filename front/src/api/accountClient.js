@@ -105,7 +105,7 @@ export async function bridgeStart(accessToken) {
   return r?.data;
 }
 
-export function openWebWithBridge({ code, webOrigin = "http://localhost:5174" } = {}) {
+export function openWebWithBridge({ code, webOrigin = "https://gestureos.hopto.org" } = {}) {
   const url = `${webOrigin}/bridge?code=${encodeURIComponent(code)}`;
   window.open(url, "_blank", "noreferrer");
 }

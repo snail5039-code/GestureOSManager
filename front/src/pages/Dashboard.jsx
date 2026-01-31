@@ -371,13 +371,13 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
       const code = data?.code;
 
       if (!code) {
-        window.open("http://localhost:5174", "_blank", "noreferrer");
+        window.open("https://gestureos.hopto.org", "_blank", "noreferrer");
         return;
       }
 
-      openWebWithBridge({ code, webOrigin: "http://localhost:5174" });
+      openWebWithBridge({ code, webOrigin: "https://gestureos.hopto.org" });
     } catch {
-      window.open("http://localhost:5174", "_blank", "noreferrer");
+      window.open("https://gestureos.hopto.org", "_blank", "noreferrer");
     }
   }, []);
 

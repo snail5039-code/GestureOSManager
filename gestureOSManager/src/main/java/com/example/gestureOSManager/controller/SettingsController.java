@@ -15,7 +15,11 @@ import com.example.gestureOSManager.service.SettingsService;
 
 @RestController
 @RequestMapping("/api/settings")
-@CrossOrigin(origins = "http://localhost:5173")
+@CrossOrigin(origins = {
+		  "http://localhost:5173",
+		  "http://localhost:5174",
+		  "https://gestureos.hopto.org"
+		})
 public class SettingsController {
 
   private final SettingsService settingsService;

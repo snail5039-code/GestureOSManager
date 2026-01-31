@@ -228,7 +228,7 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
 
   const isBright = theme === "light" || theme === "rose";
 
-  const webBase = useMemo(() => import.meta.env.VITE_ACCOUNT_WEB_BASE || "http://localhost:5174", []);
+  const webBase = useMemo(() => import.meta.env.VITE_ACCOUNT_WEB_BASE || "https://gestureos.hopto.org", []);
   const openExternal = (url) => {
     if (window.managerWin?.openExternal) return window.managerWin.openExternal(url);
     window.open(url, "_blank", "noopener,noreferrer");
