@@ -133,7 +133,7 @@ chance_consumed = False
 chance_start_time = 0.0
 attack_attempted = False
 intent_counter = 0
-ready_to_active_counter = 0  # 🔥 Consecutive frames for ACTIVE entry
+ready_to_active_counter = 0  # 🔥 Consecutive frames for ANALYZING entry
 INTENT_SPEED = 0.012
 REQUIRED_INTENT_FRAMES = 2  # 🔥 LOG-based intent frames (relaxed to 2)
 just_failed = False  # 🔥 Prevent duplicate emits in same frame
@@ -166,8 +166,8 @@ JAB_DX_MAX = 0.18
 JAB_DY_MAX = 0.22
 
 MIN_ATTACK_SPEED = 0.018   # Per-attack minimal speed (relaxed from logs)
-HARD_MIN_MOVE = 0.035      # Hard block total movement (LOG-based)
-HARD_MIN_SPEED = 0.010     # Hard block speed (LOG-based)
+HARD_MIN_MOVE = 0.028      # Hard block total movement (LOG-based)
+HARD_MIN_SPEED = 0.008     # Hard block speed (LOG-based)
 
 prev_hand = {
     "left": {"x": 0.0, "y": 0.0, "z": 0.0, "t": 0.0, "init": False},
@@ -324,6 +324,21 @@ def run_vision():
             l_dx, l_dy, l_dz, l_speed, l_angle = hand_metrics(lw, le, ls, prev_hand["left"])
             r_dx, r_dy, r_dz, r_speed, r_angle = hand_metrics(rw, re, rs, prev_hand["right"])
 
+            # =========================
+            # ✅ Prev Hand Update (FRAME END)
+            # =========================
+            prev_hand["left"]["x"] = lw.x
+            prev_hand["left"]["y"] = lw.y
+            prev_hand["left"]["z"] = lw.z
+            prev_hand["left"]["t"] = now_t
+            prev_hand["left"]["init"] = True
+
+            prev_hand["right"]["x"] = rw.x
+            prev_hand["right"]["y"] = rw.y
+            prev_hand["right"]["z"] = rw.z
+            prev_hand["right"]["t"] = now_t
+            prev_hand["right"]["init"] = True
+
             # move_L, move_R 계산 (Neutral 대비)
             move_L = 0.0
             move_R = 0.0
@@ -340,8 +355,8 @@ def run_vision():
                     last_active_hand = "R"
                 else:
                     is_left = (last_active_hand == "L")
-            elif chance_requested and chance_phase == "active":
-                # 🔒 Rule: ACTIVE 동안 손 재선택 금지 (Lock choice)
+            elif chance_requested and chance_phase == "analyzing":
+                # 🔒 Rule: ANALYZING 동안 손 재선택 금지 (Lock choice)
                 is_left = (last_active_hand == "L")
             else:
                 is_left = lw.z < rw.z
@@ -351,8 +366,8 @@ def run_vision():
             active_shldr = ls if is_left else rs
 
             # [HAND] Debug Log
-            if chance_requested and chance_phase == "active":
-                print(f"[HAND] active={'L' if is_left else 'R'} moveL={move_L:.3f} moveR={move_R:.3f}")
+            if chance_requested and chance_phase == "analyzing":
+                print(f"[HAND] analyzing={'L' if is_left else 'R'} moveL={move_L:.3f} moveR={move_R:.3f}")
 
             curr_x, curr_y, curr_z = active_hand.x, active_hand.y, active_hand.z
             dx = l_dx if is_left else r_dx
@@ -423,18 +438,18 @@ def run_vision():
                         and (now_t - last_active_exit_time > ready_cooldown)):
                         ready_to_active_counter += 1
                         if ready_to_active_counter >= 3:
-                            chance_phase = "active"
+                            chance_phase = "analyzing"
                             intent_counter = 0
                             attack_attempted = False
                             active_enter_time = now_t
                             active_ambiguous_counter = 0
                             static_active_counter = 0
-                            print("[FSM] READY -> ACTIVE (Z/Y ENTER)")
+                            print("[FSM] READY -> ANALYZING (Z/Y ENTER)")
                     else:
                         ready_to_active_counter = 0
 
-                elif chance_phase == "active":
-                    if now_t - active_enter_time < 0.15:
+                elif chance_phase == "analyzing":
+                    if now_t - active_enter_time < 0.08:
                         continue
 
                     n_pos = neutral_hands["L" if is_left else "R"]
@@ -444,15 +459,17 @@ def run_vision():
                     total_move = (dx_active**2 + dy_active**2 + dz_active**2) ** 0.5
                     norm_dx = -dx_active if is_left else dx_active
                     
-                    if chance_requested and chance_phase == "active":
-                         print(f"[HAND] active={'L' if is_left else 'R'} dx={dx_active:.3f} norm_dx={norm_dx:.3f} moveL={move_L:.3f} moveR={move_R:.3f}")
+                    if chance_requested and chance_phase == "analyzing":
+                         print(f"[HAND] analyzing={'L' if is_left else 'R'} dx={dx_active:.3f} norm_dx={norm_dx:.3f} moveL={move_L:.3f} moveR={move_R:.3f}")
 
-                    if total_move < 0.045 and speed < 0.012:
-                        intent_counter = max(0, intent_counter - 1)
-                    if speed < 0.008 and total_move < 0.03:
-                        intent_counter = max(0, intent_counter - 1)
-                    if abs(head_x) > 0.25 and total_move < 0.05:
-                        intent_counter = max(0, intent_counter - 1)
+                    print(f"[INTENT] intent={intent_counter} move={total_move:.3f} speed={speed:.3f}")     
+
+                    # if total_move < 0.045 and speed < 0.012:
+                    #     intent_counter = max(0, intent_counter - 1)
+                    # if speed < 0.008 and total_move < 0.03:
+                    #     intent_counter = max(0, intent_counter - 1)
+                    # if abs(head_x) > 0.25 and total_move < 0.05:
+                    #     intent_counter = max(0, intent_counter - 1)
                     # LOG-based relaxed decay: only when movement & speed are both very small
                     if total_move < 0.025 and speed < 0.008:
                         intent_counter = max(0, intent_counter - 1)
@@ -538,9 +555,19 @@ def run_vision():
                             attack_attempted = True
                             chance_phase = "consumed"
                             chance_consumed = True
-                            print(f"[FSM] ACTIVE -> CONSUMED: {final_attack}")
-                            # Final attack emission handled by main loop to include coordinates
+                            print(f"[FSM] ANALYZING -> CONSUMED: {final_attack}")
+
+                            # 🔥 Chance 성공 공격 즉시 emit (레이스 컨디션 방지)
+                            socketio.emit("motion", {
+                                "x": round(head_x,3),
+                                "z": round(guard_val,3),
+                                "dir": final_attack,
+                                "t": time.time()
+                            })
+
+                            # 🔒 exit는 나중에
                             exit_chance("success")
+                            final_attack = "none"  # 중복 방지
                         else:
                             intent_counter = max(0, intent_counter - 1)
                             active_ambiguous_counter += 1
@@ -572,8 +599,7 @@ def run_vision():
 
         if not just_failed:
             if final_attack in ("jab", "straight", "hook", "uppercut"):
-                if not (chance_requested and chance_consumed):
-                    socketio.emit("motion", {"x": round(head_x,3), "z": round(guard_val,3), "dir": final_attack, "t": time.time()})
+                socketio.emit("motion", {"x": round(head_x,3), "z": round(guard_val,3), "dir": final_attack, "t": time.time()})
                 last_send_time = time.time()
             elif time.time() - last_send_time > 0.05:
                 socketio.emit("motion", {"x": round(head_x,3), "z": round(guard_val,3), "dir": final_attack, "t": time.time()})
