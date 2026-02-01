@@ -159,6 +159,27 @@ class MouseRightClick:
         self.last_ts = t
 
 
+@dataclass
+class MouseDoubleClick:
+    """좌 더블클릭: 트리거 감지 시 Down/Up 두 번 주입"""
+    cooldown_sec: float = 0.45
+    inter_click_gap_sec: float = 0.03  # 두 클릭 사이 간격(너무 길면 단일 2회로 보일 수 있음)
+    last_ts: float = 0.0
+
+    def reset(self):
+        self.last_ts = 0.0
+
+    def fire(self, t: float, can_inject: bool):
+        if not can_inject:
+            return
+        if t < (self.last_ts + self.cooldown_sec):
+            return
+        _send_mouse(MOUSEEVENTF_LEFTDOWN)
+        _send_mouse(MOUSEEVENTF_LEFTUP)
+        time.sleep(self.inter_click_gap_sec)
+        _send_mouse(MOUSEEVENTF_LEFTDOWN)
+        _send_mouse(MOUSEEVENTF_LEFTUP)
+        self.last_ts = t
 
 @dataclass
 class MouseScroll:

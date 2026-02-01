@@ -52,7 +52,7 @@ MouseClickDrag = _safe_import("gestureos_agent.modes.mouse", "MouseClickDrag")
 MouseRightClick = _safe_import("gestureos_agent.modes.mouse", "MouseRightClick")
 MouseScroll = _safe_import("gestureos_agent.modes.mouse", "MouseScroll")
 MouseLockToggle = _safe_import("gestureos_agent.modes.mouse", "MouseLockToggle")
-
+MouseDoubleClick = _safe_import("gestureos_agent.modes.mouse", "MouseDoubleClick")
 # keyboard / draw / ppt
 KeyboardHandler = _safe_import("gestureos_agent.modes.keyboard", "KeyboardHandler")
 DrawHandler = _safe_import("gestureos_agent.modes.draw", "DrawHandler")
@@ -349,7 +349,7 @@ class HandsAgent:
             control_box=getattr(cfg, "control_box", (0.3, 0.35, 0.7, 0.92)),
             gain=float(getattr(cfg, "control_gain", 1.35)),
             ema_alpha=float(getattr(cfg, "ema_alpha", 0.45)),
-            deadzone_px=float(getattr(cfg, "deadzone_px", 2.0)),
+            deadzone_px=float(getattr(cfg, "deadzone_px", 4.0)),
             move_interval_sec=(1.0 / max(1e-6, float(getattr(cfg, "move_hz", 60.0)))),
         )
 
@@ -358,7 +358,8 @@ class HandsAgent:
         self.mouse_right = MouseRightClick() if MouseRightClick else None
         self.mouse_scroll = MouseScroll() if MouseScroll else None
         self.mouse_lock = MouseLockToggle() if MouseLockToggle else None
-
+        self.mouse_dbl = MouseDoubleClick() if MouseDoubleClick else None
+        self.mouse_dbl = MouseDoubleClick() if _safe_import("gestureos_agent.modes.mouse", "MouseDoubleClick") else None
         self.kb = KeyboardHandler() if KeyboardHandler else None
         self.draw = DrawHandler() if DrawHandler else None
         self.ppt = PresentationHandler() if PresentationHandler else None
@@ -471,6 +472,18 @@ class HandsAgent:
         self._pinch_hold_ms = 90  # tweakable: 70~140ms
         self._pinch_hys_on = 1.00  # ON threshold multiplier (tight)
         self._pinch_hys_off = 1.25  # OFF threshold multiplier (looser)
+
+        # ✅ MOUSE: pinch 직후 커서 이동 freeze (클릭 정확도↑)
+        self._mouse_pinch_prev = False
+        self._mouse_pinch_freeze_sec = float(os.getenv("MOUSE_PINCH_FREEZE_SEC", "0.12"))
+        self._mouse_pinch_freeze_until = 0.0
+
+        # ✅ MOUSE 더블클릭 감지용 (PINCH double-tap)
+        self._mouse_prev_pinch = False
+        self._mouse_last_pinch_edge_ts = 0.0
+        self._mouse_dc_window = float(os.getenv("MOUSE_DBLCLICK_WINDOW", "0.28"))  # 0.22~0.35 권장
+        self._mouse_dblclick_cd = float(os.getenv("MOUSE_DBLCLICK_CD", "0.45"))    # 연속 더블클릭 방지
+        self._mouse_last_dblclick_ts = 0.0
 
         # ✅ VKEY/KEYBOARD 강제 클릭(핀치) 엣지 감지
         self._vkey_prev_pinch = False
@@ -626,7 +639,16 @@ class HandsAgent:
             self._osk_close()
         else:
             self._osk_open()
-
+    def _mouse_double_click(self):
+        """좌 더블클릭 주입(Windows). SendInput 기반."""
+        if os.name != "nt":
+            return
+        try:
+            _win_left_click()
+            time.sleep(0.03)  # 두 클릭 사이 간격
+            _win_left_click()
+        except Exception:
+            pass
     # -------------------------------------------------------------------------
     # WS helpers
     # -------------------------------------------------------------------------
@@ -1374,6 +1396,16 @@ class HandsAgent:
             mode_u = str(self.mode).upper()
             effective_locked = bool(self.ui_locked) or bool(self.locked)
 
+            # ✅ MOUSE: PINCH 시작(edge) 순간에는 커서 이동을 잠깐 막아서 "클릭 중 움직임" 방지
+            if mode_u == "MOUSE" and self.enabled and (not self.ui_locked) and (not block_by_palette) and got_cursor:
+                is_pinch = (str(cursor_gesture).upper() == "PINCH_INDEX")
+                if is_pinch and (not self._mouse_pinch_prev):
+                    # pinch 시작 순간: freeze window
+                    self._mouse_pinch_freeze_until = t + self._mouse_pinch_freeze_sec
+                self._mouse_pinch_prev = is_pinch
+            else:
+                self._mouse_pinch_prev = False
+
             # Palette modal (최우선)
             block_by_palette = False
             if not self.ui_locked:
@@ -1667,6 +1699,9 @@ class HandsAgent:
                 if mode_u in ("MOUSE", "VKEY"):
                     dragging = bool(getattr(self.mouse_click, "dragging", False)) if self.mouse_click else False
                     do_move = (cursor_gesture == mouse_move_g) or (dragging and cursor_gesture == mouse_click_g)
+                    # ✅ MOUSE: pinch 직후 freeze 시간에는 커서 이동 금지(클릭 정확도↑)
+                    if mode_u == "MOUSE" and t < float(getattr(self, "_mouse_pinch_freeze_until", 0.0)):
+                        do_move = False
                 elif mode_u == "DRAW":
                     down = bool(getattr(self.draw, "down", False)) if self.draw else False
                     do_move = (cursor_gesture in ("OPEN_PALM", "PINCH_INDEX")) or down
@@ -1701,6 +1736,42 @@ class HandsAgent:
                 self._vkey_prev_pinch = is_pinch
             else:
                 self._vkey_prev_pinch = False
+            
+            # -------------------------------------------------------------
+            # ✅ MOUSE 모드: PINCH double-tap -> 더블클릭 주입
+            # (드래그/클릭 로직은 그대로 두고, 더블클릭만 보조)
+            # -------------------------------------------------------------
+            if (
+                (mode_u == "MOUSE")
+                and self.enabled
+                and (not self.ui_locked)
+                and (not block_by_palette)
+                and (not no_inject)
+                and got_cursor
+            ):
+                is_pinch = (str(cursor_gesture).upper() == "PINCH_INDEX")
+
+                # PINCH edge(눌림 시작) 감지
+                if is_pinch and (not self._mouse_prev_pinch):
+                    now_edge = t
+
+                    # 연속 더블클릭 과다발사 방지
+                    if now_edge >= (self._mouse_last_dblclick_ts + self._mouse_dblclick_cd):
+                        dt = now_edge - float(self._mouse_last_pinch_edge_ts or 0.0)
+
+                        # 두 번째 edge가 윈도우 안이면 더블클릭 발사
+                        if (self._mouse_last_pinch_edge_ts > 0.0) and (dt <= self._mouse_dc_window):
+                            self._mouse_double_click()
+                            self._mouse_last_dblclick_ts = now_edge
+                            self._mouse_last_pinch_edge_ts = 0.0  # 리셋
+                            # 🔸 여기서 cursor_bubble로 디버그 표시(원하면 유지)
+                            # self.cursor_bubble = "DBLCLICK!"
+                        else:
+                            self._mouse_last_pinch_edge_ts = now_edge
+
+                self._mouse_prev_pinch = is_pinch
+            else:
+                self._mouse_prev_pinch = False
 
             # mouse actions
             if mode_u in ("MOUSE", "KEYBOARD"):
