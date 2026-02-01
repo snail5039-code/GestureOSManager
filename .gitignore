@@ -84,3 +84,14 @@ logs/
 # OpenAI 설정 파일 제외
 openai.yml
 **/src/main/resources/openai.yml
+
+# 빌드 결과물 및 배포 폴더 제외
+front/release/
+
+# 만약 특정 빌드 폴더만 빼고 싶다면 아래처럼 상세하게 적어도 됩니다
+# front/release/win-unpacked/
+
+# 파이썬 가상환경이나 라이브러리 내부 파일 제외
+**/_internal/
+**/__pycache__/
+*.pyc

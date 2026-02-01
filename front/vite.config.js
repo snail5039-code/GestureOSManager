@@ -3,6 +3,8 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
+
+  base: "./", // ✅ 설치판(file://)에서 assets 경로 깨짐 방지
   plugins: [react(), tailwindcss()],
 
   resolve: { dedupe: ["react", "react-dom"] },
