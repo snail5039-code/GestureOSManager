@@ -125,6 +125,12 @@ def exit_chance(reason):
         
     socketio.emit("chance_end", {"reason": reason, "t": time.time()})
     reset_chance_fsm(hard=True)
+        # 🔒 Force clear any pending attack (유령 attack 방지)
+    try:
+        global final_attack
+        final_attack = "none"
+    except:
+        pass
 
 chance_requested = False
 force_attack_mode = False
@@ -154,7 +160,8 @@ UP_DX_MAX = 0.22    # Uppercut: allow some lateral drift
 
 HOOK_DX = 0.20      # Hook: minimum lateral X (relaxed)
 HOOK_DZ_MIN = 0.04  # Hook: minimal forward allowance (info only)
-HOOK_DZ_MAX = 0.45  # Hook: allow stronger Z before straight split
+HOOK_DZ_MAX = 0.65  # Hook: allow stronger Z before straight split
+HOOK_DY_MAX = 0.22  # Hook: limit upward Y (relaxed)
 
 STR_DZ = 0.30       # Straight: strong forward Z (relaxed)
 STR_DX_MAX = 0.22
@@ -387,13 +394,7 @@ def run_vision():
                 guard_val = 1.0 if is_guarding else 0.0
 
             # Update Jab Optimization (Disabled during Chance)
-            if not chance_requested:
-                # Use normalized dz for jab signal
-                jab_signal = -dz if dz < 0 else 0
-                if update_jab(jab_signal, now_t):
-                    final_attack = "jab"
-                    last_jab_valid_ts = now_t
-                    print(f"[JAB] Detected at {now_t:.2f}")
+       
 
                 # Rule 2: Restore Defense Pipeline (weaving/guard)
                 if final_attack == "none":
@@ -458,6 +459,11 @@ def run_vision():
                     dz_active = curr_z - n_pos["z"]
                     total_move = (dx_active**2 + dy_active**2 + dz_active**2) ** 0.5
                     norm_dx = -dx_active if is_left else dx_active
+
+                    # 🔒 HARD BLOCK AT INTENT STAGE (ghost motion 차단)
+                    if total_move < HARD_MIN_MOVE or speed < HARD_MIN_SPEED:
+                        intent_counter = max(0, intent_counter - 1)
+                        continue
                     
                     if chance_requested and chance_phase == "analyzing":
                          print(f"[HAND] analyzing={'L' if is_left else 'R'} dx={dx_active:.3f} norm_dx={norm_dx:.3f} moveL={move_L:.3f} moveR={move_R:.3f}")
@@ -514,41 +520,50 @@ def run_vision():
                             str_dz = STR_DZ * (0.9 if is_left else 1.0)
                             jab_dz = JAB_DZ * (0.9 if is_left else 1.0)
 
-                            # === Priority-based classification ===
-                            # 1) UPPERCUT (dy dominant, z small)
+                            # === Priority-based classification (ANTI-STRAIGHT-STEAL, UPPERCUT-FIRST) ===
+
+                            # 1) UPPERCUT (위로 퍼올리면 dz 커도 무조건 uppercut)
                             if (
-                                dy_cls > up_dy and
-                                abs(dz_cls) < UP_DZ_MAX and
-                                abs(dx_cls) < UP_DX_MAX and
+                                dy_cls > up_dy * 0.7 and                 # 🔥 dy 관대
+                                dy_cls > abs(dx_cls) * 1.1 and           # hook 방지
+                                dy_cls > 0.28 and                        # 🔥 절대 uppercut 최소 dy (로그 기반)
+                                abs(dx_cls) < UP_DX_MAX * 1.5 and        # x 흔들림 허용
                                 speed > MIN_ATTACK_SPEED
                             ):
                                 attack_type = "uppercut"
 
-                            # 2) HOOK (dx dominant)
+                            # 2) HOOK (옆으로 진짜 휘두를 때만)
                             elif (
                                 abs(dx_cls) > hook_dx and
+                                abs(dx_cls) > abs(dy_cls) * 1.3 and
+                                abs(dx_cls) > abs(dz_cls) * 1.3 and
+                                abs(dy_cls) < HOOK_DY_MAX and
                                 abs(dz_cls) < HOOK_DZ_MAX and
                                 speed > MIN_ATTACK_SPEED
-                           ):
+                            ):
                                 attack_type = "hook"
 
-                            # 3) STRAIGHT (strong z, low x/y)
+                            # 3) STRAIGHT (앞으로만, 위로 거의 안 갈 때만)
                             elif (
                                 abs(dz_cls) > str_dz and
                                 abs(dx_cls) < STR_DX_MAX and
-                                abs(dy_cls) < STR_DY_MAX and
+                                abs(dy_cls) < 0.20 and                   # 🔥 dy 강력 차단
+                                dy_cls < 0.20 and                        # 🔥 위로 조금이라도 크면 straight 금지
                                 speed > MIN_ATTACK_SPEED
-                           ):
+                            ):
                                 attack_type = "straight"
 
-                            # 4) JAB (weak z, tighter x/y)
+                            # 4) JAB (약한 straight, 거의 완전 수평)
                             elif (
-                                jab_dz < abs(dz_cls) < JAB_DZ_MAX and
+                                abs(dz_cls) > JAB_DZ and
+                                abs(dz_cls) < JAB_DZ_MAX and
                                 abs(dx_cls) < JAB_DX_MAX and
-                                abs(dy_cls) < JAB_DY_MAX and
+                                abs(dy_cls) < 0.15 and                   # 🔥 dy 매우 타이트
+                                dy_cls < 0.15 and
                                 speed > MIN_ATTACK_SPEED
-                           ):
+                            ):
                                 attack_type = "jab"
+
 
                         if attack_type != "none":
                             final_attack = attack_type
@@ -598,7 +613,7 @@ def run_vision():
         if cv2.waitKey(1) & 0xFF == 27: break
 
         if not just_failed:
-            if final_attack in ("jab", "straight", "hook", "uppercut"):
+            if chance_requested and final_attack in ("jab", "straight", "hook", "uppercut"):
                 socketio.emit("motion", {"x": round(head_x,3), "z": round(guard_val,3), "dir": final_attack, "t": time.time()})
                 last_send_time = time.time()
             elif time.time() - last_send_time > 0.05:
