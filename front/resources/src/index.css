@@ -1,0 +1,132 @@
+@import "tailwindcss";
+
+@plugin "daisyui" {
+  themes: dark --default, light, cupcake, bumblebee, acid, valentine;
+}
+
+/* ✅ Vite 기본 템플릿 #root 제한 제거 */
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+#root {
+  max-width: none;
+  text-align: initial;
+}
+
+/* body 스크롤은 막고 main만 스크롤 */
+body {
+  overflow: hidden;
+}
+
+/* ---------------------------
+   ✅ Professional Radius Pack
+   - DaisyUI 전역 radius 변수 낮추기
+---------------------------- */
+:root,
+[data-theme] {
+  --rounded-box: 0.9rem;
+  /* 기존보다 덜 둥글게 */
+  --rounded-btn: 0.65rem;
+  --rounded-badge: 0.6rem;
+
+  /* 옵션: input/select도 통일하고 싶으면 */
+  --tab-radius: 0.65rem;
+}
+
+/* 모달 박스도 확실히 radius 적용 */
+.modal-box {
+  border-radius: var(--rounded-box);
+}
+
+/* 스크롤바(선택) */
+main::-webkit-scrollbar {
+  width: 10px;
+}
+
+main::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+}
+
+main::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+main {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+}
+
+html {
+  font-size: 20px;
+}
+
+/* theme cursor (유지) */
+html[data-theme="dark"],
+html[data-theme="dark"] body,
+html[data-theme="dark"] body * {
+  cursor: url("/cursor/dark.png") 13 12, auto !important;
+}
+
+html[data-theme="light"],
+html[data-theme="light"] body,
+html[data-theme="light"] body * {
+  cursor: url("/cursor/light.png") 2 2, auto !important;
+}
+
+html[data-theme="neon"],
+html[data-theme="neon"] body,
+html[data-theme="neon"] body * {
+  cursor: url("/cursor/neon.png") 2 2, auto !important;
+}
+
+html[data-theme="rose"],
+html[data-theme="rose"] body,
+html[data-theme="rose"] body * {
+  cursor: url("/cursor/rose.png") 2 2, auto !important;
+}
+
+html[data-theme="devil"],
+html[data-theme="devil"] body,
+html[data-theme="devil"] body * {
+  cursor: url("/cursor/devil.png") 2 2, auto !important;
+}
+
+/* Electron drag */
+.titlebar-drag {
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.titlebar-drag button,
+.titlebar-drag a,
+.titlebar-drag input,
+.titlebar-drag select,
+.titlebar-drag textarea,
+.titlebar-drag [role="button"] {
+  -webkit-app-region: no-drag;
+}
+
+@media (max-height: 900px) {
+  html {
+    font-size: 18px;
+  }
+}
+
+@media (max-height: 820px) {
+  html {
+    font-size: 17px;
+  }
+}
+
+@media (max-height: 760px) {
+  html {
+    font-size: 16px;
+  }
+}

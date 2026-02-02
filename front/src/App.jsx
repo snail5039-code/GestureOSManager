@@ -7,6 +7,7 @@ import Rush3DPage from "./pages/Rush3DPage";
 import PairingQrModal from "./components/PairingQrModal";
 import TrainingLab from "./pages/TrainingLab";
 import { THEME } from "./theme/themeTokens";
+import { authApiUrl, pairingApiUrl } from "./runtime/endpoints";
 
 const VALID_THEMES = new Set(["dark", "light", "neon", "rose", "devil"]);
 
@@ -42,7 +43,7 @@ export default function App() {
 
         if (!code) return;
 
-        const res = await fetch("/api/auth/bridge/consume", {
+        const res = await fetch(authApiUrl("auth/bridge/consume"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -75,10 +76,14 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem("osHudOn", osHudOn ? "1" : "0");
-    fetch(`/api/hud/show?enabled=${osHudOn ? "true" : "false"}`, {
+
+    fetch(controlApiUrl(`hud/show?enabled=${osHudOn ? "true" : "false"}`), {
       method: "POST",
-    }).catch(() => {});
+    }).catch(() => { });
   }, [osHudOn]);
+
+  // pairing refresh도 fetch('/api/pairing') 쓰는 곳 있으면:
+  fetch(pairingApiUrl("pairing"))
 
   const toggleHud = () => setHudOn((x) => !x);
   const toggleOsHud = () => setOsHudOn((x) => !x);
@@ -98,13 +103,13 @@ export default function App() {
   const refreshPairing = () => {
     let cancelled = false;
 
-    fetch("/api/pairing")
+    fetch(pairingApiUrl("pairing"))
       .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
       .then((data) => {
         if (cancelled || !data) return;
         setPairing((prev) => ({ ...prev, ...data }));
       })
-      .catch(() => {});
+      .catch(() => { });
 
     return () => {
       cancelled = true;
@@ -114,12 +119,12 @@ export default function App() {
   const savePairingName = async (nextName) => {
     const name = String(nextName || "").trim() || "PC";
     try {
-      await fetch("/api/pairing", {
+      await fetch(pairingApiUrl("pairing"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
       });
-    } catch {}
+    } catch { }
     refreshPairing();
   };
 
@@ -128,12 +133,12 @@ export default function App() {
     if (!pc) return;
 
     try {
-      await fetch("/api/pairing", {
+      await fetch(pairingApiUrl("pairing"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pc }),
       });
-    } catch {}
+    } catch { }
     refreshPairing();
   };
 

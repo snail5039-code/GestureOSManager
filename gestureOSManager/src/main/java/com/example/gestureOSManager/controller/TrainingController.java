@@ -16,7 +16,6 @@ import com.example.gestureOSManager.websocket.AgentSessionRegistry;
 
 @RestController
 @RequestMapping("/api/train")
-@CrossOrigin(origins = "http://localhost:5173")
 public class TrainingController {
 
   private final ControlService controlService;

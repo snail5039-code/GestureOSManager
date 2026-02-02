@@ -15,6 +15,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import { THEME } from "../theme/themeTokens";
+import { controlApiUrl } from "../runtime/endpoints";
 
 /* =============================================================================
    유틸
@@ -1715,7 +1716,7 @@ export default function Rush3DPage({ status, connected = true }) {
       ctrl = new AbortController();
 
       try {
-        const r = await fetch("/api/control/status", {
+        const r = await fetch(controlApiUrl("control/status"), {
           cache: "no-store",
           signal: ctrl.signal,
         });
@@ -1927,7 +1928,7 @@ export default function Rush3DPage({ status, connected = true }) {
         throw new Error(`mode failed (${r1.status}) ${txt}`);
       }
 
-      const r2 = await fetch("/api/control/start", { method: "POST" });
+      const r2 = await fetch(controlApiUrl("control/start"), { method: "POST" });
       if (!r2.ok) {
         const txt = await r2.text().catch(() => "");
         throw new Error(`start failed (${r2.status}) ${txt}`);
