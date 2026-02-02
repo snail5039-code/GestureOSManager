@@ -96,7 +96,7 @@ export default function App() {
   const [pairing, setPairing] = useState(() => ({
     pc: "",
     httpPort: 8081,
-    udpPort: 39500,
+    udpPort: 39500,   
     name: "PC",
   }));
 
