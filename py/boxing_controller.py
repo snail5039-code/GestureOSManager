@@ -42,6 +42,12 @@ MIN_HAND_SPEED = 0.012     # 손 최소 순간 속도
 MIN_FORWARD_SPEED = 0.012
 MIN_FORWARD_DZ = 0.06
 
+# 위빙 꼼수 방지용
+prev_weaving_head_x = 0.0
+prev_weaving_time = 0.0
+WEAVING_THRESHOLD = 0.08  # 이동량 기준, 기존보다 넉넉하게
+
+
 # 버퍼 초기화
 x_moves = []
 consecutive_frames_x_move = 0
@@ -403,6 +409,7 @@ def run_vision():
                     # Check for punch-like motion to avoid guard/weaving during actual punches
                     is_punch_like = speed > speed_threshold and elbow_ang > extended_angle
                     
+                    weaving_dx = abs(head_x - prev_weaving_head_x)
                     # Weaving (Head movement)
                     if abs(head_x) > 0.18 and not is_punch_like:
                         if last_defense != "weaving":

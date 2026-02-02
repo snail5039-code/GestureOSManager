@@ -24,10 +24,10 @@ Object.values(MODELS_LIST).forEach((url) => useGLTF.preload(url));
    HP 유틸
 ======================= */
 const getHpStage = (hp) => {
-  if (hp >= 71) return 0; // GREEN
-  if (hp >= 41) return 1; // YELLOW
-  if (hp >= 11) return 2; // ORANGE
-  return 3; // RED
+  if (hp >= 71) return 0;
+  if (hp >= 41) return 1;
+  if (hp >= 11) return 2;
+  return 3;
 };
 
 const getHpColor = (hp) => {
@@ -135,6 +135,8 @@ export default function GamePage() {
   const judgeTimeoutRef = useRef(null);
   const isHitAnimationPlayingRef = useRef(false);
 
+  const lastWeavingPosRef = useRef({ x: null, z: null }); // 👈 위빙 꼼수 방지
+
   const [chanceTimer, setChanceTimer] = useState(2.5);
   const chanceStartTimeRef = useRef(0);
   const timerReqRef = useRef(null);
@@ -145,29 +147,21 @@ export default function GamePage() {
   const isWin = enemyHp <= 0;
 
   /* ===================
-     HP 단계 진입 연출용
+     HP 단계 연출
   =================== */
   const prevPlayerStageRef = useRef(getHpStage(playerHp));
   const prevEnemyStageRef = useRef(getHpStage(enemyHp));
-
   const [vignette, setVignette] = useState(0);
   const [shake, setShake] = useState(0);
 
   const triggerHpStageEffect = (stage) => {
     let s = 0;
     let v = 0;
-
     if (stage === 1) { s = 3; v = 0.25; }
     if (stage === 2) { s = 6; v = 0.45; }
     if (stage === 3) { s = 10; v = 0.7; }
-
-    setShake(s);
-    setVignette(v);
-
-    setTimeout(() => {
-      setShake(0);
-      setVignette(0);
-    }, 500);
+    setShake(s); setVignette(v);
+    setTimeout(() => { setShake(0); setVignette(0); }, 500);
   };
 
   useEffect(() => {
@@ -186,9 +180,7 @@ export default function GamePage() {
     }
   }, [enemyHp]);
 
-  useEffect(() => {
-    gameStateRef.current = gameState;
-  }, [gameState]);
+  useEffect(() => { gameStateRef.current = gameState; }, [gameState]);
 
   /* ================= Socket ================= */
   useEffect(() => {
@@ -204,13 +196,11 @@ export default function GamePage() {
 
       if (gameStateRef.current === "ATTACK_CHANCE") {
         const rawDir = (data.dir || "").toLowerCase();
-
         if (rawDir.includes("jab") || rawDir.includes("straight") || rawDir.includes("hook") || rawDir.includes("upper")) {
           const mapped =
             rawDir.includes("jab") ? "jab" :
             rawDir.includes("straight") ? "straight" :
             rawDir.includes("hook") ? "hook" : "uppercut";
-
           handlePlayerAttack(mapped);
           setGameState("DEFENSE");
         }
@@ -225,16 +215,13 @@ export default function GamePage() {
   useEffect(() => {
     if (gameState === "ATTACK_CHANCE") {
       chanceStartTimeRef.current = Date.now();
-
       const updateTimer = () => {
         const elapsed = (Date.now() - chanceStartTimeRef.current) / 1000;
         const remaining = Math.max(0, 2.5 - elapsed);
         setChanceTimer(remaining);
-
         if (remaining > 0) timerReqRef.current = requestAnimationFrame(updateTimer);
         else setGameState("DEFENSE");
       };
-
       timerReqRef.current = requestAnimationFrame(updateTimer);
     } else {
       if (timerReqRef.current) cancelAnimationFrame(timerReqRef.current);
@@ -250,7 +237,6 @@ export default function GamePage() {
   /* ================= 플레이어 공격 ================= */
   const handlePlayerAttack = (type) => {
     const damages = { jab: 15, straight: 25, hook: 70, uppercut: 100 };
-
     setEnemyHp((prev) => Math.max(0, prev - (damages[type] || 20)));
     setAttackGauge(0);
     showMessage(`${type.toUpperCase()}!!`, 400);
@@ -268,8 +254,25 @@ export default function GamePage() {
     const now = Date.now();
     const isFresh = now - lastMotionAtRef.current < 180;
 
-    const isDodged = isFresh && snapshot.dir === "weaving";
-    const isGuarded = isFresh && snapshot.dir === "guard";
+    let isDodged = false;
+    let isGuarded = false;
+
+    if (isFresh) {
+      if (snapshot.dir === "weaving") {
+        // 같은 위치에서 반복 위빙이면 회피 무효
+        if (
+          lastWeavingPosRef.current.x !== snapshot.x ||
+          lastWeavingPosRef.current.z !== snapshot.z
+        ) {
+          isDodged = true;
+          lastWeavingPosRef.current = { x: snapshot.x, z: snapshot.z };
+        }
+      } else if (snapshot.dir === "guard") {
+        isGuarded = true;
+      } else {
+        lastWeavingPosRef.current = { x: null, z: null };
+      }
+    }
 
     if (isDodged || isGuarded) {
       setAttackGauge((prev) => {
@@ -313,6 +316,9 @@ export default function GamePage() {
 
   const shakeStyle = shake > 0 ? { animation: `shake 0.12s infinite` } : {};
 
+  /* =======================
+       렌더
+  ======================= */
   return (
     <div
       style={{
@@ -337,122 +343,88 @@ export default function GamePage() {
         `}
       </style>
 
-{/* UI */}
-<div style={{ position: "absolute", top: 20, left: 0, right: 0, zIndex: 10, pointerEvents: "none" }}>
-  
-  {/* PLAYER - Left */}
-  <div style={{ position: "absolute", left: 30, top: 0, width: 360 }}>
-    <div style={{ marginBottom: 6, fontWeight: 900, color: "#4da6ff", textAlign: "left" }}>
-      PLAYER
-    </div>
-    <div style={{ width: "100%", height: 16, background: "#111", borderRadius: 10, border: "2px solid #4da6ff" }}>
-      <div
-        style={{
-          width: `${playerHp}%`,
-          height: "100%",
-          background: getHpColor(playerHp),
-          boxShadow: `0 0 10px ${getHpColor(playerHp)}`,
-          borderRadius: 10,
-          transition: "width 0.6s ease",
-        }}
-      />
-    </div>
-  </div>
+      {/* UI */}
+      <div style={{ position: "absolute", top: 20, left: 0, right: 0, zIndex: 10, pointerEvents: "none" }}>
+        {/* PLAYER */}
+        <div style={{ position: "absolute", left: 30, top: 0, width: 360 }}>
+          <div style={{ marginBottom: 6, fontWeight: 900, color: "#4da6ff", textAlign: "left" }}>PLAYER</div>
+          <div style={{ width: "100%", height: 16, background: "#111", borderRadius: 10, border: "2px solid #4da6ff" }}>
+            <div style={{
+              width: `${playerHp}%`,
+              height: "100%",
+              background: getHpColor(playerHp),
+              boxShadow: `0 0 10px ${getHpColor(playerHp)}`,
+              borderRadius: 10,
+              transition: "width 0.6s ease"
+            }} />
+          </div>
+        </div>
 
-  {/* ENEMY - Right */}
-  <div style={{ position: "absolute", right: 30, top: 0, width: 360 }}>
-    <div style={{ marginBottom: 6, fontWeight: 900, color: "#ff4d4d", textAlign: "right" }}>
-      ENEMY
-    </div>
-    <div style={{ width: "100%", height: 16, background: "#111", borderRadius: 10, border: "2px solid #ff4d4d" }}>
-      <div
-        style={{
-          width: `${enemyHp}%`,
-          height: "100%",
-          background: getHpColor(enemyHp),
-          boxShadow: `0 0 10px ${getHpColor(enemyHp)}`,
-          borderRadius: 10,
-          transition: "width 0.6s ease",
-          marginLeft: "auto",   // 👉 오른쪽에서 왼쪽으로 줄어들게
-        }}
-      />
-    </div>
-  </div>
+        {/* ENEMY */}
+        <div style={{ position: "absolute", right: 30, top: 0, width: 360 }}>
+          <div style={{ marginBottom: 6, fontWeight: 900, color: "#ff4d4d", textAlign: "right" }}>ENEMY</div>
+          <div style={{ width: "100%", height: 16, background: "#111", borderRadius: 10, border: "2px solid #ff4d4d" }}>
+            <div style={{
+              width: `${enemyHp}%`,
+              height: "100%",
+              background: getHpColor(enemyHp),
+              boxShadow: `0 0 10px ${getHpColor(enemyHp)}`,
+              borderRadius: 10,
+              transition: "width 0.6s ease",
+              marginLeft: "auto"
+            }} />
+          </div>
+        </div>
 
-  {/* Gauge - Top Center */}
-  <div style={{ width: 420, height: 18, margin: "50px auto 0", background: "#000", borderRadius: 12 }}>
-    <div
-      style={{
-        width: `${attackGauge}%`,
-        height: "100%",
-        background: "linear-gradient(90deg,#00ffff,#0077ff)",
-        boxShadow: "0 0 15px #00ffff",
-        borderRadius: 12,
-        transition: "width 0.3s ease",
-      }}
-    />
-  </div>
+        {/* Gauge */}
+        <div style={{ width: 420, height: 18, margin: "50px auto 0", background: "#000", borderRadius: 12 }}>
+          <div style={{
+            width: `${attackGauge}%`,
+            height: "100%",
+            background: "linear-gradient(90deg,#00ffff,#0077ff)",
+            boxShadow: "0 0 15px #00ffff",
+            borderRadius: 12,
+            transition: "width 0.3s ease",
+          }} />
+        </div>
 
-  {/* Chance Timer - Center */}
-  {gameState === "ATTACK_CHANCE" && (
-    <div style={{ width: 260, height: 8, margin: "8px auto 0", background: "#222", borderRadius: 6 }}>
-      <div
-        style={{
-          width: `${(chanceTimer / 2.5) * 100}%`,
-          height: "100%",
-          background: chanceTimer < 0.4 ? "#ff0000" : "#00ff00",
-          borderRadius: 6,
-        }}
-      />
-    </div>
-  )}
+        {/* Chance Timer */}
+        {gameState === "ATTACK_CHANCE" && (
+          <div style={{ width: 260, height: 8, margin: "8px auto 0", background: "#222", borderRadius: 6 }}>
+            <div style={{
+              width: `${(chanceTimer / 2.5) * 100}%`,
+              height: "100%",
+              background: chanceTimer < 0.4 ? "#ff0000" : "#00ff00",
+              borderRadius: 6,
+            }} />
+          </div>
+        )}
 
-  {gameMsg && (
-    <div style={{ marginTop: 30, textAlign: "center" }}>
-      <h1 style={{ fontSize: 72, fontWeight: 900, textShadow: "4px 4px 12px #000" }}>
-        {gameMsg}
-      </h1>
-    </div>
-  )}
-</div>
-
+        {gameMsg && (
+          <div style={{ marginTop: 30, textAlign: "center" }}>
+            <h1 style={{ fontSize: 72, fontWeight: 900, textShadow: "4px 4px 12px #000" }}>{gameMsg}</h1>
+          </div>
+        )}
+      </div>
 
       {/* WIN */}
       {isWin && (
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            background: "rgba(0,0,0,0.85)",
-            zIndex: 30,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: 120,
-            fontWeight: 900,
-            color: "#00ff5a",
-          }}
-        >
+        <div style={{
+          position: "absolute", inset: 0, background: "rgba(0,0,0,0.85)",
+          zIndex: 30, display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 120, fontWeight: 900, color: "#00ff5a"
+        }}>
           YOU WIN!
         </div>
       )}
 
       {/* GAME OVER */}
       {isGameOver && (
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            background: "rgba(0,0,0,0.85)",
-            zIndex: 30,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: 120,
-            fontWeight: 900,
-            color: "#ff0000",
-          }}
-        >
+        <div style={{
+          position: "absolute", inset: 0, background: "rgba(0,0,0,0.85)",
+          zIndex: 30, display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 120, fontWeight: 900, color: "#ff0000"
+        }}>
           GAME OVER
         </div>
       )}
