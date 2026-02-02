@@ -20,7 +20,7 @@ import { controlApiUrl } from "../runtime/endpoints";
 const assetUrl = (p) => {
   const baseUrl = (import.meta?.env?.BASE_URL ?? "/") + "";
   const b = baseUrl.endsWith("/") ? baseUrl : baseUrl + "/";
-  return b + String(p || "").replace(/^\//, "");
+  return b + p.replace(/^\//, "");
 };
 
 
@@ -1750,7 +1750,7 @@ export default function Rush3DPage({ status, connected = true }) {
       {
         id: "da",
         title: "다 멍청해",
-        src: encodeURI(assetUrl("audio/다 멍청해.mp3")),
+        src: encodeURI("/audio/다 멍청해.mp3"),
         bpm: 120,
         offsetSec: 0.65,
         seed: 11,
@@ -1758,7 +1758,7 @@ export default function Rush3DPage({ status, connected = true }) {
       {
         id: "lemon",
         title: "Lemon Tree",
-        src: encodeURI(assetUrl("audio/lemon_tree.mp3")),
+        src: encodeURI("/audio/lemon_tree.mp3"),
         bpm: 128,
         offsetSec: 0.8,
         seed: 22,
@@ -1766,7 +1766,7 @@ export default function Rush3DPage({ status, connected = true }) {
       {
         id: "rush",
         title: "Rush F",
-        src: encodeURI(assetUrl("audio/rush_e.mp3")),
+        src: encodeURI("/audio/rush_e.mp3"),
         bpm: 112,
         offsetSec: 0.7,
         seed: 33,
@@ -1924,7 +1924,8 @@ export default function Rush3DPage({ status, connected = true }) {
     try {
       const modeParam = rushInput === "COLOR" ? "RUSH_COLOR" : "RUSH_HAND";
 
-      const r1 = await fetch(controlApiUrl(`control/mode?mode=${encodeURIComponent(modeParam)}`),
+      const r1 = await fetch(
+        controlApiUrl(`control/mode?mode=${encodeURIComponent(modeParam)}`),
         {
           method: "POST",
         },
