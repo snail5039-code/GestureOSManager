@@ -397,7 +397,9 @@ def run_vision():
        
 
                 # Rule 2: Restore Defense Pipeline (weaving/guard)
-                if final_attack == "none":
+                # 🔥 IMPORTANT: Chance Time 동안 절대 방어 판정 돌지 말 것
+                if (not chance_requested) and final_attack == "none":
+
                     # Check for punch-like motion to avoid guard/weaving during actual punches
                     is_punch_like = speed > speed_threshold and elbow_ang > extended_angle
                     
@@ -532,7 +534,7 @@ def run_vision():
                             ):
                                 attack_type = "uppercut"
 
-                            # 2) HOOK (옆으로 진짜 휘두를 때만)
+                            # 2) HOOK (옆으로 진짜 휘두를 때만)s
                             elif (
                                 abs(dx_cls) > hook_dx and
                                 abs(dx_cls) > abs(dy_cls) * 1.3 and
@@ -612,13 +614,35 @@ def run_vision():
         cv2.imshow("Motion Debug", frame)
         if cv2.waitKey(1) & 0xFF == 27: break
 
+        # =========================
+        # 🔒 MOTION EMIT GATE (CRITICAL)
+        # =========================
         if not just_failed:
-            if chance_requested and final_attack in ("jab", "straight", "hook", "uppercut"):
-                socketio.emit("motion", {"x": round(head_x,3), "z": round(guard_val,3), "dir": final_attack, "t": time.time()})
+
+            # ✅ Chance Time: ONLY send real attacks
+            if chance_requested:
+                if final_attack in ("jab", "straight", "hook", "uppercut"):
+                    socketio.emit("motion", {
+                        "x": round(head_x,3),
+                        "z": round(guard_val,3),
+                        "dir": final_attack,
+                        "t": time.time()
+                    })
+                    last_send_time = time.time()
+
+                # 🔥 Chance 중에는 weaving/guard/none 절대 보내지 마라
+                continue
+
+            # ✅ Normal Mode Only (Defense + idle)
+            if time.time() - last_send_time > 0.05:
+                socketio.emit("motion", {
+                    "x": round(head_x,3),
+                    "z": round(guard_val,3),
+                    "dir": final_attack,
+                    "t": time.time()
+                })
                 last_send_time = time.time()
-            elif time.time() - last_send_time > 0.05:
-                socketio.emit("motion", {"x": round(head_x,3), "z": round(guard_val,3), "dir": final_attack, "t": time.time()})
-                last_send_time = time.time()
+
 
     cap.release()
     cv2.destroyAllWindows()

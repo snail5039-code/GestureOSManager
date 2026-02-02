@@ -4,6 +4,9 @@ import { useGLTF, PerspectiveCamera, Environment, Preload } from "@react-three/d
 import { io } from "socket.io-client";
 import * as THREE from "three";
 
+/* =======================
+   GLB 경로
+======================= */
 const MODELS_LIST = {
   base: "/models/enemy_boxer.glb",
   jab_l: "/models/Punch_left.glb",
@@ -15,6 +18,29 @@ const MODELS_LIST = {
   hit2: "/models/Hit2.glb",
 };
 
+Object.values(MODELS_LIST).forEach((url) => useGLTF.preload(url));
+
+/* =======================
+   HP 유틸
+======================= */
+const getHpStage = (hp) => {
+  if (hp >= 71) return 0; // GREEN
+  if (hp >= 41) return 1; // YELLOW
+  if (hp >= 11) return 2; // ORANGE
+  return 3; // RED
+};
+
+const getHpColor = (hp) => {
+  const stage = getHpStage(hp);
+  if (stage === 0) return "#00ff5a";
+  if (stage === 1) return "#ffe600";
+  if (stage === 2) return "#ff8c00";
+  return "#ff2a2a";
+};
+
+/* =======================
+   3D 씬
+======================= */
 function BoxerScene({ activeKey, headX, onReturnToBase, isHitPlayingRef }) {
   const m = {
     base: useGLTF(MODELS_LIST.base),
@@ -39,6 +65,7 @@ function BoxerScene({ activeKey, headX, onReturnToBase, isHitPlayingRef }) {
       onReturnToBase();
       if (isHitPlayingRef.current) isHitPlayingRef.current = false;
     };
+
     mixerRef.current.addEventListener("finished", handleFinished);
 
     Object.keys(m).forEach((key) => {
@@ -54,153 +81,193 @@ function BoxerScene({ activeKey, headX, onReturnToBase, isHitPlayingRef }) {
 
     actionsRef.current.base?.play();
 
-    return () => mixerRef.current?.removeEventListener("finished", handleFinished);
+    return () => {
+      mixerRef.current?.removeEventListener("finished", handleFinished);
+    };
   }, [m.base]);
 
   useEffect(() => {
     Object.keys(actionsRef.current).forEach((key) => {
-      if (key === activeKey) actionsRef.current[key].reset().fadeIn(0.05).play();
-      else actionsRef.current[key]?.fadeOut(0.1);
+      if (key === activeKey) {
+        actionsRef.current[key].reset().fadeIn(0.05).play();
+      } else {
+        actionsRef.current[key]?.fadeOut(0.1);
+      }
     });
   }, [activeKey]);
 
-  useFrame((state, delta) => {
+  useFrame((_, delta) => {
     mixerRef.current?.update(delta);
+
     if (m.base?.scene) {
-      const targetX = (isNaN(headX) || !isFinite(headX)) ? 0 : -headX * 1.8;
+      const targetX = isFinite(headX) ? -headX * 1.8 : 0;
       m.base.scene.position.x = THREE.MathUtils.lerp(m.base.scene.position.x, targetX, 0.15);
       m.base.scene.rotation.y = THREE.MathUtils.lerp(
         m.base.scene.rotation.y,
-        (isNaN(headX) || !isFinite(headX)) ? 0 : -headX * 0.2,
+        isFinite(headX) ? -headX * 0.2 : 0,
         0.1
       );
     }
   });
 
-  if (!m.base?.scene) {
-    return <mesh position={[0, 0, 0]}><boxGeometry args={[1, 1, 1]} /><meshBasicMaterial color="red" /></mesh>;
-  }
-
+  if (!m.base?.scene) return null;
   return <primitive object={m.base.scene} scale={3.8} position={[0, -2.4, -1.8]} />;
 }
 
+/* =======================
+   메인 게임
+======================= */
 export default function GamePage() {
   const [enemyHp, setEnemyHp] = useState(100);
   const [playerHp, setPlayerHp] = useState(100);
   const [attackGauge, setAttackGauge] = useState(0);
   const [gameState, setGameState] = useState("DEFENSE");
   const [activeKey, setActiveKey] = useState("base");
-  const [gameMsg, setGameMsg] = useState("Start");
+  const [gameMsg, setGameMsg] = useState("");
   const [motion, setMotion] = useState({ x: 0, z: 0, dir: "none" });
-  const msgTimeoutRef = useRef(null);
+
+  const socketRef = useRef(null);
+  const gameStateRef = useRef(gameState);
+  const motionRef = useRef(motion);
+  const lastMotionAtRef = useRef(0);
+
   const enemyAttackPendingRef = useRef(false);
   const judgeTimeoutRef = useRef(null);
-  const lastChanceAttackRef = useRef("none");
-  const lastMotionAtRef = useRef(0);
-  const motionRef = useRef({ x: 0, z: 0, dir: "none" });
   const isHitAnimationPlayingRef = useRef(false);
 
   const [chanceTimer, setChanceTimer] = useState(2.5);
   const chanceStartTimeRef = useRef(0);
   const timerReqRef = useRef(null);
 
-  const attackTypes = new Set(["jab", "straight", "hook", "uppercut", "fail", "timeout"]);
-  const enemyHitDelayMs = { jab_l: 250, jab_r: 250, straight: 380, hook: 520, uppercut: 520 };
-  const socketRef = useRef();
+  const enemyHitDelayMs = { jab_l: 250, jab_r: 250, straight: 350, hook: 480, uppercut: 480 };
 
-  // socket 연결 및 motion 수신
+  const isGameOver = playerHp <= 0;
+  const isWin = enemyHp <= 0;
+
+  /* ===================
+     HP 단계 진입 연출용
+  =================== */
+  const prevPlayerStageRef = useRef(getHpStage(playerHp));
+  const prevEnemyStageRef = useRef(getHpStage(enemyHp));
+
+  const [vignette, setVignette] = useState(0);
+  const [shake, setShake] = useState(0);
+
+  const triggerHpStageEffect = (stage) => {
+    let s = 0;
+    let v = 0;
+
+    if (stage === 1) { s = 3; v = 0.25; }
+    if (stage === 2) { s = 6; v = 0.45; }
+    if (stage === 3) { s = 10; v = 0.7; }
+
+    setShake(s);
+    setVignette(v);
+
+    setTimeout(() => {
+      setShake(0);
+      setVignette(0);
+    }, 500);
+  };
+
+  useEffect(() => {
+    const cur = getHpStage(playerHp);
+    if (cur !== prevPlayerStageRef.current) {
+      triggerHpStageEffect(cur);
+      prevPlayerStageRef.current = cur;
+    }
+  }, [playerHp]);
+
+  useEffect(() => {
+    const cur = getHpStage(enemyHp);
+    if (cur !== prevEnemyStageRef.current) {
+      triggerHpStageEffect(cur);
+      prevEnemyStageRef.current = cur;
+    }
+  }, [enemyHp]);
+
+  useEffect(() => {
+    gameStateRef.current = gameState;
+  }, [gameState]);
+
+  /* ================= Socket ================= */
   useEffect(() => {
     socketRef.current = io("http://127.0.0.1:65432");
-    socketRef.current.on("motion", (data) => {
-      const now = Date.now();
-      const ts = typeof data.t === "number" ? data.t * 1000 : now;
+
+    const onMotion = (data) => {
+      const ts = Date.now();
+      if (ts - lastMotionAtRef.current < 40) return;
       lastMotionAtRef.current = ts;
+
       motionRef.current = { ...data, t: ts };
       setMotion(data);
-    });
 
-    const handleChanceEnd = () => {
-      setGameState("DEFENSE");
-      setActiveKey("base");
-    };
-    socketRef.current.on("chance_end", handleChanceEnd);
+      if (gameStateRef.current === "ATTACK_CHANCE") {
+        const rawDir = (data.dir || "").toLowerCase();
 
-    return () => {
-      socketRef.current.off("chance_end", handleChanceEnd);
-      socketRef.current.disconnect();
+        if (rawDir.includes("jab") || rawDir.includes("straight") || rawDir.includes("hook") || rawDir.includes("upper")) {
+          const mapped =
+            rawDir.includes("jab") ? "jab" :
+            rawDir.includes("straight") ? "straight" :
+            rawDir.includes("hook") ? "hook" : "uppercut";
+
+          handlePlayerAttack(mapped);
+          setGameState("DEFENSE");
+        }
+      }
     };
+
+    socketRef.current.on("motion", onMotion);
+    return () => socketRef.current.disconnect();
   }, []);
 
-  useEffect(() => {
-    if (socketRef.current && gameState === "ATTACK_CHANCE") {
-      socketRef.current.emit("chance", { chance_trigger: true });
-    }
-  }, [gameState]);
-
-  useEffect(() => {
-    if (gameState === "ATTACK_CHANCE") lastChanceAttackRef.current = "none";
-  }, [gameState]);
-
-  // 찬스타임 공격
-  useEffect(() => {
-    if (gameState === "ATTACK_CHANCE") {
-      if (attackTypes.has(motion.dir) && motion.dir !== lastChanceAttackRef.current) {
-        lastChanceAttackRef.current = motion.dir;
-        handlePlayerAttack(motion.dir);
-      }
-    }
-  }, [motion]);
-
+  /* ================= Chance Timer ================= */
   useEffect(() => {
     if (gameState === "ATTACK_CHANCE") {
       chanceStartTimeRef.current = Date.now();
+
       const updateTimer = () => {
         const elapsed = (Date.now() - chanceStartTimeRef.current) / 1000;
         const remaining = Math.max(0, 2.5 - elapsed);
         setChanceTimer(remaining);
+
         if (remaining > 0) timerReqRef.current = requestAnimationFrame(updateTimer);
         else setGameState("DEFENSE");
       };
+
       timerReqRef.current = requestAnimationFrame(updateTimer);
     } else {
       if (timerReqRef.current) cancelAnimationFrame(timerReqRef.current);
       setChanceTimer(2.5);
     }
-    return () => {
-      if (timerReqRef.current) cancelAnimationFrame(timerReqRef.current);
-    };
   }, [gameState]);
 
   const showMessage = (msg, duration = 600) => {
     setGameMsg(msg);
-    if (msgTimeoutRef.current) clearTimeout(msgTimeoutRef.current);
-    msgTimeoutRef.current = setTimeout(() => setGameMsg(""), duration);
+    setTimeout(() => setGameMsg(""), duration);
   };
 
+  /* ================= 플레이어 공격 ================= */
   const handlePlayerAttack = (type) => {
-    if (type === "fail" || type === "timeout") {
-      setAttackGauge(0);
-      showMessage("FAIL", 200);
-      return;
-    }
-
     const damages = { jab: 15, straight: 25, hook: 70, uppercut: 100 };
+
     setEnemyHp((prev) => Math.max(0, prev - (damages[type] || 20)));
     setAttackGauge(0);
     showMessage(`${type.toUpperCase()}!!`, 400);
 
-    // 🔥 HIT 애니 재생
     const hitKey = Math.random() < 0.5 ? "hit1" : "hit2";
     isHitAnimationPlayingRef.current = true;
     setActiveKey(hitKey);
   };
 
+  /* ================= 적 공격 판정 ================= */
   const handleEnemyAttackJudge = () => {
-    if (gameState !== "DEFENSE") return;
+    if (gameStateRef.current !== "DEFENSE" || isGameOver || isWin) return;
 
-    const now = Date.now();
     const snapshot = motionRef.current;
+    const now = Date.now();
     const isFresh = now - lastMotionAtRef.current < 180;
+
     const isDodged = isFresh && snapshot.dir === "weaving";
     const isGuarded = isFresh && snapshot.dir === "guard";
 
@@ -209,7 +276,8 @@ export default function GamePage() {
         const next = Math.min(100, prev + (isDodged ? 40 : 20));
         if (next >= 100) {
           setGameState("ATTACK_CHANCE");
-          showMessage("🔥 CHANCE! 🔥", 1000);
+          showMessage("🔥 CHANCE! 🔥", 800);
+          socketRef.current.emit("chance", { chance_trigger: true });
         } else {
           showMessage(isDodged ? "💨 DODGE!" : "🛡️ GUARD!");
         }
@@ -219,71 +287,177 @@ export default function GamePage() {
       setPlayerHp((prev) => Math.max(0, prev - 15));
       showMessage("💥 HIT!");
     }
+
     enemyAttackPendingRef.current = false;
   };
 
-  // 랜덤 적 공격
+  /* ================= 랜덤 적 공격 ================= */
   useEffect(() => {
-    if (gameState !== "DEFENSE" || activeKey !== "base") return;
-    if (isHitAnimationPlayingRef.current) return;
+    if (gameState !== "DEFENSE" || activeKey !== "base" || isHitAnimationPlayingRef.current || isGameOver || isWin) return;
 
     const timer = setTimeout(() => {
       if (enemyAttackPendingRef.current) return;
+
       const attacks = ["jab_l", "jab_r", "straight", "hook", "uppercut"];
       const nextAttack = attacks[Math.floor(Math.random() * attacks.length)];
+
       setActiveKey(nextAttack);
       enemyAttackPendingRef.current = true;
-      if (judgeTimeoutRef.current) clearTimeout(judgeTimeoutRef.current);
+
       const hitDelay = enemyHitDelayMs[nextAttack] ?? 350;
       judgeTimeoutRef.current = setTimeout(handleEnemyAttackJudge, hitDelay);
-    }, 2000);
+    }, 1500);
 
     return () => clearTimeout(timer);
-  }, [activeKey, gameState]);
+  }, [activeKey, gameState, isGameOver, isWin]);
 
-  const getPlayerHpColor = (hp) => hp > 60 ? "#00ff00" : hp > 30 ? "#ffff00" : "#ff0000";
-
-  const isGameOver = playerHp <= 0;
+  const shakeStyle = shake > 0 ? { animation: `shake 0.12s infinite` } : {};
 
   return (
-    <div style={{ width: "100vw", height: "100vh", position: "relative", overflow: "hidden", backgroundColor: "#000" }}>
-      <div style={{ position: "absolute", top: 30, width: "100%", textAlign: "center", color: "white", zIndex: 10 }}>
-        {/* 적 체력 */}
-        <div style={{ width: "400px", height: "16px", background: "#222", margin: "0 auto", borderRadius: "10px", border: "2px solid #fff", overflow: "hidden" }}>
-          <div style={{ width: `${enemyHp}%`, height: "100%", background: "linear-gradient(90deg, #f00, #ff416c)", transition: "width 0.4s" }} />
-        </div>
-        {/* 플레이어 체력 */}
-        <div style={{ width: "400px", height: "16px", background: "#222", margin: "8px auto 0", borderRadius: "10px", border: "2px solid #fff", overflow: "hidden" }}>
-          <div style={{ width: `${playerHp}%`, height: "100%", background: `linear-gradient(90deg, ${getPlayerHpColor(playerHp)}, #000)`, transition: "width 0.4s, background 0.4s" }} />
-        </div>
-        {/* 게임 메시지 */}
-        {gameMsg && <h1 style={{ fontSize: "80px", fontWeight: "900", textShadow: "4px 4px 10px #000", margin: "10px 0" }}>{gameMsg}</h1>}
-        {/* 에너지 게이지 */}
-        <div style={{ width: "500px", height: "20px", background: "rgba(0,0,0,0.5)", border: "2px solid #555", margin: "10px auto", borderRadius: "10px", overflow: "hidden" }}>
-          <div style={{ width: `${attackGauge}%`, height: "100%", background: "linear-gradient(90deg, #00ffff, #00b3ff)", boxShadow: "0 0 15px #00ffff,0 0 25px #00b3ff", transition: "width 0.2s" }} />
-        </div>
-        {/* 찬스타이머 */}
-        {gameState === "ATTACK_CHANCE" && (
-          <div style={{ width: "300px", height: "10px", background: "#333", margin: "5px auto", borderRadius: "5px", overflow: "hidden" }}>
-            <div style={{
-              width: `${(chanceTimer / 2.5) * 100}%`,
-              height: "100%",
-              background: chanceTimer < 0.3 ? "#ff0000" : "#00ff00",
-              transition: "width 0.1s, background 0.1s"
-            }} />
-          </div>
-        )}
-        {/* Game Over */}
-        {isGameOver && (
-          <div style={{
-            position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)",
-            fontSize: "100px", color: "#ff0000", textShadow: "0 0 20px #000", fontWeight: "900"
-          }}>
-            GAME OVER
-          </div>
-        )}
-      </div>
+    <div
+      style={{
+        width: "100vw",
+        height: "100vh",
+        position: "relative",
+        overflow: "hidden",
+        background: `url(/models/Background.png) center/cover no-repeat`,
+        boxShadow: vignette ? `inset 0 0 ${vignette * 300}px rgba(0,0,0,0.85)` : "none",
+        ...shakeStyle,
+      }}
+    >
+      <style>
+        {`
+        @keyframes shake {
+          0% { transform: translate(0px, 0px); }
+          25% { transform: translate(3px, -3px); }
+          50% { transform: translate(-3px, 3px); }
+          75% { transform: translate(3px, 3px); }
+          100% { transform: translate(0px, 0px); }
+        }
+        `}
+      </style>
 
+{/* UI */}
+<div style={{ position: "absolute", top: 20, left: 0, right: 0, zIndex: 10, pointerEvents: "none" }}>
+  
+  {/* PLAYER - Left */}
+  <div style={{ position: "absolute", left: 30, top: 0, width: 360 }}>
+    <div style={{ marginBottom: 6, fontWeight: 900, color: "#4da6ff", textAlign: "left" }}>
+      PLAYER
+    </div>
+    <div style={{ width: "100%", height: 16, background: "#111", borderRadius: 10, border: "2px solid #4da6ff" }}>
+      <div
+        style={{
+          width: `${playerHp}%`,
+          height: "100%",
+          background: getHpColor(playerHp),
+          boxShadow: `0 0 10px ${getHpColor(playerHp)}`,
+          borderRadius: 10,
+          transition: "width 0.6s ease",
+        }}
+      />
+    </div>
+  </div>
+
+  {/* ENEMY - Right */}
+  <div style={{ position: "absolute", right: 30, top: 0, width: 360 }}>
+    <div style={{ marginBottom: 6, fontWeight: 900, color: "#ff4d4d", textAlign: "right" }}>
+      ENEMY
+    </div>
+    <div style={{ width: "100%", height: 16, background: "#111", borderRadius: 10, border: "2px solid #ff4d4d" }}>
+      <div
+        style={{
+          width: `${enemyHp}%`,
+          height: "100%",
+          background: getHpColor(enemyHp),
+          boxShadow: `0 0 10px ${getHpColor(enemyHp)}`,
+          borderRadius: 10,
+          transition: "width 0.6s ease",
+          marginLeft: "auto",   // 👉 오른쪽에서 왼쪽으로 줄어들게
+        }}
+      />
+    </div>
+  </div>
+
+  {/* Gauge - Top Center */}
+  <div style={{ width: 420, height: 18, margin: "50px auto 0", background: "#000", borderRadius: 12 }}>
+    <div
+      style={{
+        width: `${attackGauge}%`,
+        height: "100%",
+        background: "linear-gradient(90deg,#00ffff,#0077ff)",
+        boxShadow: "0 0 15px #00ffff",
+        borderRadius: 12,
+        transition: "width 0.3s ease",
+      }}
+    />
+  </div>
+
+  {/* Chance Timer - Center */}
+  {gameState === "ATTACK_CHANCE" && (
+    <div style={{ width: 260, height: 8, margin: "8px auto 0", background: "#222", borderRadius: 6 }}>
+      <div
+        style={{
+          width: `${(chanceTimer / 2.5) * 100}%`,
+          height: "100%",
+          background: chanceTimer < 0.4 ? "#ff0000" : "#00ff00",
+          borderRadius: 6,
+        }}
+      />
+    </div>
+  )}
+
+  {gameMsg && (
+    <div style={{ marginTop: 30, textAlign: "center" }}>
+      <h1 style={{ fontSize: 72, fontWeight: 900, textShadow: "4px 4px 12px #000" }}>
+        {gameMsg}
+      </h1>
+    </div>
+  )}
+</div>
+
+
+      {/* WIN */}
+      {isWin && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: "rgba(0,0,0,0.85)",
+            zIndex: 30,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 120,
+            fontWeight: 900,
+            color: "#00ff5a",
+          }}
+        >
+          YOU WIN!
+        </div>
+      )}
+
+      {/* GAME OVER */}
+      {isGameOver && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: "rgba(0,0,0,0.85)",
+            zIndex: 30,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 120,
+            fontWeight: 900,
+            color: "#ff0000",
+          }}
+        >
+          GAME OVER
+        </div>
+      )}
+
+      {/* 3D */}
       <Canvas>
         <Suspense fallback={null}>
           <PerspectiveCamera makeDefault position={[0, 1.5, 4.5]} />
