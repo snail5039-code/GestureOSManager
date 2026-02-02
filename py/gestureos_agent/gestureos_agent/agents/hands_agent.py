@@ -119,27 +119,47 @@ def _get_os_cursor_xy():
         return (None, None)
 
 
-
 # -----------------------------------------------------------------------------
 # ✅ Win11 안정형 좌클릭 주입 (VKEY/KEYBOARD에서 PINCH로 OSK 버튼 누르기)
 # -----------------------------------------------------------------------------
-# IMPORTANT: Do NOT redefine INPUT structs here. Use centralized wininput to avoid
-# ERROR_INVALID_PARAMETER(87) and PyInstaller cbSize mismatch.
-from .. import wininput
-
-# ✅ platform flag (used for Win-only injection paths)
 _IS_WIN = (os.name == "nt")
+if _IS_WIN:
+    from ctypes import wintypes
 
-
-def _win_left_click():
+    # ✅ 일부 Python에서 wintypes.ULONG_PTR 없음 → 직접 정의
     try:
-        return bool(wininput.left_click())
-    except Exception:
-        return False
+        ULONG_PTR = wintypes.ULONG_PTR
+    except AttributeError:
+        ULONG_PTR = ctypes.c_uint64 if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_uint32
+    INPUT_MOUSE = 0
+    MOUSEEVENTF_LEFTDOWN = 0x0002
+    MOUSEEVENTF_LEFTUP = 0x0004
+
+    class _MOUSEINPUT(ctypes.Structure):
+        _fields_ = [
+            ("dx", wintypes.LONG),
+            ("dy", wintypes.LONG),
+            ("mouseData", wintypes.DWORD),
+            ("dwFlags", wintypes.DWORD),
+            ("time", wintypes.DWORD),
+            ("dwExtraInfo", ULONG_PTR),
+        ]
+
+    class _INPUT_UNION(ctypes.Union):
+        _fields_ = [("mi", _MOUSEINPUT)]
+
+    class _INPUT(ctypes.Structure):
+        _fields_ = [("type", wintypes.DWORD), ("u", _INPUT_UNION)]
+
+    def _win_left_click():
+        user32 = ctypes.windll.user32
+        down = _INPUT(type=INPUT_MOUSE, u=_INPUT_UNION(mi=_MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTDOWN, 0, 0)))
+        up = _INPUT(type=INPUT_MOUSE, u=_INPUT_UNION(mi=_MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTUP, 0, 0)))
+        arr = (_INPUT * 2)(down, up)
+        user32.SendInput(2, ctypes.byref(arr), ctypes.sizeof(_INPUT))
 
 
 # tracking loss handling
-
 LOSS_GRACE_SEC = 0.30
 HARD_LOSS_SEC = 0.55
 REACQUIRE_BLOCK_SEC = 0.12
@@ -678,6 +698,8 @@ class HandsAgent:
         if typ == "ENABLE":
             self.enabled = True
             self.locked = False
+            # ✅ also clear UI-locked (gesture/ui toggle) so inject can resume
+            self.ui_locked = False
 
         elif typ == "DISABLE":
             # ✅ KEYBOARD 모드에서 SET_MODE 직후 들어오는 DISABLE(동기화 레이스)로
@@ -2135,3 +2157,4 @@ class HandsAgent:
                     hud.force_refresh()
                 except Exception:
                     pass
+

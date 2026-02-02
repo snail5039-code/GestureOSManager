@@ -10,7 +10,6 @@ import subprocess
 import socket
 import signal
 import atexit
-import threading
 
 
 def _set_dpi_awareness():
@@ -57,60 +56,144 @@ def _udp_port_in_use(port: int, host: str = "0.0.0.0") -> bool:
 
 
 class PhoneAutoRunner:
-    def __init__(self, py_root, enable=True, mjpeg_port=8081, udp_port=39500):
+    def __init__(self, py_root: str, enable: bool = True, mjpeg_port: int = 8081, udp_port: int = 39500):
         self.py_root = py_root
-        self.enable = bool(enable)
-        self.mjpeg_port = int(mjpeg_port)
-        self.udp_port = int(udp_port)
-        self._started = False
+        self.enable = enable
+        self.mjpeg_port = mjpeg_port
+        self.udp_port = udp_port
+        self.procs = []
+
+        temp = os.getenv("TEMP") or os.getenv("TMP") or "."
+        self.log_dir = os.path.join(temp, "GestureOS_phone")
+        os.makedirs(self.log_dir, exist_ok=True)
 
     def start(self):
-        if self._started:
-            return
-        self._started = True
-
         if not self.enable:
             print("[PHONE] disabled (--no-phone)", flush=True)
             return
 
-        # MJPEG (http://0.0.0.0:8081/mjpeg)
+
+        # In PyInstaller (frozen) builds, auto-starting helper scripts may spawn
+        # extra windows and duplicate processes. Disable by default unless enabled.
+        if getattr(sys, "frozen", False) and os.environ.get("GESTUREOS_PHONE_ENABLE", "0").strip() not in ("1","true","True","YES","yes"):
+            print("[PHONE] frozen build: auto helpers disabled (set GESTUREOS_PHONE_ENABLE=1 to enable)", flush=True)
+            return
+
+        phone_dir = os.path.join(self.py_root, "phone")
+        pc_stream = os.path.join(phone_dir, "pc_stream_mjpeg.py")
+        xr_bridge = os.path.join(phone_dir, "xr_bridge.py")
+
         if _tcp_port_open("127.0.0.1", self.mjpeg_port):
             print(f"[PHONE] MJPEG already running on 127.0.0.1:{self.mjpeg_port} (skip)", flush=True)
         else:
-            t = threading.Thread(target=self._run_mjpeg, daemon=True)
-            t.start()
-            print(f"[PHONE] MJPEG thread started (port={self.mjpeg_port})", flush=True)
+            self._spawn("pc_stream_mjpeg", pc_stream)
 
-        # UDP bridge (39500)
         if _udp_port_in_use(self.udp_port, "0.0.0.0"):
             print(f"[PHONE] UDP port {self.udp_port} already in use (skip xr_bridge)", flush=True)
         else:
-            t = threading.Thread(target=self._run_xr_bridge, daemon=True)
-            t.start()
-            print(f"[PHONE] xr_bridge thread started (udp={self.udp_port})", flush=True)
+            self._spawn("xr_bridge", xr_bridge)
 
-    def _run_mjpeg(self):
-        try:
-            from phone import pc_stream_mjpeg as m
-            # Flask reloader OFF (중복 프로세스 방지)
-            m.app.run(host="0.0.0.0", port=int(self.mjpeg_port), threaded=True, use_reloader=False)
-        except Exception as e:
-            print("[PHONE] MJPEG thread error:", repr(e), flush=True)
+        atexit.register(self.stop)
 
-    def _run_xr_bridge(self):
+    def _spawn(self, name: str, script_path: str):
+        if not os.path.exists(script_path):
+            print(f"[PHONE] missing script: {script_path} (skip {name})", flush=True)
+            return
+
+        log_path = os.path.join(self.log_dir, f"{name}.log")
         try:
-            from phone import xr_bridge as xb
+            log_fp = open(log_path, "a", encoding="utf-8")
+        except Exception:
+            log_fp = None
+
+        # Hide console windows on Windows (avoid CMD flashing).
+        creationflags = 0
+        startupinfo = None
+        py_exe = sys.executable
+
+        if os.name == "nt":
+            # Prefer pythonw.exe when available (no console window).
             try:
-                xb.UDP_PORT = int(self.udp_port)
+                cand = py_exe
+                if cand.lower().endswith("python.exe"):
+                    cand_w = cand[:-10] + "pythonw.exe"
+                    if os.path.exists(cand_w):
+                        py_exe = cand_w
             except Exception:
                 pass
-            xb.main()
+
+            try:
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = 0  # SW_HIDE
+            except Exception:
+                startupinfo = None
+
+            # CREATE_NO_WINDOW suppresses a console even when python.exe is used.
+            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+        cmd = [py_exe, script_path]
+
+        try:
+            p = subprocess.Popen(
+                cmd,
+                cwd=os.path.dirname(script_path),
+                creationflags=creationflags,
+                startupinfo=startupinfo,
+                stdout=log_fp if log_fp else subprocess.DEVNULL,
+                stderr=log_fp if log_fp else subprocess.DEVNULL,
+            )
+            self.procs.append((name, p, log_fp))
+            print(f"[PHONE] started {name} (pid={p.pid}) log={log_path}", flush=True)
         except Exception as e:
-            print("[PHONE] xr_bridge thread error:", repr(e), flush=True)
+            print(f"[PHONE] failed to start {name}: {e}", flush=True)
+            try:
+                if log_fp:
+                    log_fp.close()
+            except Exception:
+                pass
 
     def stop(self):
-        # in-proc thread workers stop when parent exits
-        return
+        if not self.procs:
+            return
+
+        for name, p, log_fp in self.procs:
+            try:
+                if p.poll() is not None:
+                    continue
+
+                if os.name == "nt":
+                    try:
+                        p.send_signal(signal.CTRL_BREAK_EVENT)
+                        p.wait(timeout=1.5)
+                    except Exception:
+                        pass
+
+                if p.poll() is None:
+                    try:
+                        p.terminate()
+                        p.wait(timeout=1.0)
+                    except Exception:
+                        pass
+
+                if p.poll() is None:
+                    try:
+                        p.kill()
+                    except Exception:
+                        pass
+
+                print(f"[PHONE] stopped {name}", flush=True)
+            except Exception:
+                pass
+            finally:
+                try:
+                    if log_fp:
+                        log_fp.flush()
+                        log_fp.close()
+                except Exception:
+                    pass
+
+        self.procs.clear()
 
 
 def main():

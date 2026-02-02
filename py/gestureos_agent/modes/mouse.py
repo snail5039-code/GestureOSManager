@@ -4,67 +4,34 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 import time
-import ctypes
-from ctypes import wintypes
 
-# -----------------------------------------------------------------------------
-# Win11 안정형 마우스 입력: SendInput (+ mouse_event fallback)
-# -----------------------------------------------------------------------------
+from .. import wininput
 
-user32 = ctypes.windll.user32
+# ----------------------------------------------------------------------------
+# Mouse injection wrapper
+# - Use centralized wininput.* to avoid SendInput struct-size issues (87)
+# - wininput already has mouse_event fallback
+# ----------------------------------------------------------------------------
 
-INPUT_MOUSE = 0
+_IS_WIN = (os.name == "nt")
 
-MOUSEEVENTF_MOVE = 0x0001
-MOUSEEVENTF_LEFTDOWN = 0x0002
-MOUSEEVENTF_LEFTUP = 0x0004
-MOUSEEVENTF_RIGHTDOWN = 0x0008
-MOUSEEVENTF_RIGHTUP = 0x0010
-MOUSEEVENTF_WHEEL = 0x0800
+# Re-export commonly used flags (keep existing semantics)
+MOUSEEVENTF_LEFTDOWN = getattr(wininput, "MOUSEEVENTF_LEFTDOWN", 0x0002)
+MOUSEEVENTF_LEFTUP = getattr(wininput, "MOUSEEVENTF_LEFTUP", 0x0004)
+MOUSEEVENTF_RIGHTDOWN = getattr(wininput, "MOUSEEVENTF_RIGHTDOWN", 0x0008)
+MOUSEEVENTF_RIGHTUP = getattr(wininput, "MOUSEEVENTF_RIGHTUP", 0x0010)
+MOUSEEVENTF_WHEEL = getattr(wininput, "MOUSEEVENTF_WHEEL", 0x0800)
 
-WHEEL_DELTA = 120
-
-# ✅ 일부 Python/환경에서 wintypes.ULONG_PTR 없음
-try:
-    ULONG_PTR = wintypes.ULONG_PTR
-except AttributeError:
-    ULONG_PTR = ctypes.c_uint64 if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_uint32
-
-
-class MOUSEINPUT(ctypes.Structure):
-    _fields_ = [
-        ("dx", wintypes.LONG),
-        ("dy", wintypes.LONG),
-        ("mouseData", wintypes.DWORD),
-        ("dwFlags", wintypes.DWORD),
-        ("time", wintypes.DWORD),
-        ("dwExtraInfo", ULONG_PTR),
-    ]
-
-
-class INPUT_UNION(ctypes.Union):
-    _fields_ = [("mi", MOUSEINPUT)]
-
-
-class INPUT(ctypes.Structure):
-    _fields_ = [("type", wintypes.DWORD), ("u", INPUT_UNION)]
+WHEEL_DELTA = getattr(wininput, "WHEEL_DELTA", 120)
 
 
 def _send_mouse(flags: int, data: int = 0) -> bool:
-    """SendInput 기반 마우스 이벤트. 실패 시 mouse_event로 fallback."""
-    try:
-        inp = INPUT(type=INPUT_MOUSE, u=INPUT_UNION(mi=MOUSEINPUT(0, 0, int(data), int(flags), 0, 0)))
-        arr = (INPUT * 1)(inp)
-        n = user32.SendInput(1, ctypes.byref(arr), ctypes.sizeof(INPUT))
-        if n == 1:
-            return True
-    except Exception:
-        pass
+    """Send a mouse event.
 
-    # fallback: mouse_event
+    NOTE: We intentionally avoid local ctypes INPUT definitions here.
+    """
     try:
-        user32.mouse_event(int(flags), 0, 0, int(data), 0)
-        return True
+        return bool(wininput.send_mouse(int(flags), int(data)))
     except Exception:
         return False
 

@@ -1,13 +1,18 @@
 # build_agent.ps1
-# Run this in the py/ folder (PowerShell):
-#   Set-ExecutionPolicy -Scope Process Bypass
-#   .\build_agent.ps1
+# Build GestureOSAgent with MediaPipe assets + UAC admin manifest (bypass UIPI injection blocks)
 $ErrorActionPreference = "Stop"
 
-# Use the current python (recommended: Python 3.10 venv)
-python -m pip install -U pip pyinstaller
+Write-Host "[1/4] Activate venv if present..." -ForegroundColor Cyan
+if (Test-Path ".\.venv\Scripts\Activate.ps1") {
+  . .\.venv\Scripts\Activate.ps1
+}
 
-# Build using spec (includes MediaPipe assets)
-python -m PyInstaller --noconfirm --clean .\GestureOSAgent.spec
+Write-Host "[2/4] Ensure deps..." -ForegroundColor Cyan
+python -m pip install -U pip | Out-Host
+python -m pip install -U pyinstaller | Out-Host
 
-Write-Host "`nDone. Output => .\dist\GestureOSAgent\" -ForegroundColor Green
+Write-Host "[3/4] Build (spec)..." -ForegroundColor Cyan
+python -m PyInstaller --noconfirm --clean GestureOSAgent.spec | Out-Host
+
+Write-Host "[4/4] Done. Output: dist\GestureOSAgent\" -ForegroundColor Green
+Write-Host "NOTE: This build requests Admin (UAC). When launched, Windows will prompt once." -ForegroundColor Yellow
