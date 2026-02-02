@@ -13,6 +13,7 @@ import {
   attachAccountInterceptors,
   tryRefreshAccessToken,
 } from "../api/accountClient";
+import { isPackaged } from "../runtime/endpoints";
 
 const AuthContext = createContext(null);
 export const useAuth = () => useContext(AuthContext);
@@ -116,10 +117,14 @@ export default function AuthProvider({ children }) {
         if (t) {
           await refreshMe();
         } else {
-          const newToken = await tryRefreshAccessToken().catch(() => null);
-          if (newToken) {
-            setToken(newToken);
-            await refreshMe();
+          // ✅ 설치본(file/app)에서는 부팅 때 자동 refresh 호출을 안 한다(401 스팸/흰화면 오해 방지)
+          // 필요하면 사용자가 로그인/브릿지할 때만 토큰을 받는다.
+          if (!isPackaged) {
+            const newToken = await tryRefreshAccessToken().catch(() => null);
+            if (newToken) {
+              setToken(newToken);
+              await refreshMe();
+            }
           }
         }
       } catch {

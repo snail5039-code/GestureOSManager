@@ -4,7 +4,7 @@ import { wsUrl } from "../runtime/endpoints";
 let ws;
 const listeners = new Set();
 
-export function connectAgentWs(url = wsUrl("/ws/agent")) {
+export function connectAgentWs(url = wsUrl("/ws/hud")) {
   // 이미 연결돼 있으면 재사용
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
     return ws;

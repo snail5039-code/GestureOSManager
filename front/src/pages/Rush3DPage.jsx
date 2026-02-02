@@ -17,6 +17,13 @@ import * as THREE from "three";
 import { THEME } from "../theme/themeTokens";
 import { controlApiUrl } from "../runtime/endpoints";
 
+const assetUrl = (p) => {
+  const baseUrl = (import.meta?.env?.BASE_URL ?? "/") + "";
+  const b = baseUrl.endsWith("/") ? baseUrl : baseUrl + "/";
+  return b + p.replace(/^\//, "");
+};
+
+
 /* =============================================================================
    유틸
 ============================================================================= */
@@ -1830,7 +1837,7 @@ export default function Rush3DPage({ status, connected = true }) {
     if (sfxRef.current.ctx.state !== "running")
       await sfxRef.current.ctx.resume();
 
-    const res = await fetch("/sfx/slice.wav", { cache: "force-cache" });
+    const res = await fetch(assetUrl("sfx/slice.wav"), { cache: "force-cache" });
     const arr = await res.arrayBuffer();
     const buf = await sfxRef.current.ctx.decodeAudioData(arr);
     sfxRef.current.buf = buf;

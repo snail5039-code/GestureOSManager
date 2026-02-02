@@ -1,0 +1,41 @@
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
+
+export default defineConfig({
+
+  base: "./", // ✅ 설치판(file://)에서 assets 경로 깨짐 방지
+  plugins: [react(), tailwindcss()],
+
+  resolve: { dedupe: ["react", "react-dom"] },
+
+  server: {
+    proxy: {
+      // ✅ 계정/인증/회원 API는 8082 (Spring)
+      "^/api/auth/.*": {
+        target: "http://localhost:8082",
+        changeOrigin: true,
+        secure: false,
+      },
+      "^/api/members/.*": {
+        target: "http://localhost:8082",
+        changeOrigin: true,
+        secure: false,
+      },
+
+      // ✅ 나머지 /api 는 8080 (Python Agent API)
+      "^/api/.*": {
+        target: "http://localhost:8080",
+        changeOrigin: true,
+        secure: false,
+      },
+
+      // motion도 8080
+      "^/motion/.*": {
+        target: "http://localhost:8080",
+        changeOrigin: true,
+        secure: false,
+      },
+    },
+  },
+});

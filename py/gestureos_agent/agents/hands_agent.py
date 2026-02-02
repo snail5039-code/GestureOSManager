@@ -240,6 +240,15 @@ def _pack_xy(p: Optional[dict]):
     return float(cx), float(cy)
 
 
+# --- subprocess helpers (hide console windows on Windows GUI builds) ---
+
+def _subproc_no_window_kwargs():
+    if os.name != "nt":
+        return {}
+    f = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    return {"creationflags": f} if f else {}
+
+
 # =============================================================================
 # OSK robust helpers (Win+Ctrl+O + tasklist verification)
 # =============================================================================
@@ -254,6 +263,7 @@ def _tasklist_has(exe_name: str) -> bool:
             stderr=subprocess.DEVNULL,
             text=True,
             check=False,
+            **_subproc_no_window_kwargs(),
         )
         out = (r.stdout or "").lower()
         return exe.lower() in out
@@ -511,67 +521,40 @@ class HandsAgent:
     # -------------------------------------------------------------------------
     # OSK helpers
     # -------------------------------------------------------------------------
+
     def _osk_open(self):
-        """
-        배포 안정형(강화):
-        - 우선순위:
-          0) Win+Ctrl+O 토글(권한/환경 영향 적음)
-          1) ms-inputapp: (Win11 터치 키보드)
-          2) TabTip.exe start 실행
-          3) osk.exe 직접 실행
-        - 실행 후 tasklist로 실제 떠있는지 확인해 self.osk_open을 더 정확히 세팅
-        """
+        """Open on-screen keyboard without flashing CMD windows."""
         if os.name != "nt":
             return
-        if self.osk_open:
-            return
 
-        self._osk_proc = None
         launched = False
 
-        # 0) 단축키 토글
+        # 1) Win+Ctrl+O (no subprocess)
         try:
-            if _send_win_ctrl_o():
-                time.sleep(0.12)
-                if _tasklist_has("osk.exe"):
-                    launched = True
-                    print("[VKEY] toggled OSK via Win+Ctrl+O", flush=True)
-        except Exception as e:
-            print("[VKEY] hotkey toggle failed:", repr(e), flush=True)
+            _send_win_ctrl_o()
+            time.sleep(0.12)
+            if _tasklist_has("osk.exe") or _tasklist_has("TabTip.exe"):
+                launched = True
+        except Exception:
+            pass
 
-        # 1) Win11 터치키보드 URI
+        # 2) TabTip.exe (GUI)
         if not launched:
             try:
-                subprocess.Popen(
-                    ["cmd", "/c", "start", "", "ms-inputapp:"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                time.sleep(0.12)
-                if _tasklist_has("TabTip.exe"):
-                    launched = True
-                print("[VKEY] launched ms-inputapp:", flush=True)
-            except Exception as e:
-                print("[VKEY] ms-inputapp failed:", repr(e), flush=True)
-
-        # 2) TabTip
-        if not launched:
-            tabtip = r"C:\Program Files\Common Files\Microsoft Shared\ink\TabTip.exe"
-            try:
+                tabtip = r"C:\Program Files\Common Files\microsoft shared\ink\TabTip.exe"
                 if os.path.exists(tabtip):
                     subprocess.Popen(
-                        ["cmd", "/c", "start", "", tabtip],
+                        [tabtip],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
+                        **_subproc_no_window_kwargs(),
                     )
                     time.sleep(0.12)
-                    if _tasklist_has("TabTip.exe"):
-                        launched = True
-                    print("[VKEY] launched TabTip via start", flush=True)
-            except Exception as e:
-                print("[VKEY] TabTip(start) failed:", repr(e), flush=True)
+                    launched = _tasklist_has("TabTip.exe")
+            except Exception:
+                pass
 
-        # 3) osk.exe 직접
+        # 3) osk.exe (GUI)
         if not launched:
             try:
                 p = subprocess.Popen(
@@ -579,23 +562,23 @@ class HandsAgent:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     shell=False,
+                    **_subproc_no_window_kwargs(),
                 )
                 self._osk_proc = p
                 time.sleep(0.12)
-                if _tasklist_has("osk.exe"):
-                    launched = True
-                print("[VKEY] launched osk.exe (pid=%s)" % getattr(p, "pid", None), flush=True)
-            except Exception as e:
-                print("[VKEY] osk.exe failed:", repr(e), flush=True)
+                launched = _tasklist_has("osk.exe")
+            except Exception:
+                pass
 
         self.osk_open = bool(launched)
 
     def _osk_close(self):
+        """Close OSK without flashing CMD windows."""
         if os.name != "nt":
             return
 
         try:
-            if _tasklist_has("osk.exe"):
+            if _tasklist_has("osk.exe") or _tasklist_has("TabTip.exe"):
                 _send_win_ctrl_o()
                 time.sleep(0.10)
         except Exception:
@@ -614,6 +597,7 @@ class HandsAgent:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     check=False,
+                    **_subproc_no_window_kwargs(),
                 )
             except Exception:
                 pass
@@ -625,6 +609,7 @@ class HandsAgent:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     check=False,
+                    **_subproc_no_window_kwargs(),
                 )
             except Exception:
                 pass

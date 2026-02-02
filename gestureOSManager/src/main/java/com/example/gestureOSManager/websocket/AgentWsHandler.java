@@ -76,6 +76,8 @@ public class AgentWsHandler extends TextWebSocketHandler {
       if ("STATUS".equals(type)) {
         AgentStatus st = om.treeToValue(node, AgentStatus.class);
         statusService.update(st);
+        // ✅ broadcast latest STATUS to HUD clients (UI subscribes to /ws/hud)
+        try { hudWsHandler.broadcastJson(message.getPayload()); } catch (Exception ignore) {}
         return;
       }
 
