@@ -46,6 +46,17 @@ MIN_FORWARD_DZ = 0.06
 prev_weaving_head_x = 0.0
 prev_weaving_time = 0.0
 WEAVING_THRESHOLD = 0.08  # 이동량 기준, 기존보다 넉넉하게
+weave_active_until = 0.0
+WEAVE_LATCH_TIME = 0.25   # 위빙 유지 시간 (체감용)
+
+# =========================
+# Weaving anti-cheese (GLOBAL)  ✅ 여기
+# =========================s
+last_weave_head_x = 0.0
+last_weave_time = 0.0
+MIN_WEAVE_MOVE = 0.004     # 실제 좌우 이동 최소량
+WEAVE_COOLDOWN = 0.04    # 같은 자세 유지 제한
+WEAVE_POS_THRESH = 0.12   # 머리 위치 기준 위빙 유지용
 
 
 # 버퍼 초기화
@@ -88,6 +99,8 @@ def reset_chance_fsm(hard=True):
     global chance_consumed, attack_attempted, intent_counter
     global box_state, ready_to_active_counter, active_ambiguous_counter, static_active_counter
     global neutral_hands
+    global weave_active_until
+    
 
     if hard:
         chance_active = False
@@ -269,11 +282,14 @@ def handle_chance(data):
         reset_chance_fsm() # 🔥 Reset when front signal ends
 
 def run_vision():
+    global weave_active_until
     global box_state, chance_active, chance_requested, prev_hand, prev_shoulder
     global last_jab_valid_ts, chance_phase, chance_consumed, chance_start_time
     global attack_attempted, intent_counter, ready_to_active_counter, just_failed
     global active_ambiguous_counter, active_enter_time, last_active_exit_time
     global static_active_counter, last_active_hand, neutral_hands
+    global last_weave_head_x, last_weave_time
+    global prev_weaving_head_x, prev_weaving_time
 
     cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
     if not cap.isOpened():
@@ -286,7 +302,7 @@ def run_vision():
     last_send_time = 0
     last_defense = "none"
     last_defense_time = 0.0
-    defense_hold = 0.15
+    defense_hold = 0.10
     min_punch_time = 0.12
     max_punch_time = 0.45
     speed_threshold = 0.005
@@ -322,6 +338,14 @@ def run_vision():
             ls, rs = lm[mp_pose.PoseLandmark.LEFT_SHOULDER], lm[mp_pose.PoseLandmark.RIGHT_SHOULDER]
 
             head_x = nose.x - 0.5
+
+            # 🔒 Init weaving history (first valid frame)
+            if prev_weaving_time == 0.0:
+                prev_weaving_head_x = head_x
+                prev_weaving_time = now_t
+
+
+           
 
             def hand_metrics(hand, elbow, shoulder, prev):
                 if not prev["init"]:
@@ -410,22 +434,40 @@ def run_vision():
                     is_punch_like = speed > speed_threshold and elbow_ang > extended_angle
                     
                     weaving_dx = abs(head_x - prev_weaving_head_x)
-                    # Weaving (Head movement)
-                    if abs(head_x) > 0.18 and not is_punch_like:
+
+                    # =========================
+                    # WEAVING (STATE + LATCH)
+                    # =========================
+                    if abs(head_x) > 0.08 and not is_punch_like:
+                        # 상태 진입
                         if last_defense != "weaving":
                             last_defense = "weaving"
                             last_defense_time = now_t
-                        if now_t - last_defense_time >= defense_hold:
-                            final_attack = "weaving"
-                    # Guard (Hands in front of face)
+
+                        # 실제 움직임 있을 때만 latch 갱신
+                        if weaving_dx > MIN_WEAVE_MOVE:
+                            weave_active_until = now_t + WEAVE_LATCH_TIME
+                            last_weave_time = now_t
+
+                    # 🔥 LATCH 유지 구간 (부드럽게 유지)
+                    if now_t < weave_active_until:
+                        final_attack = "weaving"
+
+
+                    # =========================
+                    # GUARD (🔥 기존 그대로 유지)
+                    # =========================
                     elif is_guarding and not is_punch_like:
                         if last_defense != "guard":
                             last_defense = "guard"
                             last_defense_time = now_t
                         if now_t - last_defense_time >= defense_hold:
                             final_attack = "guard"
+
                     else:
                         last_defense = "none"
+
+
 
             # 🔒 Chance Time Logic
             if chance_requested and not chance_consumed:
@@ -649,6 +691,13 @@ def run_vision():
                     "t": time.time()
                 })
                 last_send_time = time.time()
+
+            # =========================
+            # 🔥 Update Weaving History (FRAME END)
+            # =========================
+            prev_weaving_head_x = head_x
+            prev_weaving_time = now_t
+
 
 
     cap.release()

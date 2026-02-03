@@ -38,6 +38,14 @@ const getHpColor = (hp) => {
   return "#ff2a2a";
 };
 
+const getContinuousVignette = (hp) => {
+  if (hp >= 70) return 0;
+
+  // 70 -> 0, 10 -> 0.75
+  const t = THREE.MathUtils.clamp((70 - hp) / 60, 0, 1);
+  return t * 0.75;
+};
+
 /* =======================
    3D 씬
 ======================= */
@@ -71,6 +79,7 @@ function BoxerScene({ activeKey, headX, onReturnToBase, isHitPlayingRef }) {
     Object.keys(m).forEach((key) => {
       if (m[key]?.animations?.[0]) {
         const action = mixerRef.current.clipAction(m[key].animations[0]);
+        const duration = m[key].animations[0].duration;
         if (key !== "base") {
           action.setLoop(THREE.LoopOnce);
           action.clampWhenFinished = true;
@@ -121,7 +130,7 @@ export default function GamePage() {
   const [enemyHp, setEnemyHp] = useState(100);
   const [playerHp, setPlayerHp] = useState(100);
   const [attackGauge, setAttackGauge] = useState(0);
-  const [gameState, setGameState] = useState("DEFENSE");
+  const [gameState, setGameState] = useState("IDLE"); // IDLE(시작 전) | DEFENSE | ATTACK_CHANCE | END
   const [activeKey, setActiveKey] = useState("base");
   const [gameMsg, setGameMsg] = useState("");
   const [motion, setMotion] = useState({ x: 0, z: 0, dir: "none" });
@@ -135,16 +144,69 @@ export default function GamePage() {
   const judgeTimeoutRef = useRef(null);
   const isHitAnimationPlayingRef = useRef(false);
 
+
+  const clearTimers = () => {
+    if (judgeTimeoutRef.current) {
+      clearTimeout(judgeTimeoutRef.current);
+      judgeTimeoutRef.current = null;
+    }
+    if (timerReqRef.current) {
+      cancelAnimationFrame(timerReqRef.current);
+      timerReqRef.current = null;
+    }
+    enemyAttackPendingRef.current = false;
+  };
+
+  const resetGame = (nextState = "DEFENSE") => {
+    clearTimers();
+    setEnemyHp(100);
+    setPlayerHp(100);
+    setAttackGauge(0);
+    setActiveKey("base");
+    setGameMsg("");
+    setChanceTimer(2.5);
+    lastWeavingPosRef.current = { x: null, z: null };
+    isHitAnimationPlayingRef.current = false;
+    setGameState(nextState);
+  };
+
+  const startGame = () => resetGame("DEFENSE");
+  const restartGame = () => resetGame("DEFENSE");
+
   const lastWeavingPosRef = useRef({ x: null, z: null }); // 👈 위빙 꼼수 방지
 
   const [chanceTimer, setChanceTimer] = useState(2.5);
   const chanceStartTimeRef = useRef(0);
   const timerReqRef = useRef(null);
 
-  const enemyHitDelayMs = { jab_l: 250, jab_r: 250, straight: 350, hook: 480, uppercut: 480 };
+  const enemyAnimDurationMs = {
+    jab_l: 550,
+    jab_r: 550,
+    straight: 1050,   // 🔥 가장 김
+    hook: 900,
+    uppercut: 900
+  };
+
+  const enemyHitRatio = {
+    jab_l: 0.48,
+    jab_r: 0.48,
+    straight: 0.74,   // 🔥 팔 거의 다 뻗을 때
+    hook: 0.66,
+    uppercut: 0.63
+  };
+
 
   const isGameOver = playerHp <= 0;
   const isWin = enemyHp <= 0;
+
+
+  // 게임 종료 시 상태를 END로 고정 + 타이머 정리 (버튼으로 재시작 가능)
+  useEffect(() => {
+    if (playerHp <= 0 || enemyHp <= 0) {
+      clearTimers();
+      setGameState("END");
+    }
+  }, [playerHp, enemyHp]);
 
   /* ===================
      HP 단계 연출
@@ -156,13 +218,17 @@ export default function GamePage() {
 
   const triggerHpStageEffect = (stage) => {
     let s = 0;
-    let v = 0;
-    if (stage === 1) { s = 3; v = 0.25; }
-    if (stage === 2) { s = 6; v = 0.45; }
-    if (stage === 3) { s = 10; v = 0.7; }
-    setShake(s); setVignette(v);
-    setTimeout(() => { setShake(0); setVignette(0); }, 500);
+
+    if (stage === 1) s = 4;   // 70 진입
+    if (stage === 2) s = 7;   // 40 진입
+    if (stage === 3) s = 12;  // 10 진입
+
+    if (s > 0) {
+      setShake(s);
+      setTimeout(() => setShake(0), 400);
+    }
   };
+
 
   useEffect(() => {
     const cur = getHpStage(playerHp);
@@ -173,14 +239,34 @@ export default function GamePage() {
   }, [playerHp]);
 
   useEffect(() => {
-    const cur = getHpStage(enemyHp);
-    if (cur !== prevEnemyStageRef.current) {
-      triggerHpStageEffect(cur);
-      prevEnemyStageRef.current = cur;
-    }
-  }, [enemyHp]);
+    setVignette(getContinuousVignette(playerHp));
+  }, [playerHp]);
+
+  // useEffect(() => {
+  //   const cur = getHpStage(enemyHp);
+  //   if (cur !== prevEnemyStageRef.current) {
+  //     triggerHpStageEffect(cur);
+  //     prevEnemyStageRef.current = cur;
+  //   }
+  // }, [enemyHp]);
 
   useEffect(() => { gameStateRef.current = gameState; }, [gameState]);
+
+
+  // 키보드 단축키: Enter/Space로 시작, R로 재시작
+  useEffect(() => {
+    const onKey = (e) => {
+      const key = (e.key || "").toLowerCase();
+      if (gameStateRef.current === "IDLE" && (key === "enter" || key === " " || key === "spacebar")) {
+        startGame();
+      }
+      if (gameStateRef.current === "END" && (key === "enter" || key === "r" || key === " ")) {
+        restartGame();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   /* ================= Socket ================= */
   useEffect(() => {
@@ -236,7 +322,7 @@ export default function GamePage() {
 
   /* ================= 플레이어 공격 ================= */
   const handlePlayerAttack = (type) => {
-    const damages = { jab: 15, straight: 25, hook: 70, uppercut: 100 };
+    const damages = { jab: 10, straight: 15, hook: 20, uppercut: 30 };
     setEnemyHp((prev) => Math.max(0, prev - (damages[type] || 20)));
     setAttackGauge(0);
     showMessage(`${type.toUpperCase()}!!`, 400);
@@ -307,8 +393,12 @@ export default function GamePage() {
       setActiveKey(nextAttack);
       enemyAttackPendingRef.current = true;
 
-      const hitDelay = enemyHitDelayMs[nextAttack] ?? 350;
+      const durationMs = enemyAnimDurationMs[nextAttack] ?? 800;
+      const ratio = enemyHitRatio[nextAttack] ?? 0.55;
+      const hitDelay = durationMs * ratio;
+
       judgeTimeoutRef.current = setTimeout(handleEnemyAttackJudge, hitDelay);
+
     }, 1500);
 
     return () => clearTimeout(timer);
@@ -407,27 +497,104 @@ export default function GamePage() {
         )}
       </div>
 
-      {/* WIN */}
-      {isWin && (
-        <div style={{
-          position: "absolute", inset: 0, background: "rgba(0,0,0,0.85)",
-          zIndex: 30, display: "flex", alignItems: "center", justifyContent: "center",
-          fontSize: 120, fontWeight: 900, color: "#00ff5a"
-        }}>
-          YOU WIN!
-        </div>
-      )}
 
-      {/* GAME OVER */}
-      {isGameOver && (
-        <div style={{
-          position: "absolute", inset: 0, background: "rgba(0,0,0,0.85)",
-          zIndex: 30, display: "flex", alignItems: "center", justifyContent: "center",
-          fontSize: 120, fontWeight: 900, color: "#ff0000"
-        }}>
-          GAME OVER
-        </div>
-      )}
+{/* START (IDLE) */}
+{gameState === "IDLE" && (
+  <div
+    style={{
+      position: "absolute",
+      inset: 0,
+      background: "rgba(0,0,0,0.82)",
+      zIndex: 40,
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 18,
+      color: "#fff",
+      textAlign: "center",
+    }}
+  >
+    <div style={{ fontSize: 84, fontWeight: 900, letterSpacing: 1, textShadow: "4px 4px 14px #000" }}>
+      READY?
+    </div>
+    <div style={{ opacity: 0.85, fontSize: 18, lineHeight: 1.6, maxWidth: 560 }}>
+      방어(WEAVING/ GUARD)로 게이지를 채우고, CHANCE가 뜨면 공격 모션으로 타격하세요.
+    </div>
+    <button
+      type="button"
+      onClick={startGame}
+      style={{
+        pointerEvents: "auto",
+        padding: "14px 26px",
+        fontSize: 20,
+        fontWeight: 900,
+        borderRadius: 14,
+        border: "2px solid rgba(255,255,255,0.25)",
+        background: "linear-gradient(90deg, rgba(0,255,255,0.28), rgba(0,119,255,0.22))",
+        boxShadow: "0 0 18px rgba(0,255,255,0.35)",
+        cursor: "pointer",
+      }}
+    >
+      START
+    </button>
+    <div style={{ opacity: 0.65, fontSize: 13 }}>
+      (Enter/Space로도 시작 가능)
+    </div>
+  </div>
+)}
+
+{/* END (WIN / GAME OVER) */}
+{gameState === "END" && (
+  <div
+    style={{
+      position: "absolute",
+      inset: 0,
+      background: "rgba(0,0,0,0.85)",
+      zIndex: 40,
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 18,
+      textAlign: "center",
+    }}
+  >
+    <div
+      style={{
+        fontSize: 110,
+        fontWeight: 900,
+        color: isWin ? "#00ff5a" : "#ff0000",
+        textShadow: "4px 4px 14px #000",
+      }}
+    >
+      {isWin ? "YOU WIN!" : "GAME OVER"}
+    </div>
+
+    <button
+      type="button"
+      onClick={restartGame}
+      style={{
+        pointerEvents: "auto",
+        padding: "14px 26px",
+        fontSize: 20,
+        fontWeight: 900,
+        borderRadius: 14,
+        border: "2px solid rgba(255,255,255,0.25)",
+        background: "linear-gradient(90deg, rgba(255,255,255,0.18), rgba(255,255,255,0.08))",
+        boxShadow: "0 0 16px rgba(255,255,255,0.18)",
+        cursor: "pointer",
+        color: "#fff",
+      }}
+    >
+      RESTART
+    </button>
+
+    <div style={{ opacity: 0.65, color: "#fff", fontSize: 13 }}>
+      (R / Enter로도 재시작 가능)
+    </div>
+  </div>
+)}
 
       {/* 3D */}
       <Canvas>
