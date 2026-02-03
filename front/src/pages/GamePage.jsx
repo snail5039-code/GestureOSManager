@@ -49,7 +49,7 @@ const getContinuousVignette = (hp) => {
 /* =======================
    3D 씬
 ======================= */
-function BoxerScene({ activeKey, headX, onReturnToBase, isHitPlayingRef }) {
+function BoxerScene({ activeKey, headX, onReturnToBase, isHitPlayingRef, animMetaRef }) {
   const m = {
     base: useGLTF(MODELS_LIST.base),
     jab_l: useGLTF(MODELS_LIST.jab_l),
@@ -78,15 +78,29 @@ function BoxerScene({ activeKey, headX, onReturnToBase, isHitPlayingRef }) {
 
     Object.keys(m).forEach((key) => {
       if (m[key]?.animations?.[0]) {
-        const action = mixerRef.current.clipAction(m[key].animations[0]);
-        const duration = m[key].animations[0].duration;
+        const clip = m[key].animations[0];
+        const action = mixerRef.current.clipAction(clip);
+
+        const duration = clip.duration; // 🔥 실제 GLB 애니 길이 (초)
+
         if (key !== "base") {
           action.setLoop(THREE.LoopOnce);
           action.clampWhenFinished = true;
         }
+
         actionsRef.current[key] = action;
+
+        // 🔥 GamePage에서 쓰도록 저장
+        if (animMetaRef?.current) {
+          animMetaRef.current[key] = {
+            durationSec: duration,
+          };
+        }
+
+        console.log(`[ANIM] ${key} duration = ${duration.toFixed(3)}s`);
       }
     });
+
 
     actionsRef.current.base?.play();
 
@@ -143,7 +157,8 @@ export default function GamePage() {
   const enemyAttackPendingRef = useRef(false);
   const judgeTimeoutRef = useRef(null);
   const isHitAnimationPlayingRef = useRef(false);
-
+  const enemyAnimMetaRef = useRef({});
+  const currentEnemyAttackRef = useRef(null);
 
   const clearTimers = () => {
     if (judgeTimeoutRef.current) {
@@ -179,22 +194,20 @@ export default function GamePage() {
   const chanceStartTimeRef = useRef(0);
   const timerReqRef = useRef(null);
 
-  const enemyAnimDurationMs = {
-    jab_l: 550,
-    jab_r: 550,
-    straight: 1050,   // 🔥 가장 김
-    hook: 900,
-    uppercut: 900
-  };
-
   const enemyHitRatio = {
     jab_l: 0.48,
     jab_r: 0.48,
-    straight: 0.74,   // 🔥 팔 거의 다 뻗을 때
-    hook: 0.66,
-    uppercut: 0.63
+    straight: 0.80,   // 🔥 팔 거의 다 뻗을 때
+    hook: 0.72,
+    uppercut: 0.65
   };
-
+  const enemyDamage = {
+  jab_l: 10,
+  jab_r: 10,
+  straight: 15,
+  hook: 20,
+  uppercut: 30,
+  };
 
   const isGameOver = playerHp <= 0;
   const isWin = enemyHp <= 0;
@@ -373,10 +386,14 @@ export default function GamePage() {
         return next;
       });
     } else {
-      setPlayerHp((prev) => Math.max(0, prev - 15));
-      showMessage("💥 HIT!");
+      const atk = currentEnemyAttackRef.current;
+      const dmg = enemyDamage[atk] || 15; // ref 기준
+      setPlayerHp((prev) => Math.max(0, prev - dmg));
+      showMessage(`💥 HIT! (-${dmg})`);
+
     }
 
+    currentEnemyAttackRef.current = null;
     enemyAttackPendingRef.current = false;
   };
 
@@ -390,15 +407,17 @@ export default function GamePage() {
       const attacks = ["jab_l", "jab_r", "straight", "hook", "uppercut"];
       const nextAttack = attacks[Math.floor(Math.random() * attacks.length)];
 
+      currentEnemyAttackRef.current = nextAttack;   // ⭐ 이 줄 추가
       setActiveKey(nextAttack);
       enemyAttackPendingRef.current = true;
 
-      const durationMs = enemyAnimDurationMs[nextAttack] ?? 800;
+      const meta = enemyAnimMetaRef.current[nextAttack];
+      const durationMs = meta ? meta.durationSec * 1000 : 800;
+
       const ratio = enemyHitRatio[nextAttack] ?? 0.55;
       const hitDelay = durationMs * ratio;
 
       judgeTimeoutRef.current = setTimeout(handleEnemyAttackJudge, hitDelay);
-
     }, 1500);
 
     return () => clearTimeout(timer);
@@ -606,6 +625,7 @@ export default function GamePage() {
             headX={motion.x}
             onReturnToBase={() => setActiveKey("base")}
             isHitPlayingRef={isHitAnimationPlayingRef}
+            animMetaRef={enemyAnimMetaRef}
           />
           <Preload all />
         </Suspense>
