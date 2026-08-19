@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { THEME } from "../theme/themeTokens";
 import ProfileCard from "../components/ProfileCard";
 import { useAuth } from "../auth/AuthProvider";
+import { useMemberId } from "../auth/useMemberId";
 import DebugChat from "../components/DebugChat";
 
 // ✅ WS import 추가
@@ -351,6 +352,7 @@ function PointerMiniMap({ t, theme, x, y }) {
 ========================= */
 export default function Dashboard({ onHudState, onHudActions, theme = "dark", onChangeScreen } = {}) {
   const { user, isAuthed } = useAuth();
+  const { memberId } = useMemberId();
 
   // ✅ Manager(5173)에서 Web(5174)을 "로그인 상태로" 열기
   const openWebAuthed = useCallback(async () => {
@@ -427,14 +429,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
     };
   }, []);
 
-  // ✅ X-User-Id는 서버에서 Long으로 파싱됨 → 숫자만 허용
-  const memberId = useMemo(() => {
-    const raw = user?.id ?? user?.memberId ?? user?.member_id ?? null;
-    if (raw === null || raw === undefined) return null;
-    const s = String(raw).trim();
-    if (!/^\d+$/.test(s)) return null;
-    return s;
-  }, [user]);
+  // X-User-Id 규칙은 useMemberId 한 곳에서 정한다.
   const autoProfileDoneRef = useRef(false);
 
   useEffect(() => {

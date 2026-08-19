@@ -1,7 +1,7 @@
 // src/pages/TrainingLab.jsx
 import axios from "axios";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useAuth } from "../auth/AuthProvider";
+import { useMemberId } from "../auth/useMemberId";
 
 const POLL_MS = 120;
 
@@ -217,8 +217,6 @@ function sanitizeProfileName(s) {
 }
 
 export default function TrainingLab({ theme = "dark" }) {
-  const { user, isAuthed } = useAuth();
-
   const [status, setStatus] = useState(null);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
@@ -254,15 +252,10 @@ export default function TrainingLab({ theme = "dark" }) {
   // =========================
   // ✅ Auth / session scoping
   // =========================
-  const memberIdRaw =
-    user?.id ?? user?.memberId ?? user?.member_id ?? user?.email ?? null;
-
-  const isGuest = !isAuthed || !memberIdRaw;
-
-  const userHeaders = useMemo(() => {
-    if (isGuest) return {};
-    return { "X-User-Id": String(memberIdRaw) };
-  }, [isGuest, memberIdRaw]);
+  // 세 화면(Dashboard / ProfileCard / TrainingLab)이 같은 규칙을 쓰도록 훅으로 통일.
+  // 예전에는 여기서만 user.email 까지 폴백해서, 서버가 숫자가 아닌 X-User-Id 를 게스트로
+  // 처리하는 바람에 로그인 상태에서도 프로필 작업이 거절됐다.
+  const { memberId: memberIdRaw, isGuest, userHeaders } = useMemberId();
 
   const displayProfile = useCallback((p) => {
     const s = String(p || "");
