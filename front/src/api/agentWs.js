@@ -2,11 +2,16 @@
 //
 // 매니저 UI 가 에이전트 이벤트(APP_START / APP_STOP 같은 제스처 트리거)를 받는 통로.
 //
-// 예전에는 onclose 에서 로그만 찍고 끝이라, Spring 을 재시작하거나 잠깐 끊기면
-// 앱을 다시 켤 때까지 제스처 이벤트가 오지 않았다. 파이썬 에이전트 쪽에는 1초 간격
+// 엔드포인트는 /ws/ui 다. 예전에는 /ws/agent 에 붙었는데, 그쪽은 서버가 "에이전트 세션"을
+// 하나만 등록하는 자리라서 UI 가 접속하는 순간 파이썬 에이전트를 덮어썼다. 그러면 이후
+// 모든 명령이 UI 로 가고 에이전트에는 도달하지 않는다(실측 확인). 게다가 UI 가 기다리던
+// APP_START/APP_STOP 은 그 소켓으로 오지도 않았다.
+//
+// 재연결: onclose 에서 로그만 찍고 끝이라, Spring 을 재시작하거나 잠깐 끊기면
+// 앱을 다시 켤 때까지 이벤트가 오지 않았다. 파이썬 에이전트 쪽에는 1초 간격
 // 재접속 루프가 있어서 양쪽이 비대칭이었다.
 
-const DEFAULT_URL = "ws://127.0.0.1:8080/ws/agent";
+const DEFAULT_URL = "ws://127.0.0.1:8080/ws/ui";
 
 /** 재연결 간격(ms). 마지막 값에서 더 늘리지 않는다. */
 const RETRY_DELAYS = [1000, 2000, 5000, 10000, 30000];
@@ -137,20 +142,6 @@ export function closeAgentWs() {
   ws = undefined;
 }
 
-export function sendToAgent(obj) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
-    console.warn("[WS] not open");
-    return false;
-  }
-  ws.send(JSON.stringify(obj));
-  return true;
-}
-
-// ✅ VKEY 선택하면 이거 호출
-export function setModeVKey() {
-  // 1) 보통 ENABLE 먼저 (프로젝트 정책에 따라)
-  sendToAgent({ type: "ENABLE" });
-
-  // 2) 모드 변경
-  sendToAgent({ type: "SET_MODE", mode: "VKEY" });
-}
+// sendToAgent / setModeVKey 는 제거했다.
+// /ws/ui 는 수신 전용 채널이고(서버가 이 소켓의 입력을 처리하지 않는다),
+// 명령은 전부 REST(/api/control/*)로 보낸다. 둘 다 호출하는 곳이 없는 죽은 코드였다.

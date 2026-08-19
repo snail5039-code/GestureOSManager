@@ -27,6 +27,7 @@ public class AgentWsHandler extends TextWebSocketHandler {
   private final StatusService statusService;
   private final ControlService controlService;
   private final HudWsHandler hudWsHandler;
+  private final UiWsHandler uiWsHandler;
   private final SettingsService settingsService;
 
   private static final List<ModeType> CYCLE =
@@ -43,12 +44,14 @@ public class AgentWsHandler extends TextWebSocketHandler {
       StatusService statusService,
       ControlService controlService,
       HudWsHandler hudWsHandler,
+      UiWsHandler uiWsHandler,
       SettingsService settingsService
   ) {
     this.sessions = sessions;
     this.statusService = statusService;
     this.controlService = controlService;
     this.hudWsHandler = hudWsHandler;
+    this.uiWsHandler = uiWsHandler;
     this.settingsService = settingsService;
   }
 
@@ -81,6 +84,16 @@ public class AgentWsHandler extends TextWebSocketHandler {
 
       if ("EVENT".equals(type)) {
         String name = node.path("name").asText("");
+
+        // ============================================================
+        // 에이전트 이벤트를 UI(/ws/ui)로 그대로 중계한다.
+        //
+        // UI 는 APP_START / APP_STOP(손 제스처로 앱 시작/정지)을 기다리고 있었는데
+        // 서버가 이걸 어디로도 보내지 않아서 그 기능이 동작한 적이 없었다.
+        // 이름을 골라서 중계하면 새 이벤트를 추가할 때마다 여기도 고쳐야 하므로
+        // 받은 EVENT 는 통째로 넘긴다.
+        // ============================================================
+        uiWsHandler.broadcastJson(message.getPayload());
 
         // ============================================================
         // (A 방식) UI 메뉴 이벤트를 HUD(/ws/hud)로 중계
