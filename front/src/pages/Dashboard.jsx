@@ -352,7 +352,7 @@ function PointerMiniMap({ t, theme, x, y }) {
 ========================= */
 export default function Dashboard({ onHudState, onHudActions, theme = "dark", onChangeScreen } = {}) {
   const { user, isAuthed } = useAuth();
-  const { memberId } = useMemberId();
+  const { memberId, userHeaders } = useMemberId();
 
   // ✅ Manager(5173)에서 Web(5174)을 "로그인 상태로" 열기
   const openWebAuthed = useCallback(async () => {
@@ -429,7 +429,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
     };
   }, []);
 
-  // X-User-Id 규칙은 useMemberId 한 곳에서 정한다.
+  // 회원 식별과 인증 헤더는 useMemberId 한 곳에서 정한다.
   const autoProfileDoneRef = useRef(false);
 
   useEffect(() => {
@@ -450,7 +450,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
     (async () => {
       try {
         await api.post(`/train/profile/set?name=${encodeURIComponent(target)}`, null, {
-          headers: { "X-User-Id": String(memberId) },
+          headers: userHeaders,
         });
       } catch {
         // ignore
@@ -458,7 +458,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
         autoProfileDoneRef.current = true;
       }
     })();
-  }, [status?.connected, status?.learnProfile, isAuthed, memberId, status]);
+  }, [status?.connected, status?.learnProfile, isAuthed, memberId, userHeaders, status]);
 
   useEffect(() => {
     previewRef.current = preview;

@@ -1,17 +1,17 @@
 import { useMemo } from "react";
 import { useAuth } from "./AuthProvider";
+import { getStoredAccessToken } from "../api/accountClient";
 
 /**
- * 서버로 보낼 회원 ID 와 헤더를 만든다.
+ * 회원 식별에 필요한 값들을 한 곳에서 만든다.
  *
- * 서버(TrainingController)는 X-User-Id 를 숫자로만 파싱하고, 숫자가 아니면 게스트로
- * 처리한다. 그런데 화면마다 이 값을 다르게 만들고 있었다.
- *
- *   Dashboard, ProfileCard : /^\d+$/ 로 걸러 숫자만 보냄 (정상)
- *   TrainingLab            : user.email 까지 폴백해서 보냄 -> 서버가 게스트로 강등
- *
- * 그래서 TrainingLab 에서만 "로그인했는데 프로필 생성이 LOGIN_REQUIRED 로 거절"되는
- * 일이 생겼다. 판단을 한 곳으로 모아서 세 화면이 같은 규칙을 쓰게 한다.
+ * - memberId: 로컬 이름 규칙(프로필 네임스페이스, 데이터셋 키)에만 쓴다.
+ *   화면마다 계산이 달랐고(TrainingLab 만 user.email 폴백), 그 때문에 로그인했는데도
+ *   서버가 게스트로 처리하는 일이 있었다.
+ * - authHeaders: 서버에 보낼 인증 헤더.
+ *   예전에는 X-User-Id 에 숫자를 담아 보냈고 서버가 그걸 그대로 믿었다. 헤더만 바꾸면
+ *   남의 학습 프로필을 읽고 지울 수 있었기 때문에, 이제 액세스 토큰을 보내고 서버가
+ *   계정 서버에 확인해서 신원을 정한다.
  *
  * @returns {{memberId: string|null, isGuest: boolean, userHeaders: object}}
  */
@@ -31,10 +31,14 @@ export function useMemberId() {
 
   const isGuest = !isAuthed || !memberId;
 
-  const userHeaders = useMemo(
-    () => (isGuest ? {} : { "X-User-Id": memberId }),
-    [isGuest, memberId],
-  );
+  // 토큰은 매 렌더가 아니라 요청 시점 값이 중요하므로 여기서 읽어 헤더로 만든다.
+  // (accountApi 인스턴스는 인터셉터가 알아서 붙이지만, 매니저 서버로 가는 요청은
+  //  이 헤더를 직접 실어 보내야 한다)
+  const userHeaders = useMemo(() => {
+    if (isGuest) return {};
+    const token = getStoredAccessToken();
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  }, [isGuest, memberId]);
 
   return { memberId, isGuest, userHeaders };
 }

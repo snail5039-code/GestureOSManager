@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.*;
 import com.example.gestureOSManager.service.ControlService;
 import com.example.gestureOSManager.service.StatusService;
 import com.example.gestureOSManager.service.LearnerProfileDbService;
+import com.example.gestureOSManager.service.MemberIdentityService;
 import com.example.gestureOSManager.service.LearnerProfileFileStore;
 import com.example.gestureOSManager.websocket.AgentSessionRegistry;
 
@@ -25,6 +26,7 @@ public class TrainingController {
 
   private final LearnerProfileDbService profileDb;
   private final LearnerProfileFileStore files;
+  private final MemberIdentityService identity;
 
   /** 학습 완료 신호(learnLastTrainTs 변화)를 기다리는 최대 시간. 클라이언트 타임아웃보다 짧게. */
   private static final long TRAIN_WAIT_MS = 6000L;
@@ -33,31 +35,21 @@ public class TrainingController {
                             StatusService statusService,
                             AgentSessionRegistry registry,
                             LearnerProfileDbService profileDb,
-                            LearnerProfileFileStore files) {
+                            LearnerProfileFileStore files,
+                            MemberIdentityService identity) {
     this.controlService = controlService;
     this.statusService = statusService;
     this.registry = registry;
     this.profileDb = profileDb;
     this.files = files;
+    this.identity = identity;
   }
 
-  // NOTE: 프론트가 X-User-Id를 숫자 대신 email 등으로 보내면
-  // Spring이 Long 변환 단계에서 400을 내버린다.
-  // 여기서는 String으로 받은 뒤 직접 파싱해서, 파싱 실패 시 게스트로 처리한다.
-  private Long parseMemberId(String raw) {
-    if (raw == null) return null;
-    String s = raw.trim();
-    if (s.isEmpty()) return null;
-    // digits only
-    for (int i = 0; i < s.length(); i++) {
-      char c = s.charAt(i);
-      if (c < '0' || c > '9') return null;
-    }
-    try {
-      return Long.parseLong(s);
-    } catch (Exception e) {
-      return null;
-    }
+  // 신원은 서버가 정한다. 클라이언트가 보낸 숫자를 그대로 회원 ID 로 쓰면
+  // 헤더만 바꿔서 남의 학습 프로필을 읽고 지울 수 있다.
+  // Authorization: Bearer <accessToken> 을 계정 서버에 확인해서 회원 ID 를 얻는다.
+  private Long resolveMemberId(String authorization) {
+    return identity.resolveMemberId(authorization);
   }
 
   private boolean isGuest(Long memberId) {
@@ -103,8 +95,8 @@ public class TrainingController {
   // ==========================
 
   @GetMapping("/profile/db/list")
-  public ResponseEntity<?> dbProfiles(@RequestHeader(value = "X-User-Id", required = false) String memberIdRaw) {
-    Long memberId = parseMemberId(memberIdRaw);
+  public ResponseEntity<?> dbProfiles(@RequestHeader(value = "Authorization", required = false) String authorization) {
+    Long memberId = resolveMemberId(authorization);
 
     // ✅ 게스트면 DB 리스트를 절대 내려주지 않음(노출/혼선 방지)
     if (isGuest(memberId)) {
@@ -122,20 +114,18 @@ public class TrainingController {
   }
 
   @PostMapping("/capture")
-  public ResponseEntity<?> capture(@RequestHeader(value = "X-User-Id", required = false) String memberIdRaw,
-                                   @RequestParam String hand,
+  public ResponseEntity<?> capture(@RequestParam String hand,
                                    @RequestParam String label,
                                    @RequestParam(defaultValue = "2") double seconds,
                                    @RequestParam(defaultValue = "15") int hz) {
-    Long memberId = parseMemberId(memberIdRaw);
-    // 게스트도 가능(현재 프로필에서 캡처)
+    // 캡처는 현재 프로필에 쌓기만 하므로 신원이 필요 없다(게스트도 가능).
     boolean ok = controlService.trainCapture(hand, label, seconds, hz);
     return ResponseEntity.ok(Map.of("ok", ok));
   }
 
   @PostMapping("/train")
-  public ResponseEntity<?> train(@RequestHeader(value = "X-User-Id", required = false) String memberIdRaw) {
-    Long memberId = parseMemberId(memberIdRaw);
+  public ResponseEntity<?> train(@RequestHeader(value = "Authorization", required = false) String authorization) {
+    Long memberId = resolveMemberId(authorization);
     double before = statusService.getSnapshot().getLearnLastTrainTs() == null ? 0.0
         : statusService.getSnapshot().getLearnLastTrainTs();
 
@@ -170,9 +160,9 @@ public class TrainingController {
   }
 
   @PostMapping("/enable")
-  public ResponseEntity<?> enable(@RequestHeader(value = "X-User-Id", required = false) String memberIdRaw,
+  public ResponseEntity<?> enable(@RequestHeader(value = "Authorization", required = false) String authorization,
                                   @RequestParam boolean enabled) {
-    Long memberId = parseMemberId(memberIdRaw);
+    Long memberId = resolveMemberId(authorization);
     boolean ok = controlService.trainEnable(enabled);
 
     boolean synced = false;
@@ -186,8 +176,8 @@ public class TrainingController {
   }
 
   @PostMapping("/reset")
-  public ResponseEntity<?> reset(@RequestHeader(value = "X-User-Id", required = false) String memberIdRaw) {
-    Long memberId = parseMemberId(memberIdRaw);
+  public ResponseEntity<?> reset(@RequestHeader(value = "Authorization", required = false) String authorization) {
+    Long memberId = resolveMemberId(authorization);
     boolean ok = controlService.trainReset();
 
     boolean synced = false;
@@ -202,8 +192,8 @@ public class TrainingController {
 
   // ✅ stats도 유저 기준 필터링해서 "다른 유저 프로필명"이 절대 내려가지 않게
   @GetMapping("/stats")
-  public ResponseEntity<?> stats(@RequestHeader(value = "X-User-Id", required = false) String memberIdRaw) {
-    Long memberId = parseMemberId(memberIdRaw);
+  public ResponseEntity<?> stats(@RequestHeader(value = "Authorization", required = false) String authorization) {
+    Long memberId = resolveMemberId(authorization);
 
     var st = statusService.getSnapshot();
     st.setConnected(registry.isConnected());
@@ -233,9 +223,9 @@ public class TrainingController {
   }
 
   @PostMapping("/profile/set")
-  public ResponseEntity<?> setProfile(@RequestHeader(value = "X-User-Id", required = false) String memberIdRaw,
+  public ResponseEntity<?> setProfile(@RequestHeader(value = "Authorization", required = false) String authorization,
                                       @RequestParam String name) {
-    Long memberId = parseMemberId(memberIdRaw);
+    Long memberId = resolveMemberId(authorization);
 
     // ✅ 로그인 안 하면 default만
     String target = scopedProfile(memberId, name);
@@ -256,10 +246,10 @@ public class TrainingController {
   }
 
   @PostMapping("/profile/create")
-  public ResponseEntity<?> createProfile(@RequestHeader(value = "X-User-Id", required = false) String memberIdRaw,
+  public ResponseEntity<?> createProfile(@RequestHeader(value = "Authorization", required = false) String authorization,
                                         @RequestParam String name,
                                         @RequestParam(defaultValue = "true") boolean copy) {
-    Long memberId = parseMemberId(memberIdRaw);
+    Long memberId = resolveMemberId(authorization);
     if (isGuest(memberId)) {
       return ResponseEntity.ok(Map.of("ok", false, "reason", "LOGIN_REQUIRED"));
     }
@@ -272,9 +262,9 @@ public class TrainingController {
   }
 
   @PostMapping("/profile/delete")
-  public ResponseEntity<?> deleteProfile(@RequestHeader(value = "X-User-Id", required = false) String memberIdRaw,
+  public ResponseEntity<?> deleteProfile(@RequestHeader(value = "Authorization", required = false) String authorization,
                                         @RequestParam String name) {
-    Long memberId = parseMemberId(memberIdRaw);
+    Long memberId = resolveMemberId(authorization);
     if (isGuest(memberId)) {
       return ResponseEntity.ok(Map.of("ok", false, "reason", "LOGIN_REQUIRED"));
     }
@@ -286,10 +276,10 @@ public class TrainingController {
   }
 
   @PostMapping("/profile/rename")
-  public ResponseEntity<?> renameProfile(@RequestHeader(value = "X-User-Id", required = false) String memberIdRaw,
+  public ResponseEntity<?> renameProfile(@RequestHeader(value = "Authorization", required = false) String authorization,
                                         @RequestParam String from,
                                         @RequestParam String to) {
-    Long memberId = parseMemberId(memberIdRaw);
+    Long memberId = resolveMemberId(authorization);
     if (isGuest(memberId)) {
       return ResponseEntity.ok(Map.of("ok", false, "reason", "LOGIN_REQUIRED"));
     }
@@ -306,8 +296,8 @@ public class TrainingController {
   }
 
   @PostMapping("/rollback")
-  public ResponseEntity<?> rollback(@RequestHeader(value = "X-User-Id", required = false) String memberIdRaw) {
-    Long memberId = parseMemberId(memberIdRaw);
+  public ResponseEntity<?> rollback(@RequestHeader(value = "Authorization", required = false) String authorization) {
+    Long memberId = resolveMemberId(authorization);
     boolean ok = controlService.trainRollback();
 
     boolean synced = false;

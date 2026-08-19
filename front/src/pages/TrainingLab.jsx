@@ -253,8 +253,8 @@ export default function TrainingLab({ theme = "dark" }) {
   // ✅ Auth / session scoping
   // =========================
   // 세 화면(Dashboard / ProfileCard / TrainingLab)이 같은 규칙을 쓰도록 훅으로 통일.
-  // 예전에는 여기서만 user.email 까지 폴백해서, 서버가 숫자가 아닌 X-User-Id 를 게스트로
-  // 처리하는 바람에 로그인 상태에서도 프로필 작업이 거절됐다.
+  // 예전에는 여기서만 user.email 까지 폴백해서, 서버가 게스트로 처리하는 바람에
+  // 로그인 상태에서도 프로필 작업이 거절됐다.
   const { memberId: memberIdRaw, isGuest, userHeaders } = useMemberId();
 
   const displayProfile = useCallback((p) => {

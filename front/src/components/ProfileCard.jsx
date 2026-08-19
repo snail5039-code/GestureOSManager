@@ -54,7 +54,7 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
   }, []);
 
   // ===== profile switch
-  // X-User-Id 규칙은 useMemberId 한 곳에서 정한다(세 화면이 같은 값을 보내야 한다).
+  // 회원 식별과 인증 헤더는 useMemberId 한 곳에서 정한다(세 화면이 같은 규칙을 써야 한다).
   const { memberId, isGuest, userHeaders } = useMemberId();
 
   const memberKey = useMemo(() => {
