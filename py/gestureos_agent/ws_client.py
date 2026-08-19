@@ -5,6 +5,8 @@ from typing import Callable, Optional
 
 from websocket import WebSocketApp
 
+from .local_token import with_token
+
 class WSClient:
     """
     Simple WS client wrapper.
@@ -27,8 +29,9 @@ class WSClient:
         def _loop():
             while True:
                 try:
+                    # 접속할 때마다 토큰을 다시 읽는다. 서버가 재시작되면 값이 바뀐다.
                     ws = WebSocketApp(
-                        self.url,
+                        with_token(self.url),
                         on_open=self._on_open,
                         on_close=self._on_close,
                         on_error=self._on_error,

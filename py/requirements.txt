@@ -1,3 +1,6 @@
+# 파이썬 3.12 이하에서 설치해야 한다.
+# mediapipe 0.10.21 은 3.13 용 배포가 없고, 3.13 용 mediapipe(0.10.30+, 1.x)에는
+# 에이전트가 쓰는 mp.solutions.hands 가 포함되지 않는다.
 opencv-python
 mediapipe==0.10.21
 pyautogui

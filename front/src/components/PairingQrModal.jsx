@@ -30,7 +30,17 @@ function StatusPill({ tone = "neutral", children, title }) {
  * - 스트림 "간이 점검"(프론트만): <img> 로딩 시도 + 타임아웃
  * - 배포용 안내 문구 표시
  */
-export default function PairingQrModal({ open, onClose, pairing }) {
+export default function PairingQrModal({ open, onClose, pairing, onSaveName, onSavePc }) {
+  // 편집 중인 값. 모달을 열 때마다 서버 값으로 초기화한다.
+  const [nameDraft, setNameDraft] = useState("");
+  const [pcDraft, setPcDraft] = useState("");
+  const [saving, setSaving] = useState("");
+  const [saveError, setSaveError] = useState("");
+
+  const candidates = useMemo(
+    () => (Array.isArray(pairing?.candidates) ? pairing.candidates.filter(Boolean) : []),
+    [pairing],
+  );
   const payload = useMemo(() => {
     const pc = String(pairing?.pc || "").trim();
     const httpPort = Number(pairing?.httpPort || 0);
@@ -61,6 +71,42 @@ export default function PairingQrModal({ open, onClose, pairing }) {
     // 모달 열릴 때마다 체크 상태 초기화
     setStreamCheck({ status: "idle", ms: null, error: "" });
   }, [open, pairing?.pc, pairing?.httpPort]);
+
+  useEffect(() => {
+    if (!open) return;
+    setNameDraft(String(pairing?.name ?? ""));
+    setPcDraft(String(pairing?.pc ?? ""));
+    setSaving("");
+    setSaveError("");
+  }, [open, pairing?.name, pairing?.pc]);
+
+  const saveName = async () => {
+    const next = nameDraft.trim();
+    if (!onSaveName || !next || next === String(pairing?.name ?? "")) return;
+    setSaving("name");
+    setSaveError("");
+    try {
+      await onSaveName(next);
+    } catch (e) {
+      setSaveError(e?.message || "이름 저장 실패");
+    } finally {
+      setSaving("");
+    }
+  };
+
+  const savePc = async (value) => {
+    const next = String(value ?? pcDraft).trim();
+    if (!onSavePc || !next || next === String(pairing?.pc ?? "")) return;
+    setSaving("pc");
+    setSaveError("");
+    try {
+      await onSavePc(next);
+    } catch (e) {
+      setSaveError(e?.message || "IP 저장 실패");
+    } finally {
+      setSaving("");
+    }
+  };
 
   const copy = async () => {
     if (!payload) return;
@@ -231,10 +277,48 @@ export default function PairingQrModal({ open, onClose, pairing }) {
             <div className="rounded-2xl ring-1 bg-base-100/25 ring-base-300/50 p-5">
               <div className="text-xs opacity-70">연결 정보</div>
 
-              <div className="mt-3 grid grid-cols-[72px_1fr] gap-y-2 text-sm">
+              <div className="mt-3 grid grid-cols-[72px_1fr] gap-y-2 items-center text-sm">
                 <div className="opacity-70">PC</div>
-                <div className="text-right font-semibold break-all min-w-0">
-                  {pairing?.pc || "-"}
+                <div className="min-w-0 flex items-center gap-1.5">
+                  {candidates.length > 1 ? (
+                    <select
+                      value={pcDraft}
+                      onChange={(e) => {
+                        setPcDraft(e.target.value);
+                        savePc(e.target.value);
+                      }}
+                      disabled={saving === "pc"}
+                      className={cn(
+                        "flex-1 min-w-0 rounded-lg px-2 py-1 text-xs font-semibold",
+                        "bg-base-100/25 ring-1 ring-base-300/50 outline-none disabled:opacity-60",
+                      )}
+                      title="폰이 접속할 이 PC 의 IP"
+                    >
+                      {!candidates.includes(pcDraft) && pcDraft ? (
+                        <option value={pcDraft}>{pcDraft}</option>
+                      ) : null}
+                      {candidates.map((ip) => (
+                        <option key={ip} value={ip}>
+                          {ip}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      value={pcDraft}
+                      onChange={(e) => setPcDraft(e.target.value)}
+                      onBlur={() => savePc()}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") savePc();
+                      }}
+                      disabled={saving === "pc"}
+                      placeholder="192.168.0.10"
+                      className={cn(
+                        "flex-1 min-w-0 rounded-lg px-2 py-1 text-xs font-semibold text-right",
+                        "bg-base-100/25 ring-1 ring-base-300/50 outline-none disabled:opacity-60",
+                      )}
+                    />
+                  )}
                 </div>
 
                 <div className="opacity-70">HTTP</div>
@@ -248,10 +332,34 @@ export default function PairingQrModal({ open, onClose, pairing }) {
                 </div>
 
                 <div className="opacity-70">Name</div>
-                <div className="text-right font-semibold break-all min-w-0">
-                  {pairing?.name ?? "-"}
+                <div className="min-w-0">
+                  <input
+                    value={nameDraft}
+                    onChange={(e) => setNameDraft(e.target.value)}
+                    onBlur={saveName}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") saveName();
+                    }}
+                    disabled={saving === "name"}
+                    maxLength={32}
+                    placeholder="PC"
+                    className={cn(
+                      "w-full rounded-lg px-2 py-1 text-xs font-semibold text-right",
+                      "bg-base-100/25 ring-1 ring-base-300/50 outline-none disabled:opacity-60",
+                    )}
+                  />
                 </div>
               </div>
+
+              <div className="mt-2 text-[11px] opacity-55">
+                {saving
+                  ? "저장 중..."
+                  : "값을 바꾸면 저장됩니다. IP 자동 선택이 틀리면 직접 고르세요."}
+              </div>
+
+              {saveError ? (
+                <div className="mt-2 text-[11px] text-rose-300">{saveError}</div>
+              ) : null}
 
               {/* Buttons */}
               <div className="mt-5 flex flex-wrap gap-2">
@@ -318,6 +426,10 @@ export default function PairingQrModal({ open, onClose, pairing }) {
                 <div className="mt-4 rounded-2xl ring-1 bg-base-100/18 ring-base-300/40 p-4">
                   <div className="text-xs font-semibold">연결 안내</div>
                   <ul className="mt-2 space-y-1 text-[11px] opacity-70 leading-relaxed list-disc pl-4">
+                    <li>
+                      폰 연동은 <b>기본으로 꺼져 있습니다</b>. 에이전트를{" "}
+                      <b>python main.py --phone</b> 으로 실행해야 스트림이 열립니다.
+                    </li>
                     <li>
                       PC와 휴대폰은 <b>같은 Wi-Fi(같은 네트워크)</b>에 연결되어야 합니다.
                     </li>

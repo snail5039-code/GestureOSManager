@@ -12,12 +12,12 @@ import {
   accountApi,
   attachAccountInterceptors,
   tryRefreshAccessToken,
+  getStoredAccessToken,
+  setStoredAccessToken,
 } from "../api/accountClient";
 
 const AuthContext = createContext(null);
 export const useAuth = () => useContext(AuthContext);
-
-const LS_KEY = "gos.accountAccessToken";
 
 // 필요하면 환경변수로 제어
 const DEFAULT_POLL_MS = 0; // 0이면 폴링 비활성 (예: 15000 넣으면 15초마다 me 동기화)
@@ -29,11 +29,9 @@ export default function AuthProvider({ children }) {
   // 이미지 캐시 bust 등에 활용 가능 (me 갱신될 때마다 증가)
   const [profileBump, setProfileBump] = useState(0);
 
-  const getToken = () => localStorage.getItem(LS_KEY);
-  const setToken = (t) => {
-    if (!t) localStorage.removeItem(LS_KEY);
-    else localStorage.setItem(LS_KEY, t);
-  };
+  // 키는 accountClient 한 곳에서만 정한다.
+  const getToken = getStoredAccessToken;
+  const setToken = setStoredAccessToken;
 
   // refreshMe 중복 호출 방지
   const inflightRef = useRef(null);

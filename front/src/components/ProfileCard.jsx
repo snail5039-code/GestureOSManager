@@ -1,6 +1,7 @@
 import axios from "axios";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "../auth/AuthProvider";
+import { useMemberId } from "../auth/useMemberId";
 
 function cn(...xs) {
   return xs.filter(Boolean).join(" ");
@@ -53,26 +54,14 @@ export default function ProfileCard({ t, theme, onOpenTraining }) {
   }, []);
 
   // ===== profile switch
-  // ✅ X-User-Id는 서버에서 Long으로 파싱됨 → 숫자만 허용
-  const memberId = useMemo(() => {
-    const raw = user?.id ?? user?.memberId ?? user?.member_id ?? null;
-    if (raw === null || raw === undefined) return null;
-    const s = String(raw).trim();
-    if (!/^\d+$/.test(s)) return null;
-    return s;
-  }, [user]);
+  // 회원 식별과 인증 헤더는 useMemberId 한 곳에서 정한다(세 화면이 같은 규칙을 써야 한다).
+  const { memberId, isGuest, userHeaders } = useMemberId();
 
   const memberKey = useMemo(() => {
     const raw = memberId ? String(memberId) : "guest";
     return raw.replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase();
   }, [memberId]);
 
-  const isGuest = !isAuthed || !memberId;
-
-  const userHeaders = useMemo(() => {
-    if (isGuest) return {};
-    return { "X-User-Id": memberId };
-  }, [isGuest, memberId]);
 
   const NS = useMemo(() => (isGuest ? "" : `u${memberKey}__`), [isGuest, memberKey]);
 

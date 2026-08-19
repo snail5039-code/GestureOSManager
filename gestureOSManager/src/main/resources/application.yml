@@ -1,5 +1,8 @@
 server:
   port: 8080
+  # 루프백에만 바인딩한다. 예전에는 모든 인터페이스(0.0.0.0)에 열려서
+  # 같은 네트워크의 다른 기기도 이 API 를 호출할 수 있었다.
+  address: ${GOS_BIND_ADDRESS:127.0.0.1}
 
 spring:
   main:
@@ -10,17 +13,38 @@ spring:
     serialization:
       indent_output: false
 
+  # 학습 프로필 DB 동기화용. 사용자 PC 에는 없는 게 정상이며, 없어도 앱은 동작한다.
+  # (gestureos.profile-db.enabled 가 false 면 아예 쓰지 않는다)
   datasource:
-    url: jdbc:postgresql://localhost:5432/slt
-    username: sltuser
-    password: sltpass
+    url: ${GOS_DB_URL:jdbc:postgresql://localhost:5432/slt}
+    username: ${GOS_DB_USER:sltuser}
+    password: ${GOS_DB_PASSWORD:sltpass}
     driver-class-name: org.postgresql.Driver
+    hikari:
+      # DB 가 없을 때 요청이 30초씩 멈추지 않도록 짧게 끊는다.
+      connection-timeout: 3000
+      initialization-fail-timeout: -1
 
 logging:
   level:
     com.example.gestureOSManager: info
 
 gestureos:
+  auth:
+    # 기동할 때마다 만든 임의 토큰을 파일에 쓰고, 모든 API 와 WebSocket 접속에서 요구한다.
+    # 파일을 읽을 수 있는 건 같은 사용자로 실행되는 프로그램(매니저 UI, 파이썬 에이전트)뿐이라
+    # 방문한 웹페이지가 이 서버를 조작하는 경로가 막힌다.
+    enabled: ${GOS_AUTH_ENABLED:true}
+    # 비우면 ~/.gestureos/session.token
+    token-path: ${GOS_TOKEN_PATH:}
+    # 브라우저 클라이언트로 허용할 오리진(Origin 헤더가 없는 파이썬 클라이언트는 무관)
+    allowed-origins: ${GOS_ALLOWED_ORIGINS:http://localhost:5173,gosapp://app}
+
+  profile-db:
+    # 학습 프로필을 DB 에 동기화할지. 기본은 꺼짐 = 로컬 파일만 사용.
+    # 켜려면 PostgreSQL 과 db/schema-profile.sql 의 테이블이 필요하다.
+    enabled: ${GOS_PROFILE_DB_ENABLED:false}
+
   pairing:
     httpPort: 8081
     udpPort: 39500

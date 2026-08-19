@@ -4,6 +4,51 @@ import axios from "axios";
 // 그러면 refreshToken 쿠키도 안정적으로 붙는다.
 const baseURL = "/api";
 
+/**
+ * 액세스 토큰을 담는 localStorage 키. 반드시 이 상수만 쓴다.
+ *
+ * 예전에는 저장하는 곳(App.jsx: "accessToken"), 읽는 곳(AuthProvider: "gos.accountAccessToken"),
+ * 웹 SSO 브리지(Dashboard: "accessToken" | "gos_accessToken" | "token")가 서로 다른 키를 봐서
+ * 딥링크 로그인이 절대 성립하지 않았다.
+ */
+export const ACCESS_TOKEN_KEY = "gos.accountAccessToken";
+
+/** 예전 버전들이 쓰던 키. 남아 있으면 한 번 옮겨온 뒤 지운다. */
+const LEGACY_TOKEN_KEYS = ["accessToken", "gos_accessToken", "token"];
+
+export function getStoredAccessToken() {
+  try {
+    const cur = localStorage.getItem(ACCESS_TOKEN_KEY);
+    if (cur) return cur;
+
+    for (const k of LEGACY_TOKEN_KEYS) {
+      const v = localStorage.getItem(k);
+      if (v) {
+        localStorage.setItem(ACCESS_TOKEN_KEY, v);
+        localStorage.removeItem(k);
+        return v;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function setStoredAccessToken(token) {
+  try {
+    if (!token) {
+      localStorage.removeItem(ACCESS_TOKEN_KEY);
+    } else {
+      localStorage.setItem(ACCESS_TOKEN_KEY, token);
+    }
+    // 같은 값이 예전 키에 남아 돌아다니지 않게 한다.
+    for (const k of LEGACY_TOKEN_KEYS) localStorage.removeItem(k);
+  } catch {
+    return; // localStorage 를 못 쓰는 환경(권한 차단 등)은 조용히 넘어간다
+  }
+}
+
 export const accountApi = axios.create({
   baseURL,
   withCredentials: true, // refreshToken 쿠키 사용

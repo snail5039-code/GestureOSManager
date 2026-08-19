@@ -116,6 +116,14 @@
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
 				<configuration>
+					<!--
+					  application.yml 의 spring.main.headless: false 는 이미 java.awt.headless 가
+					  설정돼 있으면 무시된다. spring-boot:run 은 이 값을 true 로 넘기기 때문에,
+					  개발 중에는 AWT 를 못 쓰고 MOUSE 모드의 커서 좌표 표시가 조용히 동작하지 않았다.
+					  (java -jar 로 띄우는 배포 실행에서는 문제가 없다)
+					  개발과 배포 동작을 맞추기 위해 여기서 명시한다.
+					-->
+					<jvmArguments>-Djava.awt.headless=false</jvmArguments>
 					<excludes>
 						<exclude>
 							<groupId>org.projectlombok</groupId>

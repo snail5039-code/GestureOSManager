@@ -5,13 +5,14 @@ import { createPortal } from "react-dom";
 import { THEME } from "../theme/themeTokens";
 import ProfileCard from "../components/ProfileCard";
 import { useAuth } from "../auth/AuthProvider";
+import { useMemberId } from "../auth/useMemberId";
 import DebugChat from "../components/DebugChat";
 
 // ✅ WS import 추가
 import { connectAgentWs, addAgentWsListener, closeAgentWs } from "../api/agentWs";
 
 // ✅ Bridge import 추가
-import { bridgeStart, openWebWithBridge } from "../api/accountClient";
+import { bridgeStart, openWebWithBridge, getStoredAccessToken } from "../api/accountClient";
 
 const POLL_MS = 500;
 
@@ -351,15 +352,14 @@ function PointerMiniMap({ t, theme, x, y }) {
 ========================= */
 export default function Dashboard({ onHudState, onHudActions, theme = "dark", onChangeScreen } = {}) {
   const { user, isAuthed } = useAuth();
+  const { memberId, userHeaders } = useMemberId();
 
   // ✅ Manager(5173)에서 Web(5174)을 "로그인 상태로" 열기
   const openWebAuthed = useCallback(async () => {
     try {
-      const accessToken =
-        localStorage.getItem("accessToken") ||
-        localStorage.getItem("gos_accessToken") ||
-        localStorage.getItem("token") ||
-        null;
+      // 예전에는 여기서 세 개의 다른 키를 뒤졌는데 전부 실제 저장 키가 아니라,
+      // 로그인 상태에서도 토큰을 못 찾아 비로그인 탭이 열렸다.
+      const accessToken = getStoredAccessToken();
 
       const data = await bridgeStart(accessToken);
       const code = data?.code;
@@ -429,14 +429,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
     };
   }, []);
 
-  // ✅ X-User-Id는 서버에서 Long으로 파싱됨 → 숫자만 허용
-  const memberId = useMemo(() => {
-    const raw = user?.id ?? user?.memberId ?? user?.member_id ?? null;
-    if (raw === null || raw === undefined) return null;
-    const s = String(raw).trim();
-    if (!/^\d+$/.test(s)) return null;
-    return s;
-  }, [user]);
+  // 회원 식별과 인증 헤더는 useMemberId 한 곳에서 정한다.
   const autoProfileDoneRef = useRef(false);
 
   useEffect(() => {
@@ -457,7 +450,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
     (async () => {
       try {
         await api.post(`/train/profile/set?name=${encodeURIComponent(target)}`, null, {
-          headers: { "X-User-Id": String(memberId) },
+          headers: userHeaders,
         });
       } catch {
         // ignore
@@ -465,7 +458,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
         autoProfileDoneRef.current = true;
       }
     })();
-  }, [status?.connected, status?.learnProfile, isAuthed, memberId, status]);
+  }, [status?.connected, status?.learnProfile, isAuthed, memberId, userHeaders, status]);
 
   useEffect(() => {
     previewRef.current = preview;
@@ -790,7 +783,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
 
   // ✅ WS: 제스처 Start/Stop 이벤트 수신 (mount 1회)
   useEffect(() => {
-    const ws = connectAgentWs();
+    connectAgentWs();
 
     const unsubscribe = addAgentWsListener((msg) => {
       if (!msg || typeof msg !== "object") return;
@@ -814,12 +807,8 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
 
     return () => {
       unsubscribe?.();
-      try {
-        ws?.close?.();
-      } catch {}
-      try {
-        closeAgentWs?.();
-      } catch {}
+      // closeAgentWs 가 재연결까지 멈춘다(명시적 종료). 소켓을 따로 닫을 필요는 없다.
+      closeAgentWs();
     };
   }, []);
 

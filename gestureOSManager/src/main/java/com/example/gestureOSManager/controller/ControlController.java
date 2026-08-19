@@ -42,16 +42,23 @@ public class ControlController {
     // ✅ 서버 시작 직후 snapshot null이면 500 방지
     if (out == null) out = new AgentStatus();
 
-    out.setConnected(registry.isConnected());
+    boolean connected = registry.isConnected();
+    out.setConnected(connected);
 
-    // MOUSE 모드에서만 pointerX/Y를 OS 커서로 덮어쓰기
-    if (out.getMode() == ModeType.MOUSE) {
+    // MOUSE 모드에서 화면 좌표를 보여주기 위해 OS 커서 위치로 pointerX/Y 를 덮는다.
+    //
+    // 예전에는 연결/실행 여부를 보지 않고 덮으면서 tracking 도 무조건 TRUE 로 세팅했다.
+    // 그래서 에이전트가 꺼져 있거나 손이 안 잡히는 상태에서도 대시보드에는 "트래킹 ON"
+    // 과 함께 포인터가 마우스를 따라 움직였다. 손 인식이 안 되는 상황을 디버깅할 때
+    // 정확히 반대로 오해하게 만드는 표시였다.
+    //
+    // tracking 은 에이전트가 보고한 값을 그대로 쓰고, 여기서는 건드리지 않는다.
+    if (connected && out.isEnabled() && out.getMode() == ModeType.MOUSE) {
       try {
         Point p = MouseInfo.getPointerInfo().getLocation();
         Dimension d = Toolkit.getDefaultToolkit().getScreenSize();
         out.setPointerX(p.getX() / d.getWidth());
         out.setPointerY(p.getY() / d.getHeight());
-        out.setTracking(Boolean.TRUE);
       } catch (Exception ignore) {
         // headless 등 예외 무시
       }

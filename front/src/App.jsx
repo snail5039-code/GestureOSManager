@@ -7,6 +7,8 @@ import Rush3DPage from "./pages/Rush3DPage";
 import PairingQrModal from "./components/PairingQrModal";
 import TrainingLab from "./pages/TrainingLab";
 import { THEME } from "./theme/themeTokens";
+import { setStoredAccessToken } from "./api/accountClient";
+import { useAuth } from "./auth/AuthProvider";
 
 const VALID_THEMES = new Set(["dark", "light", "neon", "rose", "devil"]);
 
@@ -15,6 +17,8 @@ function cn(...xs) {
 }
 
 export default function App() {
+  const { refreshMe } = useAuth();
+
   const [hudOn, setHudOn] = useState(() => {
     const v = localStorage.getItem("hudOn");
     return v === null ? true : v === "1";
@@ -56,18 +60,22 @@ export default function App() {
 
         const data = await res.json();
 
-        if (data?.accessToken) {
-          localStorage.setItem("accessToken", data.accessToken);
-        }
+        if (!data?.accessToken) throw new Error("no accessToken in consume response");
 
-        window.location.reload();
+        // AuthProvider 가 읽는 것과 같은 키에 저장한다.
+        // (예전에는 "accessToken" 에 넣고 reload 했는데, AuthProvider 는 다른 키를 봐서
+        //  딥링크로 로그인해도 로그인 상태가 되지 않았다)
+        setStoredAccessToken(data.accessToken);
+
+        // 새로고침 대신 사용자 정보만 다시 읽는다.
+        await refreshMe();
       } catch (e) {
         console.error("deeplink auth failed:", e);
       }
     });
 
     return off;
-  }, []);
+  }, [refreshMe]);
 
   useEffect(() => {
     localStorage.setItem("hudOn", hudOn ? "1" : "0");
@@ -111,30 +119,39 @@ export default function App() {
     };
   };
 
-  const savePairingName = async (nextName) => {
-    const name = String(nextName || "").trim() || "PC";
-    try {
-      await fetch("/api/pairing", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
-      });
-    } catch {}
+  // 저장 실패를 삼키면 사용자는 값을 고쳐도 아무 일도 일어나지 않은 것처럼 보인다.
+  // 실패는 호출한 쪽(페어링 모달)이 표시할 수 있게 그대로 올린다.
+  const savePairing = async (patch) => {
+    const res = await fetch("/api/pairing", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+
+    if (!res.ok) {
+      let message = `저장 실패 (HTTP ${res.status})`;
+      try {
+        const body = await res.json();
+        if (body?.message) message = String(body.message);
+      } catch {
+        // 본문이 JSON 이 아니면 기본 문구를 쓴다
+        message = `저장 실패 (HTTP ${res.status})`;
+      }
+      throw new Error(message);
+    }
+
     refreshPairing();
   };
 
-  const savePairingPc = async (nextPc) => {
-    const pc = String(nextPc || "").trim();
-    if (!pc) return;
+  const savePairingName = (nextName) => {
+    const name = String(nextName || "").trim() || "PC";
+    return savePairing({ name });
+  };
 
-    try {
-      await fetch("/api/pairing", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pc }),
-      });
-    } catch {}
-    refreshPairing();
+  const savePairingPc = (nextPc) => {
+    const pc = String(nextPc || "").trim();
+    if (!pc) return Promise.resolve();
+    return savePairing({ pc });
   };
 
   useEffect(() => {
@@ -214,12 +231,19 @@ export default function App() {
         />
       </div>
 
-      {/* ✅ 핵심: HUD(오버레이)가 바닥을 덮어도 콘텐츠가 안 가려지게 main에 bottom padding */}
+      {/*
+        HUD 는 오른쪽 위에 고정된 340px 패널이다(AgentHud: fixed right-4 top-14).
+        그래서 그 폭만큼 오른쪽을 비워주지 않으면 상태 카드의 오른쪽 열(잠금/스크롤/포인터 Y)이
+        패널에 덮여 잘린다.
+
+        예전에는 bottom padding(pb-28)만 있었다. HUD 가 화면 아래쪽 바였던 시절의 보정이
+        그대로 남아 있어서, 위치가 오른쪽 위로 바뀐 뒤에는 엉뚱한 곳을 비우고 있었다.
+      */}
       <main
         className={cn(
           "relative z-10 flex-1 min-h-0 min-w-0 text-sm",
           screen === "rush" ? "overflow-hidden" : "overflow-auto",
-          screen !== "rush" ? (hudOn ? "pb-28" : "pb-6") : "",
+          screen !== "rush" ? (hudOn ? "pb-6 pr-[356px]" : "pb-6") : "",
         )}
       >
         <div className={cn(screen === "dashboard" ? "block" : "hidden", "w-full min-w-0")}>
