@@ -109,9 +109,13 @@ public class TrainingController {
     }
 
     // DB에는 scoped 이름(u{memberId}__xxx)으로 저장/조회되도록 강제
+    // DB가 없거나 닿지 않으면 list()가 예외 대신 default만 돌려준다(500 아님).
     List<String> list = profileDb.list(memberId);
     // 혹시라도 섞여있을 경우를 대비해 서버에서 한번 더 필터
-    return ResponseEntity.ok(Map.of("ok", true, "profiles", filterMine(memberId, list)));
+    return ResponseEntity.ok(Map.of(
+        "ok", true,
+        "profiles", filterMine(memberId, list),
+        "dbAvailable", profileDb.isAvailable()));
   }
 
   @PostMapping("/capture")

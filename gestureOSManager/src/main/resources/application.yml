@@ -10,17 +10,28 @@ spring:
     serialization:
       indent_output: false
 
+  # 학습 프로필 DB 동기화용. 사용자 PC 에는 없는 게 정상이며, 없어도 앱은 동작한다.
+  # (gestureos.profile-db.enabled 가 false 면 아예 쓰지 않는다)
   datasource:
-    url: jdbc:postgresql://localhost:5432/slt
-    username: sltuser
-    password: sltpass
+    url: ${GOS_DB_URL:jdbc:postgresql://localhost:5432/slt}
+    username: ${GOS_DB_USER:sltuser}
+    password: ${GOS_DB_PASSWORD:sltpass}
     driver-class-name: org.postgresql.Driver
+    hikari:
+      # DB 가 없을 때 요청이 30초씩 멈추지 않도록 짧게 끊는다.
+      connection-timeout: 3000
+      initialization-fail-timeout: -1
 
 logging:
   level:
     com.example.gestureOSManager: info
 
 gestureos:
+  profile-db:
+    # 학습 프로필을 DB 에 동기화할지. 기본은 꺼짐 = 로컬 파일만 사용.
+    # 켜려면 PostgreSQL 과 db/schema-profile.sql 의 테이블이 필요하다.
+    enabled: ${GOS_PROFILE_DB_ENABLED:false}
+
   pairing:
     httpPort: 8081
     udpPort: 39500
