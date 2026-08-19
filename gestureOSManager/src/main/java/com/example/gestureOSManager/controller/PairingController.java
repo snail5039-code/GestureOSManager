@@ -16,12 +16,14 @@ import java.util.Optional;
 import java.util.Set;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 @RestController // 이 클래스가 REST API를 처리하는 컨트롤러임을 선언합니다.
 @RequestMapping("/api") // 이 컨트롤러의 모든 주소는 /api로 시작합니다. (예: /api/pairing)
@@ -106,14 +108,16 @@ public class PairingController {
 		String nextPc = (req != null && req.pc != null) ? req.pc : (cur == null ? null : cur.pc());
 
 		// ---- validation (최소) ----
+		// IllegalArgumentException 을 그대로 던지면 클라이언트에 500 이 가고 이유도 안 보인다.
+		// 잘못된 입력은 400 + 읽을 수 있는 메시지로 내려준다.
 		if (nextHttp != null && (nextHttp < 1 || nextHttp > 65535))
-			throw new IllegalArgumentException("httpPort range 1~65535");
+			throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "HTTP 포트는 1~65535 범위여야 합니다.");
 		if (nextUdp != null && (nextUdp < 1 || nextUdp > 65535))
-			throw new IllegalArgumentException("udpPort range 1~65535");
+			throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "UDP 포트는 1~65535 범위여야 합니다.");
 		if (nextName != null && nextName.length() > 32)
-			throw new IllegalArgumentException("name max 32 chars");
+			throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "이름은 32자까지 가능합니다.");
 		if (nextPc != null && nextPc.length() > 64)
-			throw new IllegalArgumentException("pc too long");
+			throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "IP 주소가 너무 깁니다.");
 
 		// 저장
 		store.save(new PairingConfig(nextHttp, nextUdp, nextName, nextPc));

@@ -119,30 +119,39 @@ export default function App() {
     };
   };
 
-  const savePairingName = async (nextName) => {
-    const name = String(nextName || "").trim() || "PC";
-    try {
-      await fetch("/api/pairing", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
-      });
-    } catch {}
+  // 저장 실패를 삼키면 사용자는 값을 고쳐도 아무 일도 일어나지 않은 것처럼 보인다.
+  // 실패는 호출한 쪽(페어링 모달)이 표시할 수 있게 그대로 올린다.
+  const savePairing = async (patch) => {
+    const res = await fetch("/api/pairing", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+
+    if (!res.ok) {
+      let message = `저장 실패 (HTTP ${res.status})`;
+      try {
+        const body = await res.json();
+        if (body?.message) message = String(body.message);
+      } catch {
+        // 본문이 JSON 이 아니면 기본 문구를 쓴다
+        message = `저장 실패 (HTTP ${res.status})`;
+      }
+      throw new Error(message);
+    }
+
     refreshPairing();
   };
 
-  const savePairingPc = async (nextPc) => {
-    const pc = String(nextPc || "").trim();
-    if (!pc) return;
+  const savePairingName = (nextName) => {
+    const name = String(nextName || "").trim() || "PC";
+    return savePairing({ name });
+  };
 
-    try {
-      await fetch("/api/pairing", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pc }),
-      });
-    } catch {}
-    refreshPairing();
+  const savePairingPc = (nextPc) => {
+    const pc = String(nextPc || "").trim();
+    if (!pc) return Promise.resolve();
+    return savePairing({ pc });
   };
 
   useEffect(() => {
