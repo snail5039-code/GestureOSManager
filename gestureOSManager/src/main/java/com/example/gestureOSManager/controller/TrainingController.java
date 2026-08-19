@@ -26,6 +26,9 @@ public class TrainingController {
   private final LearnerProfileDbService profileDb;
   private final LearnerProfileFileStore files;
 
+  /** 학습 완료 신호(learnLastTrainTs 변화)를 기다리는 최대 시간. 클라이언트 타임아웃보다 짧게. */
+  private static final long TRAIN_WAIT_MS = 6000L;
+
   public TrainingController(ControlService controlService,
                             StatusService statusService,
                             AgentSessionRegistry registry,
@@ -140,8 +143,11 @@ public class TrainingController {
     if (!ok) return ResponseEntity.ok(Map.of("ok", false));
 
     // ✅ 학습 완료 감지(learnLastTrainTs 변화 대기)
+    // 클라이언트 타임아웃보다 반드시 짧아야 한다. 예전에는 이 대기(8초)와 프런트의 axios
+    // 타임아웃(8초)이 같아서, 학습이 조금만 길어지면 성공해도 실패로 표시됐다.
+    // 여기서 못 보고 응답해도 프런트가 상태 폴링으로 완료를 이어서 확인한다.
     boolean trained = false;
-    long end = System.currentTimeMillis() + 8000;
+    long end = System.currentTimeMillis() + TRAIN_WAIT_MS;
     while (System.currentTimeMillis() < end) {
       try { Thread.sleep(80); } catch (InterruptedException ignored) {}
       Double now = statusService.getSnapshot().getLearnLastTrainTs();

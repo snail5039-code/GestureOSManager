@@ -711,6 +711,18 @@ export default function TrainingLab({ theme = "dark" }) {
     }, 100);
   };
 
+  // 학습이 끝났는지는 에이전트가 올려주는 learnLastTrainTs 가 바뀌는 것으로 안다.
+  // 이미 120ms 간격으로 상태를 폴링하고 있으므로 그 값을 지켜보면 된다.
+  const waitForTrainDone = async (before, timeoutMs = 12000) => {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const now = Number(statusRef.current?.learnLastTrainTs || 0);
+      if (now > Number(before || 0) + 0.0001) return true;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    return false;
+  };
+
   const serverTrain = async () => {
     setError("");
     setInfo("");
@@ -720,11 +732,24 @@ export default function TrainingLab({ theme = "dark" }) {
     warnDefaultShared();
 
     setServerBusy(true);
+    const before = Number(statusRef.current?.learnLastTrainTs || 0);
     try {
       const { data } = await api.post("/train/train", null, {
         headers: userHeaders,
+        // 서버가 학습 완료를 최대 6초까지 기다린 뒤 응답한다.
+        // 예전에는 이 타임아웃이 서버 대기와 똑같이 8초여서, 학습이 조금만 길어지면
+        // 성공했는데도 화면에는 타임아웃 실패로 떴다.
+        timeout: 25000,
       });
-      setInfo(data?.ok ? "학습 완료" : "학습 실패");
+
+      if (!data?.ok) {
+        setError("학습 요청을 보내지 못했어. 에이전트 연결을 확인해줘");
+        return;
+      }
+
+      // 서버가 완료를 못 본 채로 응답했을 수 있다(trained=false). 그 경우 상태를 더 지켜본다.
+      const done = data?.trained === true || (await waitForTrainDone(before));
+      setInfo(done ? "학습 완료" : "학습 요청은 보냈는데 완료 신호가 아직 없어. 상태를 확인해줘");
       await fetchStatus();
     } catch (e) {
       const msg = e?.response
