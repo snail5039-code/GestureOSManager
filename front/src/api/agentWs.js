@@ -52,16 +52,35 @@ function scheduleReconnect() {
   console.log(`[WS] ${delay}ms 후 재연결 시도`);
   retryTimer = setTimeout(() => {
     retryTimer = null;
-    open();
+    open().catch(() => scheduleReconnect());
   }, delay);
 }
 
-function open() {
+/**
+ * 접속 URL 에 로컬 세션 토큰을 붙인다.
+ *
+ * 서버는 WebSocket 접속에도 토큰을 요구한다. 브라우저 WebSocket API 로는 헤더를 붙일 수
+ * 없어서 쿼리로 보낸다. 토큰은 Electron 메인 프로세스가 파일에서 읽어 IPC 로 넘겨준다.
+ * (HTTP 요청은 프록시가 헤더로 붙이므로 렌더러가 토큰을 알 필요가 없다)
+ */
+async function buildUrl() {
+  try {
+    const token = await window.managerWin?.getWsToken?.();
+    if (!token) return url;
+    const u = new URL(url);
+    u.searchParams.set("token", token);
+    return u.toString();
+  } catch {
+    return url; // 토큰을 못 구하면 그대로 시도한다(인증이 꺼진 환경일 수 있다)
+  }
+}
+
+async function open() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
     return ws;
   }
 
-  ws = new WebSocket(url);
+  ws = new WebSocket(await buildUrl());
 
   ws.onopen = () => {
     retryIndex = 0;
@@ -103,7 +122,11 @@ function open() {
 export function connectAgentWs(nextUrl = DEFAULT_URL) {
   url = nextUrl || DEFAULT_URL;
   manuallyClosed = false;
-  return open();
+  return open().catch((e) => {
+    console.warn("[WS] 접속 실패", e);
+    scheduleReconnect();
+    return null;
+  });
 }
 
 /** WS 메시지 구독. 반환값을 호출하면 구독 해제. */

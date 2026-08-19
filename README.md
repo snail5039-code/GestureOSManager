@@ -39,7 +39,7 @@ python main.py
 
 ```bash
 curl http://127.0.0.1:8080/api/health
-# {"ok":true,"agentConnected":true,"hudClients":1,"profileDbAvailable":false}
+# {"ok":true,"agentConnected":true,"hudClients":1,"uiClients":1,"profileDbAvailable":false}
 ```
 
 `agentConnected` 가 `false` 면 파이썬 에이전트가 붙지 않은 상태입니다.
@@ -101,8 +101,25 @@ DB에 닿지 못하면 예외 대신 로컬 파일 저장으로 내려가고, `/
 
 `gestureOSManager/.env.example` 참고. 전부 기본값이 있어 그냥 띄워도 동작합니다.
 
+## 로컬 세션 토큰
+
+매니저 서버는 기동할 때마다 임의 토큰을 만들어 `~/.gestureos/session.token` 에 쓰고,
+모든 `/api` 요청(헤더 `X-GOS-Token`)과 WebSocket 접속(쿼리 `?token=`)에서 그 토큰을 요구합니다.
+`/api/health` 만 예외입니다.
+
+파일을 읽을 수 있는 건 같은 사용자로 실행되는 프로그램(매니저 UI, 파이썬 에이전트)뿐입니다.
+그래서 사용자가 열어둔 웹페이지가 `http://localhost:8080/api/control/*` 로 요청을 보내
+제스처 에이전트를 조작하는 경로가 막힙니다. 서버는 `127.0.0.1` 에만 바인딩되어
+같은 네트워크의 다른 기기도 접근할 수 없습니다.
+
+토큰은 개발 중에는 Vite dev proxy 가, 설치본에서는 Electron 메인 프로세스가 붙입니다.
+렌더러 자바스크립트에는 들어가지 않습니다(WebSocket 접속용으로만 IPC 로 받아갑니다).
+
+브라우저에서 `http://localhost:5173` 을 직접 열어 디버깅해야 한다면
+`GOS_AUTH_ENABLED=false` 로 끌 수 있습니다. 끄면 위 보호도 사라집니다.
+
 ## 알려진 제한
 
-- 폰 연동(화면 스트리밍 / 원격 입력)에 인증이 없습니다.
-- 매니저 서버 API(8080)에도 인증이 없어, 방문한 웹페이지가 로컬 API를 호출할 수 있습니다.
+- 폰 연동(화면 스트리밍 / 원격 입력)에 인증이 없습니다. 그래서 기본이 꺼짐입니다.
 - 학습 모델이 `%TEMP%` 에 저장되어 임시 파일 정리 도구에 지워질 수 있습니다.
+- 다중 모니터에서 마우스 모드 포인터 좌표가 1을 넘을 수 있습니다(주 모니터 크기로 정규화).

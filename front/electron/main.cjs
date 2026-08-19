@@ -34,6 +34,7 @@ const BACKEND_ORIGINS = {
 
 // 라우팅 규칙은 테스트할 수 있게 electron 의존 없는 모듈로 분리해 두었다.
 const { resolveApiTarget, resolveDistPath } = require("./apiRoutes.cjs");
+const { readLocalToken, invalidateLocalToken } = require("./localToken.cjs");
 
 // 앱 전용 스킴은 app ready 전에 등록해야 한다.
 protocol.registerSchemesAsPrivileged([
@@ -58,9 +59,18 @@ async function proxyToBackend(request, target) {
   const url = new URL(request.url);
   const upstream = target + url.pathname + url.search;
 
+  const headers = forwardHeaders(request.headers);
+
+  // 매니저 서버(8080)는 로컬 세션 토큰을 요구한다. 렌더러 대신 여기서 붙여준다.
+  // (토큰이 렌더러 자바스크립트에 들어가지 않는다)
+  if (target === BACKEND_ORIGINS.agent) {
+    const token = readLocalToken();
+    if (token) headers["X-GOS-Token"] = token;
+  }
+
   const init = {
     method: request.method,
-    headers: forwardHeaders(request.headers),
+    headers,
     // 계정 API 는 refreshToken 쿠키를 쓴다. 쿠키는 세션 저장소가 관리한다.
     credentials: "include",
   };
@@ -71,7 +81,31 @@ async function proxyToBackend(request, target) {
   }
 
   try {
-    return await net.fetch(upstream, init);
+    const res = await net.fetch(upstream, init);
+
+    // 서버가 재시작되면 토큰이 바뀐다. 401 이면 캐시를 버리고 한 번 다시 시도한다.
+    //
+    // 본문이 있는 요청은 재시도하지 않는다. request.body 는 한 번 읽으면 끝인 스트림이라
+    // 같은 init 으로 다시 보낼 수 없다. 대신 캐시만 비워두면 다음 요청(대시보드는 500ms
+    // 간격으로 상태를 폴링한다)에서 새 토큰으로 복구된다.
+    if (res.status === 401 && target === BACKEND_ORIGINS.agent) {
+      console.warn(
+        "[PROXY] 매니저 서버가 401 을 돌려줬습니다(로컬 세션 토큰 불일치):",
+        request.method,
+        url.pathname,
+      );
+      invalidateLocalToken();
+
+      const canRetry = request.method === "GET" || request.method === "HEAD";
+      const token = readLocalToken();
+
+      if (canRetry && token && token !== headers["X-GOS-Token"]) {
+        headers["X-GOS-Token"] = token;
+        return await net.fetch(upstream, { ...init, headers });
+      }
+    }
+
+    return res;
   } catch (e) {
     console.warn("[PROXY] 백엔드에 연결할 수 없음:", upstream, e?.message);
     return new Response(
@@ -184,6 +218,12 @@ ipcMain.on("win:toggleMaximize", () => {
   win.isMaximized() ? win.unmaximize() : win.maximize();
 });
 ipcMain.on("win:close", () => win?.close());
+
+// 렌더러가 WebSocket 접속에 쓸 토큰. 파일을 매번 다시 읽어 서버 재시작에도 따라간다.
+ipcMain.handle("auth:wsToken", () => {
+  invalidateLocalToken();
+  return readLocalToken();
+});
 
 // External open
 ipcMain.handle("shell:openExternal", async (_e, url) => {
