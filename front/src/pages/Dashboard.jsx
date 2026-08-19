@@ -783,7 +783,7 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
 
   // ✅ WS: 제스처 Start/Stop 이벤트 수신 (mount 1회)
   useEffect(() => {
-    const ws = connectAgentWs();
+    connectAgentWs();
 
     const unsubscribe = addAgentWsListener((msg) => {
       if (!msg || typeof msg !== "object") return;
@@ -807,12 +807,8 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
 
     return () => {
       unsubscribe?.();
-      try {
-        ws?.close?.();
-      } catch {}
-      try {
-        closeAgentWs?.();
-      } catch {}
+      // closeAgentWs 가 재연결까지 멈춘다(명시적 종료). 소켓을 따로 닫을 필요는 없다.
+      closeAgentWs();
     };
   }, []);
 
