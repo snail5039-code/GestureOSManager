@@ -745,7 +745,9 @@ export default function TrainingLab({ theme = "dark" }) {
     try {
       const next = !learnEnabled;
       const { data } = await api.post("/train/enable", null, {
-        params: { 적용: next },
+        // 서버는 @RequestParam boolean enabled 를 요구한다.
+        // 여기 파라미터 이름이 "적용" 으로 들어가 있어서 이 요청은 항상 400 이었다.
+        params: { enabled: next },
         headers: userHeaders,
       });
       setInfo(data?.ok ? (next ? "학습 적용: 켜짐" : "학습 적용: 꺼짐") : "적용 전환 실패");
