@@ -29,11 +29,26 @@ cd front
 npm install
 npm run manager:electron
 
-# 3) 파이썬 에이전트
+# 3) 파이썬 에이전트 (파이썬 3.12 필요 — 아래 주의 참고)
 cd py
 pip install -r requirements.txt   # 최초 1회
 python main.py
 ```
+
+> **파이썬 버전 주의**
+> 에이전트는 mediapipe 의 `mp.solutions.hands` API 를 쓰는데, **파이썬 3.13 용 mediapipe 에는
+> 이 API 가 아예 없습니다**(3.13 빌드는 `Image`, `ImageFormat`, `tasks` 만 포함).
+> 게다가 requirements.txt 가 고정한 `mediapipe==0.10.21` 은 3.13 에 설치조차 되지 않습니다.
+> 그래서 **파이썬 3.12 이하**에서 실행해야 합니다.
+>
+> ```bash
+> pyenv install 3.12.8
+> ~/.pyenv/pyenv-win/versions/3.12.8/python.exe -m venv .venv
+> .venv/Scripts/python.exe -m pip install -r requirements.txt
+> .venv/Scripts/python.exe main.py
+> ```
+>
+> 3.13 에서 쓰려면 hands_agent 를 mediapipe Tasks API 로 옮기는 작업이 필요합니다.
 
 `/api/health` 로 매니저 서버 상태를 볼 수 있습니다.
 
