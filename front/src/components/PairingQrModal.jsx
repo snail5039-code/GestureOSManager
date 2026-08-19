@@ -319,6 +319,10 @@ export default function PairingQrModal({ open, onClose, pairing }) {
                   <div className="text-xs font-semibold">연결 안내</div>
                   <ul className="mt-2 space-y-1 text-[11px] opacity-70 leading-relaxed list-disc pl-4">
                     <li>
+                      폰 연동은 <b>기본으로 꺼져 있습니다</b>. 에이전트를{" "}
+                      <b>python main.py --phone</b> 으로 실행해야 스트림이 열립니다.
+                    </li>
+                    <li>
                       PC와 휴대폰은 <b>같은 Wi-Fi(같은 네트워크)</b>에 연결되어야 합니다.
                     </li>
                     <li>

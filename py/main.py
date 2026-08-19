@@ -69,8 +69,19 @@ class PhoneAutoRunner:
 
     def start(self):
         if not self.enable:
-            print("[PHONE] disabled (--no-phone)", flush=True)
+            print("[PHONE] 폰 연동 꺼짐 (기본값). 필요하면 --phone 으로 실행하세요.", flush=True)
             return
+
+        # 켜는 순간 이 PC의 화면과 입력이 같은 네트워크에 열린다.
+        # 아직 인증이 없으므로, 무엇이 열리는지 반드시 눈에 보이게 알린다.
+        print("", flush=True)
+        print("[PHONE] ============================================================", flush=True)
+        print("[PHONE]  폰 연동을 켭니다. 이 PC가 같은 네트워크에 아래를 공개합니다.", flush=True)
+        print(f"[PHONE]   - TCP {self.mjpeg_port} : 화면 전체 실시간 스트리밍 (인증 없음)", flush=True)
+        print(f"[PHONE]   - UDP {self.udp_port} : 마우스/키보드 원격 입력 (인증 없음)", flush=True)
+        print("[PHONE]  신뢰할 수 없는 공용 Wi-Fi에서는 켜지 마세요.", flush=True)
+        print("[PHONE] ============================================================", flush=True)
+        print("", flush=True)
 
         phone_dir = os.path.join(self.py_root, "phone")
         pc_stream = os.path.join(phone_dir, "pc_stream_mjpeg.py")
@@ -184,8 +195,11 @@ def main():
 
     no_hud = ("--no-hud" in sys.argv)
 
-    no_phone = ("--no-phone" in sys.argv)
-    runner = PhoneAutoRunner(py_root=os.path.dirname(os.path.abspath(__file__)), enable=(not no_phone))
+    # 폰 연동(화면 스트리밍 + 원격 입력)은 기본 OFF.
+    # 인증이 없는 상태로 네트워크에 노출되므로, 쓰겠다고 명시할 때만 띄운다.
+    # --no-phone 은 예전 실행 스크립트 호환을 위해 계속 받아준다(항상 OFF).
+    phone_enabled = ("--phone" in sys.argv) and ("--no-phone" not in sys.argv)
+    runner = PhoneAutoRunner(py_root=os.path.dirname(os.path.abspath(__file__)), enable=phone_enabled)
     runner.start()
 
     hud = OverlayHUD(enable=(not no_hud))
