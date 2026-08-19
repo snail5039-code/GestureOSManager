@@ -231,12 +231,19 @@ export default function App() {
         />
       </div>
 
-      {/* ✅ 핵심: HUD(오버레이)가 바닥을 덮어도 콘텐츠가 안 가려지게 main에 bottom padding */}
+      {/*
+        HUD 는 오른쪽 위에 고정된 340px 패널이다(AgentHud: fixed right-4 top-14).
+        그래서 그 폭만큼 오른쪽을 비워주지 않으면 상태 카드의 오른쪽 열(잠금/스크롤/포인터 Y)이
+        패널에 덮여 잘린다.
+
+        예전에는 bottom padding(pb-28)만 있었다. HUD 가 화면 아래쪽 바였던 시절의 보정이
+        그대로 남아 있어서, 위치가 오른쪽 위로 바뀐 뒤에는 엉뚱한 곳을 비우고 있었다.
+      */}
       <main
         className={cn(
           "relative z-10 flex-1 min-h-0 min-w-0 text-sm",
           screen === "rush" ? "overflow-hidden" : "overflow-auto",
-          screen !== "rush" ? (hudOn ? "pb-28" : "pb-6") : "",
+          screen !== "rush" ? (hudOn ? "pb-6 pr-[356px]" : "pb-6") : "",
         )}
       >
         <div className={cn(screen === "dashboard" ? "block" : "hidden", "w-full min-w-0")}>
