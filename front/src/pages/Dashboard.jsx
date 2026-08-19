@@ -11,7 +11,7 @@ import DebugChat from "../components/DebugChat";
 import { connectAgentWs, addAgentWsListener, closeAgentWs } from "../api/agentWs";
 
 // ✅ Bridge import 추가
-import { bridgeStart, openWebWithBridge } from "../api/accountClient";
+import { bridgeStart, openWebWithBridge, getStoredAccessToken } from "../api/accountClient";
 
 const POLL_MS = 500;
 
@@ -355,11 +355,9 @@ export default function Dashboard({ onHudState, onHudActions, theme = "dark", on
   // ✅ Manager(5173)에서 Web(5174)을 "로그인 상태로" 열기
   const openWebAuthed = useCallback(async () => {
     try {
-      const accessToken =
-        localStorage.getItem("accessToken") ||
-        localStorage.getItem("gos_accessToken") ||
-        localStorage.getItem("token") ||
-        null;
+      // 예전에는 여기서 세 개의 다른 키를 뒤졌는데 전부 실제 저장 키가 아니라,
+      // 로그인 상태에서도 토큰을 못 찾아 비로그인 탭이 열렸다.
+      const accessToken = getStoredAccessToken();
 
       const data = await bridgeStart(accessToken);
       const code = data?.code;

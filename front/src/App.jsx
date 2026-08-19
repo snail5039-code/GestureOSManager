@@ -7,6 +7,8 @@ import Rush3DPage from "./pages/Rush3DPage";
 import PairingQrModal from "./components/PairingQrModal";
 import TrainingLab from "./pages/TrainingLab";
 import { THEME } from "./theme/themeTokens";
+import { setStoredAccessToken } from "./api/accountClient";
+import { useAuth } from "./auth/AuthProvider";
 
 const VALID_THEMES = new Set(["dark", "light", "neon", "rose", "devil"]);
 
@@ -15,6 +17,8 @@ function cn(...xs) {
 }
 
 export default function App() {
+  const { refreshMe } = useAuth();
+
   const [hudOn, setHudOn] = useState(() => {
     const v = localStorage.getItem("hudOn");
     return v === null ? true : v === "1";
@@ -56,18 +60,22 @@ export default function App() {
 
         const data = await res.json();
 
-        if (data?.accessToken) {
-          localStorage.setItem("accessToken", data.accessToken);
-        }
+        if (!data?.accessToken) throw new Error("no accessToken in consume response");
 
-        window.location.reload();
+        // AuthProvider 가 읽는 것과 같은 키에 저장한다.
+        // (예전에는 "accessToken" 에 넣고 reload 했는데, AuthProvider 는 다른 키를 봐서
+        //  딥링크로 로그인해도 로그인 상태가 되지 않았다)
+        setStoredAccessToken(data.accessToken);
+
+        // 새로고침 대신 사용자 정보만 다시 읽는다.
+        await refreshMe();
       } catch (e) {
         console.error("deeplink auth failed:", e);
       }
     });
 
     return off;
-  }, []);
+  }, [refreshMe]);
 
   useEffect(() => {
     localStorage.setItem("hudOn", hudOn ? "1" : "0");
